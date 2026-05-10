@@ -1,5 +1,15 @@
 import Foundation
 
+/// Lightweight metadata describing a persisted chat session — enough to render
+/// a row in the session-history picker without loading the full message list.
+struct SessionSummary: Identifiable, Equatable {
+    let id: String
+    let updatedAt: Date
+    let pageTitle: String
+    let firstUserMessage: String?
+    let messageCount: Int
+}
+
 /// Persists chat sessions under ``~/.thebrowser/sessions/<id>/messages.json`` and
 /// vends each session's directory as a working directory for the underlying CLI
 /// (codex / claude). Each session has its own isolated directory so the CLI
@@ -110,6 +120,44 @@ final class ChatSessionStore {
             print("ChatSessionStore: failed to save \(sessionID): \(error)")
             #endif
         }
+    }
+
+    /// Enumerates every persisted session, newest first. Skips entries whose
+    /// `messages.json` is missing, unreadable, or contains zero messages —
+    /// these surface as either fresh-but-untouched sessions or partial writes
+    /// that shouldn't appear in the picker.
+    func listSessions() -> [SessionSummary] {
+        let fileManager = FileManager.default
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        var summaries: [SessionSummary] = []
+        summaries.reserveCapacity(entries.count)
+
+        for dir in entries {
+            let isDirectory = (try? dir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            guard isDirectory else { continue }
+
+            let file = dir.appendingPathComponent("messages.json")
+            guard let data = try? Data(contentsOf: file),
+                  let payload = try? decoder.decode(SessionPayload.self, from: data),
+                  !payload.messages.isEmpty
+            else { continue }
+
+            let firstUser = payload.messages.first(where: { $0.role == "user" })?.text
+            summaries.append(SessionSummary(
+                id: payload.id,
+                updatedAt: payload.updatedAt,
+                pageTitle: payload.pageTitle,
+                firstUserMessage: firstUser,
+                messageCount: payload.messages.count
+            ))
+        }
+
+        return summaries.sorted { $0.updatedAt > $1.updatedAt }
     }
 
     func load(sessionID: String) -> [ChatMessage] {

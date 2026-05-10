@@ -45,7 +45,7 @@ final class ChatViewModel: ObservableObject {
         store.directory(for: sessionID)
     }
 
-    func send(context: BrowserPageContext, nativeTools: NativeBrowserToolExecutor) {
+    func send(context: BrowserPageContext, tabs: [TabManifestEntry], nativeTools: NativeBrowserToolExecutor) {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isSending else {
             return
@@ -59,7 +59,13 @@ final class ChatViewModel: ObservableObject {
         let directory = sessionDirectory
         let history = messages
         let configuration = AIHarnessConfiguration.current()
-        let prompt = AIProviderClient.prompt(for: trimmed, context: context, history: history, configuration: configuration)
+        let prompt = AIProviderClient.prompt(
+            for: trimmed,
+            context: context,
+            history: history,
+            configuration: configuration,
+            tabs: tabs
+        )
 
         Task {
             do {
@@ -85,6 +91,17 @@ final class ChatViewModel: ObservableObject {
         messages.removeAll()
         draft = ""
         sessionID = store.newSessionID()
+    }
+
+    /// Switches to a previously persisted session, loading its messages off
+    /// disk. Blocks while a reply is in flight so the streaming response can't
+    /// land in the wrong session.
+    func resume(sessionID: String, context: BrowserPageContext) {
+        guard sessionID != self.sessionID, !isSending else { return }
+        persist(context: context)
+        self.sessionID = sessionID
+        self.messages = store.load(sessionID: sessionID)
+        self.draft = ""
     }
 
     func focusComposer() {
@@ -131,6 +148,7 @@ final class ChatViewModel: ObservableObject {
 struct AIChatPanel: View {
     @ObservedObject var viewModel: ChatViewModel
     var context: BrowserPageContext
+    var tabs: [TabManifestEntry]
     var nativeTools: NativeBrowserToolExecutor
     var onClose: () -> Void
 
@@ -139,6 +157,7 @@ struct AIChatPanel: View {
     @AppStorage(PreferenceKey.aiShowToolChain) private var showToolChain = true
     @FocusState private var composerFocused: Bool
     @State private var showingModelPicker = false
+    @State private var showingHistoryPicker = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -188,6 +207,18 @@ struct AIChatPanel: View {
             }
 
             Spacer(minLength: 8)
+
+            HeaderIconButton(systemName: "clock.arrow.circlepath", help: "Resume previous conversation") {
+                showingHistoryPicker.toggle()
+            }
+            .popover(isPresented: $showingHistoryPicker, arrowEdge: .bottom) {
+                SessionHistoryPopover(currentSessionID: viewModel.sessionID) { id in
+                    showingHistoryPicker = false
+                    withAnimation(Motion.springSoft) {
+                        viewModel.resume(sessionID: id, context: context)
+                    }
+                }
+            }
 
             HeaderIconButton(systemName: "square.and.pencil", help: "New conversation") {
                 withAnimation(Motion.springSoft) {
@@ -309,7 +340,7 @@ struct AIChatPanel: View {
                 draft: $viewModel.draft,
                 focused: $composerFocused,
                 placeholder: "Ask \(provider.displayName)…",
-                onSubmit: { viewModel.send(context: context, nativeTools: nativeTools) }
+                onSubmit: { viewModel.send(context: context, tabs: tabs, nativeTools: nativeTools) }
             ) {
                 HStack(spacing: 6) {
                     ModelPickerButton(
@@ -319,7 +350,7 @@ struct AIChatPanel: View {
                     SendButton(
                         enabled: !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                         sending: viewModel.isSending,
-                        action: { viewModel.send(context: context, nativeTools: nativeTools) }
+                        action: { viewModel.send(context: context, tabs: tabs, nativeTools: nativeTools) }
                     )
                 }
             }
@@ -734,6 +765,8 @@ private struct ToolChainChip: View {
         case "open": return "safari"
         case "search": return "magnifyingglass"
         case "fetch": return "arrow.down.doc"
+        case "read_tabs": return "rectangle.on.rectangle"
+        case "create_artifact": return "doc.richtext"
         default: return "wrench"
         }
     }
@@ -743,6 +776,8 @@ private struct ToolChainChip: View {
         case "open": return "open"
         case "search": return "search"
         case "fetch": return "fetch"
+        case "read_tabs": return "read tabs"
+        case "create_artifact": return "artifact"
         default: return invocation.tool
         }
     }
