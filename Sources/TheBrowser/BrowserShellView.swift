@@ -188,7 +188,13 @@ struct BrowserShellView: View {
     private var shortcutBindings: [String: () -> Void] {
         [
             toggleChatShortcut: {
+                let willBeVisible = !model.isChatVisible
                 withAnimation(Motion.springSnap) { model.toggleChat() }
+                if willBeVisible {
+                    DispatchQueue.main.async {
+                        chatModel.focusComposer()
+                    }
+                }
             },
             toggleTabsShortcut: {
                 withAnimation(Motion.springSnap) { model.toggleTabs() }

@@ -29,6 +29,7 @@ final class ChatViewModel: ObservableObject {
     @Published var messages: [ChatMessage] = []
     @Published var draft = ""
     @Published var isSending = false
+    @Published var focusComposerToken = 0
     @Published private(set) var sessionID: String
 
     private let client = AIProviderClient()
@@ -84,6 +85,10 @@ final class ChatViewModel: ObservableObject {
         messages.removeAll()
         draft = ""
         sessionID = store.newSessionID()
+    }
+
+    func focusComposer() {
+        focusComposerToken &+= 1
     }
 
     private func persist(context: BrowserPageContext) {
@@ -144,6 +149,9 @@ struct AIChatPanel: View {
         .frame(width: Metrics.chatWidth)
         .frame(maxHeight: .infinity)
         .frostedRail()
+        .onChange(of: viewModel.focusComposerToken) { _, _ in
+            composerFocused = true
+        }
     }
 
     // MARK: - Header
