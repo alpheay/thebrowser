@@ -73,8 +73,11 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             candidates.append(trimmed)
         }
 
-        let pattern = #"^```(?:browser_tool|json)?\s*(\{[\s\S]*\})\s*```$"#
-        if let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+        // Fenced tool-call block. Anchors are intentionally absent so a fence
+        // can sit after prose — models often introduce the call with a
+        // sentence before the fence.
+        let fencePattern = #"```(?:browser_tool|json)?\s*(\{[\s\S]*?\})\s*```"#
+        if let regex = try? NSRegularExpression(pattern: fencePattern, options: [.caseInsensitive]) {
             let matches = regex.matches(in: trimmed, range: NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed))
             for match in matches {
                 guard let range = Range(match.range(at: 1), in: trimmed) else { continue }
@@ -82,7 +85,69 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             }
         }
 
+        // Trailing-JSON fallback: a balanced `{…}` whose closing brace is the
+        // final non-whitespace character of the response counts as a tool
+        // call. This catches the common case where the model writes a
+        // sentence like "Let me open that for you." and then emits the JSON
+        // on its own line. Examples embedded mid-prose are skipped because
+        // the response won't end with `}`.
+        if let trailing = trailingJSONObject(in: trimmed) {
+            candidates.append(trailing)
+        }
+
         return candidates.removingDuplicates()
+    }
+
+    /// Returns the substring of a complete top-level JSON object that ends
+    /// the input, or `nil` if the input does not finish with one. Walks
+    /// forward tracking brace depth and JSON string literals so braces
+    /// inside quoted text don't confuse the balance.
+    private static func trailingJSONObject(in text: String) -> String? {
+        guard text.hasSuffix("}") else { return nil }
+
+        var depth = 0
+        var startIndex: String.Index? = nil
+        var inString = false
+        var escaped = false
+        var lastCandidate: Range<String.Index>? = nil
+
+        for index in text.indices {
+            let character = text[index]
+
+            if escaped {
+                escaped = false
+                continue
+            }
+            if inString {
+                if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+                continue
+            }
+            if character == "\"" {
+                inString = true
+                continue
+            }
+            if character == "{" {
+                if depth == 0 { startIndex = index }
+                depth += 1
+            } else if character == "}" {
+                depth -= 1
+                if depth == 0, let start = startIndex {
+                    lastCandidate = start..<text.index(after: index)
+                    startIndex = nil
+                } else if depth < 0 {
+                    return nil
+                }
+            }
+        }
+
+        guard let range = lastCandidate, range.upperBound == text.endIndex else {
+            return nil
+        }
+        return String(text[range])
     }
 }
 

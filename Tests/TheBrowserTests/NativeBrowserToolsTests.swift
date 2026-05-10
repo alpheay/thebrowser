@@ -38,6 +38,52 @@ struct NativeBrowserToolsTests {
         #expect(NativeBrowserToolCall.parse(from: response) == nil)
     }
 
+    @Test("Parses a trailing tool call that follows leading prose on a new line")
+    func parsesTrailingToolCallAfterProse() throws {
+        let response = """
+        That looks like it might be "GT Canvas" (Georgia Tech Canvas). Let me open that for you.
+        {"tool":"open","url":"https://canvas.gatech.edu"}
+        """
+
+        let call = try #require(NativeBrowserToolCall.parse(from: response))
+
+        #expect(call.name == .open)
+        #expect(call.url == "https://canvas.gatech.edu")
+    }
+
+    @Test("Parses a trailing tool call when prose contains brace-like text")
+    func parsesTrailingToolCallWithBracesInProse() throws {
+        let response = """
+        Some folks write sets like {a, b, c} — anyway, opening that now.
+        {"tool":"open","url":"https://example.com"}
+        """
+
+        let call = try #require(NativeBrowserToolCall.parse(from: response))
+
+        #expect(call.name == .open)
+        #expect(call.url == "https://example.com")
+    }
+
+    @Test("Picks the trailing tool call when a JSON example also appears mid-prose")
+    func prefersTrailingToolCallOverEmbeddedExample() throws {
+        let response = #"""
+        You can call it like {"tool":"open","url":"https://example.com"} — here goes:
+        {"tool":"open","url":"https://canvas.gatech.edu"}
+        """#
+
+        let call = try #require(NativeBrowserToolCall.parse(from: response))
+
+        #expect(call.name == .open)
+        #expect(call.url == "https://canvas.gatech.edu")
+    }
+
+    @Test("Ignores a JSON object that is not the last non-whitespace content")
+    func ignoresJSONFollowedByMoreProse() {
+        let response = #"{"tool":"open","url":"https://example.com"} — let me know if that's right."#
+
+        #expect(NativeBrowserToolCall.parse(from: response) == nil)
+    }
+
     @MainActor
     @Test("Open tool navigates through the injected browser action")
     func openToolInvokesNavigation() async {
