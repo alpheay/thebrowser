@@ -23,6 +23,57 @@ enum AIProviderKind: String, CaseIterable, Identifiable, Sendable {
             return "Claude CLI"
         }
     }
+
+    var symbolName: String {
+        switch self {
+        case .codex:
+            return "chevron.left.forwardslash.chevron.right"
+        case .claude:
+            return "asterisk"
+        }
+    }
+
+    var availableModels: [AIModelOption] {
+        switch self {
+        case .codex:
+            return [
+                AIModelOption(provider: .codex, modelID: "gpt-5", displayName: "GPT-5"),
+                AIModelOption(provider: .codex, modelID: "gpt-5-codex", displayName: "GPT-5 Codex"),
+                AIModelOption(provider: .codex, modelID: "gpt-5-mini", displayName: "GPT-5 Mini"),
+                AIModelOption(provider: .codex, modelID: "o4-mini", displayName: "o4-mini"),
+                AIModelOption(provider: .codex, modelID: "o3", displayName: "o3")
+            ]
+        case .claude:
+            return [
+                AIModelOption(provider: .claude, modelID: "claude-opus-4-7", displayName: "Claude Opus 4.7"),
+                AIModelOption(provider: .claude, modelID: "claude-sonnet-4-6", displayName: "Claude Sonnet 4.6"),
+                AIModelOption(provider: .claude, modelID: "claude-haiku-4-5", displayName: "Claude Haiku 4.5"),
+                AIModelOption(provider: .claude, modelID: "claude-opus-4-6", displayName: "Claude Opus 4.6")
+            ]
+        }
+    }
+}
+
+struct AIModelOption: Identifiable, Hashable, Sendable {
+    let provider: AIProviderKind
+    let modelID: String
+    let displayName: String
+
+    var id: String { "\(provider.rawValue):\(modelID)" }
+}
+
+extension AIModelOption {
+    static var all: [AIModelOption] {
+        AIProviderKind.allCases.flatMap(\.availableModels)
+    }
+
+    static func find(id: String) -> AIModelOption? {
+        all.first(where: { $0.id == id })
+    }
+
+    static func find(provider: AIProviderKind, modelID: String) -> AIModelOption? {
+        provider.availableModels.first(where: { $0.modelID == modelID })
+    }
 }
 
 enum AIProviderError: LocalizedError {

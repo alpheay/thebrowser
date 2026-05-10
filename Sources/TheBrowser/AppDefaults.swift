@@ -10,6 +10,7 @@ enum PreferenceKey {
     static let aiDisallowedTools = "ai.disallowedTools"
     static let aiMCPConfigPath = "ai.mcpConfigPath"
     static let aiExtraArguments = "ai.extraArguments"
+    static let aiFavoriteModels = "ai.favoriteModels"
     static let codexCLIPath = "codex.cliPath"
     static let codexWorkspacePath = "codex.workspacePath"
     static let codexModel = "codex.model"
@@ -35,6 +36,7 @@ enum AppDefaults {
             PreferenceKey.aiDisallowedTools: "",
             PreferenceKey.aiMCPConfigPath: "",
             PreferenceKey.aiExtraArguments: "",
+            PreferenceKey.aiFavoriteModels: "claude:claude-opus-4-7,claude:claude-sonnet-4-6",
             PreferenceKey.codexCLIPath: defaultCodexCLIPath(),
             PreferenceKey.codexWorkspacePath: defaultWorkspacePath(),
             PreferenceKey.codexModel: "",
