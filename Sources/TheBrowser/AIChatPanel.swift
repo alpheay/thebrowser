@@ -334,25 +334,26 @@ private struct ComposerField<Trailing: View>: View {
 
     var body: some View {
         HStack(alignment: .bottom, spacing: 8) {
-            ZStack(alignment: .topLeading) {
-                if draft.isEmpty {
-                    Text(placeholder)
-                        .font(.system(size: 13.5))
-                        .foregroundStyle(Palette.textMuted)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 11)
-                        .allowsHitTesting(false)
+            TextField(
+                "",
+                text: $draft,
+                prompt: Text(placeholder).foregroundColor(Palette.textMuted),
+                axis: .vertical
+            )
+            .focused(focused)
+            .textFieldStyle(.plain)
+            .font(.system(size: 13.5))
+            .foregroundStyle(Palette.textPrimary)
+            .lineLimit(1...10)
+            .padding(.horizontal, 14)
+            .padding(.vertical, 11)
+            .onSubmit(onSubmit)
+            .onKeyPress(.return) {
+                if NSEvent.modifierFlags.contains(.shift) {
+                    return .ignored
                 }
-                TextEditor(text: $draft)
-                    .focused(focused)
-                    .scrollContentBackground(.hidden)
-                    .font(.system(size: 13.5))
-                    .foregroundStyle(Palette.textPrimary)
-                    .padding(.horizontal, 10)
-                    .padding(.vertical, 6)
-                    .frame(minHeight: 40, maxHeight: 160)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .onSubmit(onSubmit)
+                onSubmit()
+                return .handled
             }
             .background {
                 RoundedRectangle(cornerRadius: 14, style: .continuous)
