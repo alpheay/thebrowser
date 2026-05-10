@@ -1,5 +1,4 @@
 import AppKit
-import AuthenticationServices
 import Combine
 import Foundation
 
@@ -16,6 +15,10 @@ final class GoogleAccountStore: ObservableObject {
     @Published private(set) var profile: GoogleProfile?
     @Published private(set) var phase: SignInPhase = .idle
     @Published private(set) var lastError: String?
+    /// When non-nil the view should present a web sign-in sheet bound to this
+    /// request. The store sets it during `signIn()` and clears it once the
+    /// auth flow resolves.
+    @Published var pendingWebAuth: WebAuthRequest?
 
     private let defaults: UserDefaults
     private let keychainAccount = "google.account.tokens"
@@ -39,14 +42,17 @@ final class GoogleAccountStore: ObservableObject {
 
     var hasClientID: Bool { !clientID.isEmpty }
 
-    func signIn(anchor: ASPresentationAnchor) async {
+    func signIn() async {
         guard phase != .signingIn else { return }
         phase = .signingIn
         lastError = nil
 
         let service = GoogleAuthService(clientID: clientID)
         do {
-            let result = try await service.signIn(presentationAnchor: anchor)
+            let result = try await service.signIn { [weak self] authURL, callbackScheme in
+                try await self?.presentWebAuth(url: authURL, callbackScheme: callbackScheme)
+                    ?? { throw GoogleAuthError.authorizationCanceled }()
+            }
             try persist(tokens: result.tokens, profile: result.profile)
         } catch GoogleAuthError.authorizationCanceled {
             lastError = nil
@@ -55,6 +61,16 @@ final class GoogleAccountStore: ObservableObject {
         }
 
         phase = .idle
+    }
+
+    private func presentWebAuth(url: URL, callbackScheme: String) async throws -> URL {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+            let request = WebAuthRequest(url: url, callbackScheme: callbackScheme) { [weak self] result in
+                self?.pendingWebAuth = nil
+                continuation.resume(with: result)
+            }
+            pendingWebAuth = request
+        }
     }
 
     func signOut() async {

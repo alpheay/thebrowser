@@ -19,12 +19,24 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private var observations: [NSKeyValueObservation] = []
     private var searchBackStack: [BrowserSearchPage] = []
 
+    /// User agent used for both browsing tabs and the in-app Google sign-in
+    /// sheet. WKWebView's default UA omits the `Version/X Safari/Y` suffix,
+    /// which several Google properties (Accounts, YouTube, Gmail) treat as an
+    /// "unsupported browser" and show a warning banner. We pin to Safari 18.5
+    /// rather than the actual installed version because Google's UA support
+    /// database lags newer Safari majors — using the previous major is the
+    /// most reliable way to be recognized as a supported browser.
+    static let userAgent =
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15"
+
     override init() {
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.websiteDataStore = .default()
         configuration.userContentController.addUserScript(Self.darkModeUserScript)
+        configuration.userContentController.addUserScript(Self.unsupportedBrowserBannerKillerScript)
         webView = WKWebView(frame: .zero, configuration: configuration)
+        webView.customUserAgent = Self.userAgent
         webView.allowsBackForwardNavigationGestures = true
         webView.appearance = NSAppearance(named: .darkAqua)
         webView.underPageBackgroundColor = .black
@@ -234,6 +246,76 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 forceYouTubeDarkMode();
                 applyDarkColorScheme();
             }, { once: true });
+        })();
+        """,
+        injectionTime: .atDocumentStart,
+        forMainFrameOnly: false
+    )
+
+    /// Removes Google's "this browser is no longer supported" banner across
+    /// products. Several Google web apps render this banner client-side based
+    /// on a User-Agent allowlist that lags real Safari versions; rather than
+    /// chase the UA, we strip the banner from the DOM after it appears.
+    static let unsupportedBrowserBannerKillerScript = WKUserScript(
+        source: """
+        (() => {
+            const PHRASES = [
+                'browser version is no longer supported',
+                'no longer supported. please upgrade',
+                'upgrade to a supported browser',
+                'this browser is no longer supported',
+                'browser is not supported',
+                'use a supported browser'
+            ];
+
+            const matchesBannerText = (text) => {
+                if (!text) return false;
+                const trimmed = text.trim();
+                if (trimmed.length === 0 || trimmed.length > 600) return false;
+                const lower = trimmed.toLowerCase();
+                return PHRASES.some((phrase) => lower.includes(phrase));
+            };
+
+            const removeBanners = () => {
+                const candidates = document.querySelectorAll(
+                    'div, section, aside, header, footer, span, p, tp-yt-paper-toast, ytd-popup-container'
+                );
+                for (const el of candidates) {
+                    if (!matchesBannerText(el.textContent || '')) continue;
+                    let target = el;
+                    while (
+                        target.parentElement &&
+                        target.parentElement.tagName !== 'BODY' &&
+                        target.parentElement.tagName !== 'HTML' &&
+                        matchesBannerText(target.parentElement.textContent || '')
+                    ) {
+                        target = target.parentElement;
+                    }
+                    try { target.remove(); } catch (_) {}
+                }
+            };
+
+            const start = () => {
+                removeBanners();
+                const observer = new MutationObserver((mutations) => {
+                    for (const mutation of mutations) {
+                        for (const node of mutation.addedNodes) {
+                            if (node.nodeType !== 1) continue;
+                            if (matchesBannerText(node.textContent || '')) {
+                                removeBanners();
+                                return;
+                            }
+                        }
+                    }
+                });
+                observer.observe(document.documentElement, { childList: true, subtree: true });
+            };
+
+            if (document.readyState === 'loading') {
+                document.addEventListener('DOMContentLoaded', start, { once: true });
+            } else {
+                start();
+            }
         })();
         """,
         injectionTime: .atDocumentStart,

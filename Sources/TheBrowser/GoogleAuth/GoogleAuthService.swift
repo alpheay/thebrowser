@@ -1,5 +1,4 @@
 import AppKit
-import AuthenticationServices
 import CryptoKit
 import Foundation
 
@@ -130,7 +129,14 @@ final class GoogleAuthService {
         }
     }
 
-    func signIn(presentationAnchor: ASPresentationAnchor) async throws -> (tokens: GoogleTokenSet, profile: GoogleProfile) {
+    /// Presenter the caller injects to display the OAuth web flow. The closure
+    /// is responsible for showing UI (e.g. a SwiftUI sheet hosting a webview)
+    /// that loads `authURL` and resolves with the redirect URL whose scheme
+    /// matches `callbackScheme`. Throwing `GoogleAuthError.authorizationCanceled`
+    /// from the presenter signals user cancellation.
+    typealias WebAuthPresenter = @MainActor (_ authURL: URL, _ callbackScheme: String) async throws -> URL
+
+    func signIn(presenter: WebAuthPresenter) async throws -> (tokens: GoogleTokenSet, profile: GoogleProfile) {
         guard !clientID.isEmpty else { throw GoogleAuthError.missingClientID }
 
         let verifier = PKCE.codeVerifier()
@@ -145,11 +151,7 @@ final class GoogleAuthService {
             redirectURI: redirect
         )
 
-        let callbackURL = try await presentAuthSession(
-            authURL: authURL,
-            callbackScheme: scheme,
-            anchor: presentationAnchor
-        )
+        let callbackURL = try await presenter(authURL, scheme)
 
         let code = try extractCode(from: callbackURL, expectedState: state)
         let tokens = try await exchange(code: code, verifier: verifier, redirectURI: redirect)
@@ -198,46 +200,6 @@ final class GoogleAuthService {
             throw GoogleAuthError.authorizationFailed("Couldn't build the authorization URL.")
         }
         return url
-    }
-
-    private func presentAuthSession(
-        authURL: URL,
-        callbackScheme: String,
-        anchor: ASPresentationAnchor
-    ) async throws -> URL {
-        let provider = PresentationContextProvider.shared(for: anchor)
-        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
-            // Completion handler must be @Sendable so it does not inherit
-            // @MainActor isolation from the enclosing class. ASWebAuthenticationSession
-            // invokes the callback on a background XPC reply queue on macOS 26,
-            // which traps Swift's executor assertion if the closure is MainActor-isolated.
-            let handler: @Sendable (URL?, Error?) -> Void = { callbackURL, error in
-                if let error {
-                    if let authError = error as? ASWebAuthenticationSessionError,
-                       authError.code == .canceledLogin {
-                        continuation.resume(throwing: GoogleAuthError.authorizationCanceled)
-                    } else {
-                        continuation.resume(throwing: GoogleAuthError.authorizationFailed(error.localizedDescription))
-                    }
-                    return
-                }
-                guard let callbackURL else {
-                    continuation.resume(throwing: GoogleAuthError.authorizationFailed("Empty callback."))
-                    return
-                }
-                continuation.resume(returning: callbackURL)
-            }
-            let session = ASWebAuthenticationSession(
-                url: authURL,
-                callbackURLScheme: callbackScheme,
-                completionHandler: handler
-            )
-            session.presentationContextProvider = provider
-            session.prefersEphemeralWebBrowserSession = false
-            if !session.start() {
-                continuation.resume(throwing: GoogleAuthError.authorizationFailed("System refused to start the sign-in sheet."))
-            }
-        }
     }
 
     private func extractCode(from callbackURL: URL, expectedState: String) throws -> String {
@@ -354,27 +316,3 @@ extension Data {
     }
 }
 
-// MARK: - ASWebAuthenticationSession anchor
-
-@MainActor
-private final class PresentationContextProvider: NSObject, ASWebAuthenticationPresentationContextProviding {
-    private static var instances: [ObjectIdentifier: PresentationContextProvider] = [:]
-    private weak var anchor: ASPresentationAnchor?
-
-    static func shared(for anchor: ASPresentationAnchor) -> PresentationContextProvider {
-        let key = ObjectIdentifier(anchor)
-        if let existing = instances[key], existing.anchor != nil {
-            return existing
-        }
-        let provider = PresentationContextProvider()
-        provider.anchor = anchor
-        instances[key] = provider
-        return provider
-    }
-
-    nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        MainActor.assumeIsolated {
-            anchor ?? NSApplication.shared.keyWindow ?? ASPresentationAnchor()
-        }
-    }
-}

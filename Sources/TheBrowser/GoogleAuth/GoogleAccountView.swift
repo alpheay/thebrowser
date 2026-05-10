@@ -1,5 +1,4 @@
 import AppKit
-import AuthenticationServices
 import SwiftUI
 
 struct GoogleAccountView: View {
@@ -16,6 +15,9 @@ struct GoogleAccountView: View {
             } else {
                 signedOutBody
             }
+        }
+        .sheet(item: $store.pendingWebAuth) { request in
+            GoogleAuthWebSheet(request: request)
         }
     }
 
@@ -89,10 +91,7 @@ struct GoogleAccountView: View {
     }
 
     private func performSignIn() async {
-        guard let anchor = NSApplication.shared.keyWindow ?? NSApplication.shared.windows.first else {
-            return
-        }
-        await store.signIn(anchor: anchor)
+        await store.signIn()
     }
 
     // MARK: - First-run setup
@@ -110,7 +109,7 @@ struct GoogleAccountView: View {
                         Text("Connect The Browser to Google")
                             .font(.system(size: 15, weight: .semibold))
                             .foregroundStyle(Palette.textPrimary)
-                        Text("Sign-in runs through Google's standard OAuth flow in your default browser. The Browser never sees your password — it only receives a profile token after you approve.")
+                        Text("Sign-in runs through Google's standard OAuth flow inside The Browser. Your Google session cookies stay in the browser, so YouTube, Gmail, and other Google services are signed in automatically afterwards.")
                             .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Palette.textMuted)
                             .fixedSize(horizontal: false, vertical: true)
