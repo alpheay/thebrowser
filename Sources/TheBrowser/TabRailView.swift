@@ -2,7 +2,6 @@ import SwiftUI
 
 struct TabRailView: View {
     @ObservedObject var model: BrowserModel
-    @Namespace private var selectionNamespace
 
     var body: some View {
         VStack(spacing: 0) {
@@ -63,7 +62,6 @@ struct TabRailView: View {
                     TabRow(
                         tab: tab,
                         selected: tab.id == model.selectedTabID,
-                        namespace: selectionNamespace,
                         onSelect: {
                             withAnimation(Motion.springSoft) {
                                 model.select(tab)
@@ -240,7 +238,6 @@ private struct KeycapHint: View {
 private struct TabRow: View {
     @ObservedObject var tab: BrowserTab
     var selected: Bool
-    var namespace: Namespace.ID
     var onSelect: () -> Void
     var onClose: () -> Void
 
@@ -249,18 +246,6 @@ private struct TabRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            // Selection indicator slot
-            ZStack {
-                if selected {
-                    RoundedRectangle(cornerRadius: 1.5, style: .continuous)
-                        .fill(Palette.accent)
-                        .frame(width: 3, height: 16)
-                        .matchedGeometryEffect(id: "selectionBar", in: namespace)
-                }
-            }
-            .frame(width: 3)
-
-            // Favicon / loading
             TabIcon(tab: tab, selected: selected)
                 .frame(width: 16, height: 16)
 
