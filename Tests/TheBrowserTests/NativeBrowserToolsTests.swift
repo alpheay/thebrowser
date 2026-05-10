@@ -88,11 +88,13 @@ struct NativeBrowserToolsTests {
     @Test("Open tool navigates through the injected browser action")
     func openToolInvokesNavigation() async {
         var openedURL: URL?
-        let executor = NativeBrowserToolExecutor { url in
-            openedURL = url
-        }
+        let executor = NativeBrowserToolExecutor(
+            openURL: { url in openedURL = url },
+            readTabsContent: { _ in "" },
+            saveAndOpenArtifact: { _, _ in URL(fileURLWithPath: "/tmp/unused.html") }
+        )
         let result = await executor.execute(
-            NativeBrowserToolCall(name: .open, url: "youtube.com", query: nil)
+            NativeBrowserToolCall(name: .open, url: "youtube.com")
         )
 
         #expect(result.succeeded)
@@ -102,7 +104,7 @@ struct NativeBrowserToolsTests {
     @Test("Continuation prompt includes tool results and asks for normal answer")
     func continuationPromptIncludesToolResult() {
         let result = NativeBrowserToolResult(
-            call: NativeBrowserToolCall(name: .open, url: "https://example.com", query: nil),
+            call: NativeBrowserToolCall(name: .open, url: "https://example.com"),
             succeeded: true,
             content: "Opened https://example.com in the current tab."
         )
@@ -113,5 +115,47 @@ struct NativeBrowserToolsTests {
         #expect(prompt.contains("Tool: open"))
         #expect(prompt.contains("Status: success"))
         #expect(prompt.contains("answer normally and briefly"))
+    }
+
+    @Test("read_tabs parses with no arguments")
+    func readTabsNoArgs() throws {
+        let call = try #require(NativeBrowserToolCall.parse(from: #"{"tool":"read_tabs"}"#))
+        #expect(call.name == .readTabs)
+        #expect(call.indices == nil)
+        #expect(call.rawInput == "all")
+    }
+
+    @Test("read_tabs parses with explicit indices array")
+    func readTabsIndices() throws {
+        let call = try #require(NativeBrowserToolCall.parse(from: #"{"tool":"read_tabs","indices":[1,3]}"#))
+        #expect(call.name == .readTabs)
+        #expect(call.indices == [1, 3])
+        #expect(call.rawInput == "1,3")
+    }
+
+    @Test("create_artifact requires html, surfaces title in rawInput")
+    func createArtifactParses() throws {
+        let json = #"{"tool":"create_artifact","title":"Market Brief","html":"<!doctype html><body>hi</body>"}"#
+        let call = try #require(NativeBrowserToolCall.parse(from: json))
+        #expect(call.name == .createArtifact)
+        #expect(call.title == "Market Brief")
+        #expect(call.html?.contains("<body>hi</body>") == true)
+        #expect(call.rawInput == "Market Brief")
+    }
+
+    @Test("create_artifact missing html is rejected")
+    func createArtifactMissingHTML() {
+        let json = #"{"tool":"create_artifact","title":"Empty"}"#
+        #expect(NativeBrowserToolCall.parse(from: json) == nil)
+    }
+
+    @Test("ArtifactStore slugs titles for safe filenames")
+    func artifactSlug() {
+        #expect(ArtifactStore.slug(from: "Market Overview!") == "market-overview")
+        #expect(ArtifactStore.slug(from: "  hello   world  ") == "hello-world")
+        #expect(ArtifactStore.slug(from: "***") == "artifact")
+        #expect(ArtifactStore.slug(from: "") == "artifact")
+        let long = String(repeating: "a", count: 200)
+        #expect(ArtifactStore.slug(from: long).count <= 60)
     }
 }

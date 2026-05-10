@@ -4,12 +4,17 @@ enum NativeBrowserToolName: String, Equatable, Sendable {
     case open
     case search
     case fetch
+    case readTabs = "read_tabs"
+    case createArtifact = "create_artifact"
 }
 
 struct NativeBrowserToolCall: Equatable, Sendable {
     var name: NativeBrowserToolName
-    var url: String?
-    var query: String?
+    var url: String? = nil
+    var query: String? = nil
+    var title: String? = nil
+    var html: String? = nil
+    var indices: [Int]? = nil
 
     static func parse(from text: String) -> NativeBrowserToolCall? {
         for candidate in jsonObjectCandidates(in: text) {
@@ -26,6 +31,13 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             return url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         case .search:
             return query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        case .readTabs:
+            if let indices, !indices.isEmpty {
+                return indices.map(String.init).joined(separator: ",")
+            }
+            return "all"
+        case .createArtifact:
+            return title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "artifact"
         }
     }
 
@@ -54,15 +66,46 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             ?? stringValue(named: "target", in: dictionary, arguments: arguments)
         let query = stringValue(named: "query", in: dictionary, arguments: arguments)
             ?? stringValue(named: "q", in: dictionary, arguments: arguments)
+        let title = stringValue(named: "title", in: dictionary, arguments: arguments)
+        let html = stringValue(named: "html", in: dictionary, arguments: arguments)
+        let indices = intArrayValue(named: "indices", in: dictionary, arguments: arguments)
+            ?? intArrayValue(named: "tabs", in: dictionary, arguments: arguments)
 
-        let call = NativeBrowserToolCall(name: name, url: url, query: query)
-        return call.rawInput.isEmpty ? nil : call
+        let call = NativeBrowserToolCall(
+            name: name,
+            url: url,
+            query: query,
+            title: title,
+            html: html,
+            indices: indices
+        )
+
+        switch name {
+        case .open, .fetch, .search:
+            return call.rawInput.isEmpty ? nil : call
+        case .readTabs:
+            return call
+        case .createArtifact:
+            return (html?.isEmpty == false) ? call : nil
+        }
     }
 
     private static func stringValue(named key: String, in dictionary: [String: Any], arguments: [String: Any]) -> String? {
         let raw = (dictionary[key] as? String) ?? (arguments[key] as? String)
         let trimmed = raw?.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed?.isEmpty == false ? trimmed : nil
+    }
+
+    private static func intArrayValue(named key: String, in dictionary: [String: Any], arguments: [String: Any]) -> [Int]? {
+        let raw = dictionary[key] ?? arguments[key]
+        guard let array = raw as? [Any] else { return nil }
+        let ints: [Int] = array.compactMap { item in
+            if let int = item as? Int { return int }
+            if let number = item as? NSNumber { return number.intValue }
+            if let string = item as? String { return Int(string.trimmingCharacters(in: .whitespacesAndNewlines)) }
+            return nil
+        }
+        return ints.isEmpty ? nil : ints
     }
 
     private static func jsonObjectCandidates(in text: String) -> [String] {
@@ -178,6 +221,8 @@ struct NativeBrowserToolResult: Equatable, Sendable {
 
 struct NativeBrowserToolExecutor {
     var openURL: @MainActor (URL) -> Void
+    var readTabsContent: @MainActor ([Int]?) async -> String
+    var saveAndOpenArtifact: @MainActor (_ title: String, _ html: String) async throws -> URL
 
     func execute(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
         switch call.name {
@@ -187,6 +232,10 @@ struct NativeBrowserToolExecutor {
             return await search(call)
         case .fetch:
             return await fetch(call)
+        case .readTabs:
+            return await readTabs(call)
+        case .createArtifact:
+            return await createArtifact(call)
         }
     }
 
@@ -228,6 +277,32 @@ struct NativeBrowserToolExecutor {
             return NativeBrowserToolResult(call: call, succeeded: false, content: "Fetch failed for \(url.absoluteString): \(error.localizedDescription)")
         }
     }
+
+    private func readTabs(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
+        let content = await readTabsContent(call.indices)
+        return NativeBrowserToolResult(call: call, succeeded: true, content: content)
+    }
+
+    private func createArtifact(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
+        guard let html = call.html, !html.isEmpty else {
+            return NativeBrowserToolResult(call: call, succeeded: false, content: "create_artifact requires an `html` field with the full document body.")
+        }
+        let title = call.title?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Artifact"
+        do {
+            let url = try await saveAndOpenArtifact(title, html)
+            return NativeBrowserToolResult(
+                call: call,
+                succeeded: true,
+                content: "Artifact saved to \(url.path) and opened in a new tab."
+            )
+        } catch {
+            return NativeBrowserToolResult(
+                call: call,
+                succeeded: false,
+                content: "Failed to save artifact: \(error.localizedDescription)"
+            )
+        }
+    }
 }
 
 enum NativeBrowserToolPrompt {
@@ -236,13 +311,27 @@ enum NativeBrowserToolPrompt {
     - open: navigates the current tab to a URL. Use for requests like "open youtube".
     - search: runs the app's native web search and returns result titles, URLs, and snippets.
     - fetch: downloads a URL and returns readable page text.
+    - read_tabs: returns the visible text of the user's currently open tabs. Use this when the user asks about, summarizes across, or wants to act on the tabs they already have open. Pass `indices` (1-based) to read specific tabs, or omit it to read all of them.
+    - create_artifact: saves a fully self-contained HTML document under ~/.thebrowser/web_artifacts/ and opens it in a new tab. Use this when the user asks for an "artifact", "document", "report", "dashboard", "summary", or anything similar that should be rendered as a standalone page.
 
     To use a tool, reply with only one JSON object and no prose:
     {"tool":"open","url":"https://example.com"}
     {"tool":"search","query":"weather in New York"}
     {"tool":"fetch","url":"https://example.com/article"}
+    {"tool":"read_tabs"}
+    {"tool":"read_tabs","indices":[1,3]}
+    {"tool":"create_artifact","title":"Market Overview","html":"<!doctype html><html>…</html>"}
 
     Use a tool only when it helps the user's request. If the user asks you to open or navigate to a site, use the open tool instead of saying you will do it. If no tool is needed, answer normally. When describing your tools to the user, use words instead of tool-call JSON examples. Never say a browser action happened unless a native tool result in this conversation says it succeeded. Do not claim you can click buttons, fill forms, manage bookmarks/history/settings, or inspect hidden page state.
+
+    create_artifact design language — every artifact MUST follow this style:
+    - Background #0a0a0a, text in pure white and warm grays only. NO other colors. No blue links, no green success badges, no red warnings.
+    - Inter font loaded from https://rsms.me/inter/inter.css. Display headings: weight 200–300, generous letter-spacing (-0.02em), large (40–72px). Body: weight 400, 15–17px, line-height 1.6.
+    - Editorial layout: max-width ~1100px, centered, generous padding. Section dividers as 1px lines at white @ 8% opacity. Plenty of whitespace between blocks.
+    - For data: use Chart.js v4 from https://cdn.jsdelivr.net/npm/chart.js. Configure all charts in monochrome — strokes/fills in white at varying opacities (0.95, 0.6, 0.3), gridlines in white @ 6%, no legend backgrounds. Disable Chart.js color defaults explicitly.
+    - Animations: subtle entrance fades on load (opacity + 8px translate, 600ms ease-out, staggered). Slow shimmer or breathing pulse on hero elements is OK. NO bounce, NO playful motion, NO bright color transitions.
+    - Output a SINGLE complete HTML document with inline <style> and <script>. Include <!doctype html>, <meta charset>, <meta viewport>. The `html` argument must contain the full document — not a snippet.
+    - Be substantive: synthesize, compare, and visualize. Don't just dump bullet lists. The artifact should feel like a thoughtful editorial brief, not a meeting notes export.
     """
 
     static func continuationPrompt(basePrompt: String, results: [NativeBrowserToolResult]) -> String {
@@ -433,4 +522,8 @@ private extension Array where Element: Hashable {
         var seen = Set<Element>()
         return filter { seen.insert($0).inserted }
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

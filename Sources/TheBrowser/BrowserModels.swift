@@ -122,6 +122,48 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         url = nil
     }
 
+    /// Loads a local file (typically a generated artifact) into this tab. Uses
+    /// `loadFileURL(_:allowingReadAccessTo:)` so WKWebView grants the
+    /// containing directory read access without complaining about the
+    /// file:// scheme.
+    func loadArtifact(at fileURL: URL) {
+        webView.stopLoading()
+        searchBackStack.removeAll()
+        searchPage = nil
+        isHome = false
+        isLoading = true
+        estimatedProgress = 0
+        url = fileURL
+        title = fileURL.deletingPathExtension().lastPathComponent
+        webView.loadFileURL(fileURL, allowingReadAccessTo: fileURL.deletingLastPathComponent())
+    }
+
+    /// Extracts visible text content from the loaded page via JavaScript. Used
+    /// by the AI chat's `read_tabs` tool to feed the model the user's open
+    /// pages without a network round-trip. Returns nil for tabs without a
+    /// loaded document (home tabs, search-result tabs).
+    func extractVisibleText(maxBytes: Int = 6_000) async -> String? {
+        guard !isHome, searchPage == nil else { return nil }
+        let script = "document.body ? document.body.innerText : ''"
+        let raw: Any?
+        do {
+            raw = try await webView.evaluateJavaScript(script)
+        } catch {
+            return nil
+        }
+        guard let text = raw as? String else { return nil }
+        let collapsed = text
+            .replacingOccurrences(of: #"[ \t\r\f]+"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\n\s*\n+"#, with: "\n\n", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !collapsed.isEmpty else { return nil }
+        if collapsed.utf8.count <= maxBytes {
+            return collapsed
+        }
+        let prefix = String(collapsed.prefix(maxBytes))
+        return prefix + "\n…[truncated]"
+    }
+
     func goBack() {
         if webView.canGoBack {
             webView.goBack()
@@ -430,4 +472,16 @@ struct BrowserSearchPage: Equatable, Identifiable {
 struct BrowserPageContext: Sendable {
     var title: String
     var url: String
+}
+
+/// One row in the open-tabs manifest passed to the AI prompt. `index` is
+/// 1-based so it lines up with how the manifest is rendered to the model.
+/// `isContent` is false for home and search tabs, which have no real page
+/// content to extract.
+struct TabManifestEntry: Sendable, Equatable {
+    var index: Int
+    var title: String
+    var url: String
+    var isSelected: Bool
+    var isContent: Bool
 }

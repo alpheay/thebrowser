@@ -38,10 +38,21 @@ struct BrowserShellView: View {
                     AIChatPanel(
                         viewModel: chatModel,
                         context: model.selectedContext,
-                        nativeTools: NativeBrowserToolExecutor { url in
-                            model.addressDraft = url.absoluteString
-                            model.navigateSelected(to: url.absoluteString)
-                        },
+                        tabs: model.tabsManifest(),
+                        nativeTools: NativeBrowserToolExecutor(
+                            openURL: { url in
+                                model.addressDraft = url.absoluteString
+                                model.navigateSelected(to: url.absoluteString)
+                            },
+                            readTabsContent: { indices in
+                                await model.collectTabsContent(indices: indices)
+                            },
+                            saveAndOpenArtifact: { title, html in
+                                let url = try ArtifactStore.shared.save(title: title, html: html)
+                                model.openArtifact(at: url)
+                                return url
+                            }
+                        ),
                         onClose: {
                             withAnimation(Motion.springSnap) { model.toggleChat() }
                         }

@@ -172,10 +172,17 @@ struct AIProviderClient {
         _ message: String,
         context: BrowserPageContext,
         sessionDirectory: URL,
-        history: [ChatMessage] = []
+        history: [ChatMessage] = [],
+        tabs: [TabManifestEntry] = []
     ) async throws -> String {
         let configuration = AIHarnessConfiguration.current()
-        let prompt = Self.prompt(for: message, context: context, history: history, configuration: configuration)
+        let prompt = Self.prompt(
+            for: message,
+            context: context,
+            history: history,
+            configuration: configuration,
+            tabs: tabs
+        )
         return try await ask(prompt: prompt, sessionDirectory: sessionDirectory)
     }
 
@@ -213,7 +220,8 @@ struct AIProviderClient {
         for message: String,
         context: BrowserPageContext,
         history: [ChatMessage] = [],
-        configuration: AIHarnessConfiguration? = nil
+        configuration: AIHarnessConfiguration? = nil,
+        tabs: [TabManifestEntry] = []
     ) -> String {
         let pageURL = context.url.isEmpty ? "Home page" : context.url
 
@@ -232,12 +240,24 @@ struct AIProviderClient {
             transcript += "\n"
         }
 
+        var tabsBlock = ""
+        if !tabs.isEmpty {
+            var lines: [String] = ["Open tabs:"]
+            for entry in tabs {
+                let marker = entry.isSelected ? "*" : " "
+                let url = entry.url.isEmpty ? "(home)" : entry.url
+                lines.append("  \(marker) \(entry.index). \(entry.title) — \(url)")
+            }
+            lines.append("(* = currently selected. Use read_tabs to read the visible text of one or more of these tabs.)")
+            tabsBlock = lines.joined(separator: "\n") + "\n\n"
+        }
+
         return """
         \(NativeBrowserToolPrompt.instructions)
 
         \(configuration?.promptIdentity ?? "")
 
-        Current tab:
+        \(tabsBlock)Current tab:
         Title: \(context.title)
         URL: \(pageURL)
 
