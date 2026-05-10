@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 @preconcurrency import WebKit
@@ -24,6 +25,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         configuration.websiteDataStore = .default()
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
+        webView.appearance = NSAppearance(named: .darkAqua)
 
         super.init()
 
