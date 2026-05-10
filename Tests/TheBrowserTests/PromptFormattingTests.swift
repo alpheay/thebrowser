@@ -45,13 +45,60 @@ struct PromptFormattingTests {
         let context = BrowserPageContext(title: "Page", url: "https://x")
         let prompt = AIProviderClient.prompt(for: "do thing", context: context)
 
-        #expect(prompt == """
+        #expect(prompt.contains(NativeBrowserToolPrompt.instructions))
+        #expect(prompt.contains("""
         Current tab:
         Title: Page
         URL: https://x
-
+        """))
+        #expect(prompt.hasSuffix("""
         User request:
         do thing
-        """)
+        """))
+    }
+
+    @Test("Prompt documents native browser tools")
+    func includesNativeBrowserToolInstructions() {
+        let context = BrowserPageContext(title: "Page", url: "https://x")
+        let prompt = AIProviderClient.prompt(for: "open youtube", context: context)
+
+        #expect(prompt.contains(#"{"tool":"open","url":"https://example.com"}"#))
+        #expect(prompt.contains(#"{"tool":"search","query":"weather in New York"}"#))
+        #expect(prompt.contains(#"{"tool":"fetch","url":"https://example.com/article"}"#))
+    }
+
+    @Test("Prompt includes selected provider and model identity when provided")
+    func includesRuntimeModelIdentity() {
+        let context = BrowserPageContext(title: "Page", url: "https://x")
+        let configuration = TestSupport.makeConfiguration(
+            provider: .claude,
+            model: "claude-sonnet-4-6"
+        )
+        let prompt = AIProviderClient.prompt(
+            for: "what model are you?",
+            context: context,
+            configuration: configuration
+        )
+
+        #expect(prompt.contains("AI runtime:"))
+        #expect(prompt.contains("Provider: Claude"))
+        #expect(prompt.contains("Model: Claude Sonnet 4.6"))
+        #expect(prompt.contains("Model ID: claude-sonnet-4-6"))
+        #expect(prompt.contains("If the user asks what model you are"))
+    }
+
+    @Test("Prompt is honest when no explicit model is configured")
+    func runtimeModelIdentityDoesNotGuessWhenMissing() {
+        let context = BrowserPageContext(title: "Page", url: "https://x")
+        let configuration = TestSupport.makeConfiguration(provider: .codex, model: "")
+        let prompt = AIProviderClient.prompt(
+            for: "what model are you?",
+            context: context,
+            configuration: configuration
+        )
+
+        #expect(prompt.contains("Provider: Codex"))
+        #expect(prompt.contains("Model: Not explicitly configured"))
+        #expect(prompt.contains("Model ID: not explicitly configured"))
     }
 }

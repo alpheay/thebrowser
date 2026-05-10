@@ -41,4 +41,14 @@ struct EffectiveSystemPromptTests {
         #expect(!prompt.localizedCaseInsensitiveContains("model id"))
         #expect(!prompt.localizedCaseInsensitiveContains("running as"))
     }
+
+    @Test("Default app prompt tells the assistant not to overclaim unavailable browser tools")
+    func defaultPromptGuidesCapabilityHonesty() {
+        let prompt = AppDefaults.defaultAISystemPrompt
+
+        #expect(prompt.localizedCaseInsensitiveContains("Treat only those listed tools as available"))
+        #expect(prompt.localizedCaseInsensitiveContains("Never claim a browser action happened until a native tool result says it succeeded"))
+        #expect(prompt.localizedCaseInsensitiveContains("Do not invent extra feature lists"))
+        #expect(prompt.localizedCaseInsensitiveContains("Opening"))
+    }
 }

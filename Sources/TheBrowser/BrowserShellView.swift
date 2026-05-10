@@ -38,6 +38,10 @@ struct BrowserShellView: View {
                     AIChatPanel(
                         viewModel: chatModel,
                         context: model.selectedContext,
+                        nativeTools: NativeBrowserToolExecutor { url in
+                            model.addressDraft = url.absoluteString
+                            model.navigateSelected(to: url.absoluteString)
+                        },
                         onClose: {
                             withAnimation(Motion.springSnap) { model.toggleChat() }
                         }

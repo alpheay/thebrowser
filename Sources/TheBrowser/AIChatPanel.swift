@@ -33,7 +33,7 @@ final class ChatViewModel: ObservableObject {
         store.directory(for: sessionID)
     }
 
-    func send(context: BrowserPageContext) {
+    func send(context: BrowserPageContext, nativeTools: NativeBrowserToolExecutor) {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, !isSending else {
             return
@@ -46,16 +46,19 @@ final class ChatViewModel: ObservableObject {
 
         let directory = sessionDirectory
         let history = messages
+        let configuration = AIHarnessConfiguration.current()
+        let prompt = AIProviderClient.prompt(for: trimmed, context: context, history: history, configuration: configuration)
 
         Task {
             do {
-                let response = try await client.ask(
-                    trimmed,
-                    context: context,
+                let response = try await client.ask(prompt: prompt, sessionDirectory: directory)
+                let finalResponse = try await resolveNativeBrowserTools(
+                    initialResponse: response,
+                    basePrompt: prompt,
                     sessionDirectory: directory,
-                    history: history
+                    nativeTools: nativeTools
                 )
-                messages.append(ChatMessage(role: .assistant, text: response))
+                messages.append(ChatMessage(role: .assistant, text: finalResponse))
             } catch {
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 messages.append(ChatMessage(role: .system, text: message))
@@ -75,11 +78,43 @@ final class ChatViewModel: ObservableObject {
     private func persist(context: BrowserPageContext) {
         store.save(messages: messages, sessionID: sessionID, pageContext: context)
     }
+
+    private func resolveNativeBrowserTools(
+        initialResponse: String,
+        basePrompt: String,
+        sessionDirectory: URL,
+        nativeTools: NativeBrowserToolExecutor
+    ) async throws -> String {
+        var response = initialResponse
+        var results: [NativeBrowserToolResult] = []
+
+        for _ in 0..<4 {
+            guard let call = NativeBrowserToolCall.parse(from: response) else {
+                return response
+            }
+
+            let result = await nativeTools.execute(call)
+            results.append(result)
+
+            let continuation = NativeBrowserToolPrompt.continuationPrompt(
+                basePrompt: basePrompt,
+                results: results
+            )
+            response = try await client.ask(prompt: continuation, sessionDirectory: sessionDirectory)
+        }
+
+        if let last = results.last {
+            return "I used several browser tools and stopped to avoid looping.\n\n\(last.promptText)"
+        }
+
+        return response
+    }
 }
 
 struct AIChatPanel: View {
     @ObservedObject var viewModel: ChatViewModel
     var context: BrowserPageContext
+    var nativeTools: NativeBrowserToolExecutor
     var onClose: () -> Void
 
     @AppStorage(PreferenceKey.aiProvider) private var aiProvider = AIProviderKind.codex.rawValue
@@ -253,7 +288,7 @@ struct AIChatPanel: View {
                 draft: $viewModel.draft,
                 focused: $composerFocused,
                 placeholder: "Ask \(provider.displayName)…",
-                onSubmit: { viewModel.send(context: context) }
+                onSubmit: { viewModel.send(context: context, nativeTools: nativeTools) }
             ) {
                 HStack(spacing: 6) {
                     ModelPickerButton(
@@ -263,7 +298,7 @@ struct AIChatPanel: View {
                     SendButton(
                         enabled: !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                         sending: viewModel.isSending,
-                        action: { viewModel.send(context: context) }
+                        action: { viewModel.send(context: context, nativeTools: nativeTools) }
                     )
                 }
             }

@@ -44,6 +44,16 @@ enum AIProviderKind: String, CaseIterable, Identifiable, Sendable {
             ]
         }
     }
+
+    /// Lightweight, low-latency model id used for ad-hoc background tasks
+    /// (e.g. the inline AI answer above search results). Cheaper and faster
+    /// than the user's primary chat model so the summary card lands quickly.
+    var fastModelID: String {
+        switch self {
+        case .claude: return "claude-haiku-4-5"
+        case .codex: return "gpt-5.4-mini"
+        }
+    }
 }
 
 struct AIModelOption: Identifiable, Hashable, Sendable {
@@ -133,6 +143,30 @@ struct AIHarnessConfiguration: Sendable {
     }
 }
 
+extension AIHarnessConfiguration {
+    var promptIdentity: String {
+        let modelID = model.trimmingCharacters(in: .whitespacesAndNewlines)
+        let modelName: String
+        let modelIDLabel: String
+
+        if modelID.isEmpty {
+            modelName = "Not explicitly configured"
+            modelIDLabel = "not explicitly configured"
+        } else {
+            modelName = AIModelOption.find(provider: provider, modelID: modelID)?.displayName ?? modelID
+            modelIDLabel = modelID
+        }
+
+        return """
+        AI runtime:
+        Provider: \(provider.displayName)
+        Model: \(modelName)
+        Model ID: \(modelIDLabel)
+        If the user asks what model you are, answer using the Provider, Model, and Model ID above. If the model is not explicitly configured, say so instead of guessing.
+        """
+    }
+}
+
 struct AIProviderClient {
     func ask(
         _ message: String,
@@ -140,27 +174,33 @@ struct AIProviderClient {
         sessionDirectory: URL,
         history: [ChatMessage] = []
     ) async throws -> String {
-        var configuration = AIHarnessConfiguration.current()
-        // Force the CLI to run inside the session directory so each chat is
-        // isolated and persistent under ~/.thebrowser/sessions/<id>.
-        configuration.workspacePath = sessionDirectory.path
-        let prompt = Self.prompt(for: message, context: context, history: history)
-
-        let resolvedConfig = configuration
-        return try await Task.detached(priority: .userInitiated) {
-            try runProvider(configuration: resolvedConfig, prompt: prompt)
-        }.value
+        let configuration = AIHarnessConfiguration.current()
+        let prompt = Self.prompt(for: message, context: context, history: history, configuration: configuration)
+        return try await ask(prompt: prompt, sessionDirectory: sessionDirectory)
     }
 
     /// Single-shot CLI call with no chat history or session persistence. Used
     /// by ad-hoc features (e.g. inline AI answers above search results) that
-    /// just need a prompt → response round trip. The optional system prompt
-    /// override lets callers replace the user's chat persona with a task-
-    /// specific instruction without mutating saved settings.
-    func ask(prompt: String, systemPromptOverride: String? = nil) async throws -> String {
+    /// just need a prompt → response round trip. The optional overrides let
+    /// callers swap the user's chat persona / model for a task-specific
+    /// choice without mutating saved settings.
+    func ask(
+        prompt: String,
+        sessionDirectory: URL? = nil,
+        systemPromptOverride: String? = nil,
+        modelOverride: String? = nil
+    ) async throws -> String {
         var configuration = AIHarnessConfiguration.current()
+        if let sessionDirectory {
+            // Force chat CLI calls to run inside the session directory so
+            // each conversation is isolated under ~/.thebrowser/sessions/<id>.
+            configuration.workspacePath = sessionDirectory.path
+        }
         if let systemPromptOverride {
             configuration.systemPrompt = systemPromptOverride
+        }
+        if let modelOverride {
+            configuration.model = modelOverride
         }
 
         let resolvedConfig = configuration
@@ -172,7 +212,8 @@ struct AIProviderClient {
     static func prompt(
         for message: String,
         context: BrowserPageContext,
-        history: [ChatMessage] = []
+        history: [ChatMessage] = [],
+        configuration: AIHarnessConfiguration? = nil
     ) -> String {
         let pageURL = context.url.isEmpty ? "Home page" : context.url
 
@@ -192,6 +233,10 @@ struct AIProviderClient {
         }
 
         return """
+        \(NativeBrowserToolPrompt.instructions)
+
+        \(configuration?.promptIdentity ?? "")
+
         Current tab:
         Title: \(context.title)
         URL: \(pageURL)
