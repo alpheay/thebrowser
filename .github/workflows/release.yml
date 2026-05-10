@@ -1,0 +1,206 @@
+name: Release
+
+on:
+  push:
+    branches: [production]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build & release DMG
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Show Swift toolchain
+        run: swift --version
+
+      - name: Cache SwiftPM build
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: ${{ runner.os }}-spm-release-${{ hashFiles('Package.swift') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-release-
+            ${{ runner.os }}-spm-
+
+      - name: Compute version
+        id: version
+        run: |
+          set -euo pipefail
+          DATE=$(date -u +%Y.%m.%d)
+          SHORT_SHA=$(git rev-parse --short HEAD)
+          VERSION="${DATE}-${SHORT_SHA}"
+          BUILD_NUMBER=$(git rev-list --count HEAD)
+          TAG="v${VERSION}"
+          {
+            echo "version=${VERSION}"
+            echo "build_number=${BUILD_NUMBER}"
+            echo "tag=${TAG}"
+          } >> "$GITHUB_OUTPUT"
+          echo "Version: ${VERSION}"
+          echo "Build: ${BUILD_NUMBER}"
+          echo "Tag: ${TAG}"
+
+      - name: Build universal release binary
+        run: |
+          set -euo pipefail
+          swift build -c release --arch arm64 --arch x86_64
+          BIN_PATH=$(swift build -c release --arch arm64 --arch x86_64 --show-bin-path)
+          echo "BIN_PATH=${BIN_PATH}" >> "$GITHUB_ENV"
+          file "${BIN_PATH}/TheBrowser"
+
+      - name: Assemble .app bundle
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ steps.version.outputs.build_number }}
+        run: |
+          set -euo pipefail
+          APP_NAME="TheBrowser"
+          APP_DIR="dist/${APP_NAME}.app"
+          rm -rf dist
+          mkdir -p "${APP_DIR}/Contents/MacOS" "${APP_DIR}/Contents/Resources"
+          cp "${BIN_PATH}/${APP_NAME}" "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+          chmod +x "${APP_DIR}/Contents/MacOS/${APP_NAME}"
+
+          cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+              <key>CFBundleDevelopmentRegion</key><string>en</string>
+              <key>CFBundleExecutable</key><string>${APP_NAME}</string>
+              <key>CFBundleIdentifier</key><string>com.alpheay.thebrowser</string>
+              <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+              <key>CFBundleName</key><string>${APP_NAME}</string>
+              <key>CFBundleDisplayName</key><string>${APP_NAME}</string>
+              <key>CFBundlePackageType</key><string>APPL</string>
+              <key>CFBundleShortVersionString</key><string>${VERSION}</string>
+              <key>CFBundleVersion</key><string>${BUILD_NUMBER}</string>
+              <key>LSMinimumSystemVersion</key><string>14.0</string>
+              <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
+              <key>NSHighResolutionCapable</key><true/>
+              <key>NSSupportsAutomaticGraphicsSwitching</key><true/>
+              <key>NSPrincipalClass</key><string>NSApplication</string>
+          </dict>
+          </plist>
+          PLIST
+
+          # Ad-hoc sign so the bundle has a valid (if unverified) signature.
+          # Users will still see "unidentified developer" on first launch and
+          # need to right-click → Open. See the comment block at the bottom
+          # of this workflow for the steps to switch to Developer ID + notarisation.
+          codesign --force --deep --sign - "${APP_DIR}"
+          codesign --verify --deep --strict --verbose=2 "${APP_DIR}"
+
+      - name: Build DMG
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          STAGING="dist/dmg-staging"
+          mkdir -p "${STAGING}"
+          cp -R "dist/TheBrowser.app" "${STAGING}/"
+          ln -s /Applications "${STAGING}/Applications"
+          DMG_PATH="dist/TheBrowser-${VERSION}.dmg"
+          hdiutil create \
+            -volname "TheBrowser" \
+            -srcfolder "${STAGING}" \
+            -ov -format UDZO \
+            "${DMG_PATH}"
+          shasum -a 256 "${DMG_PATH}" | tee "${DMG_PATH}.sha256"
+          echo "DMG_PATH=${DMG_PATH}" >> "$GITHUB_ENV"
+
+      - name: Generate release notes
+        run: |
+          set -euo pipefail
+          PREV_TAG=$(git tag --list 'v*' --sort=-creatordate | head -n 1 || true)
+          if [ -n "${PREV_TAG}" ] && git rev-parse "${PREV_TAG}" >/dev/null 2>&1; then
+            RANGE="${PREV_TAG}..HEAD"
+            HEADER="Changes since \`${PREV_TAG}\`"
+          else
+            RANGE="HEAD"
+            HEADER="Initial release"
+          fi
+          {
+            echo "Built from \`production\` @ \`${GITHUB_SHA:0:7}\` on $(date -u +"%Y-%m-%d %H:%M UTC")."
+            echo
+            echo "## ${HEADER}"
+            git log --pretty=format:'- %s (%h)' "${RANGE}" || true
+            echo
+            echo
+            echo "## Install"
+            echo
+            echo "Download the \`.dmg\` below, open it, and drag **TheBrowser** to **Applications**."
+            echo "The build is ad-hoc signed, so on first launch macOS will warn you about an unidentified developer — right-click the app and choose **Open** to bypass."
+          } > release_notes.md
+          cat release_notes.md
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          gh release create "${TAG}" \
+            --title "TheBrowser ${VERSION}" \
+            --notes-file release_notes.md \
+            --target "${GITHUB_SHA}" \
+            "${DMG_PATH}" \
+            "${DMG_PATH}.sha256"
+
+      - name: Upload DMG as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: TheBrowser-${{ steps.version.outputs.version }}
+          path: |
+            dist/TheBrowser-*.dmg
+            dist/TheBrowser-*.dmg.sha256
+          if-no-files-found: error
+
+# ---------------------------------------------------------------------------
+# Optional: Developer ID signed + notarised builds
+#
+# The build above is ad-hoc signed (codesign --sign -), which is enough for
+# Gatekeeper to accept the bundle but still flags it as "unidentified
+# developer." To produce a fully signed and notarised DMG, add these repo
+# secrets (Settings → Secrets and variables → Actions):
+#
+#   APPLE_ID                 – Apple ID email used for notarisation
+#   APPLE_APP_PASSWORD       – app-specific password for that Apple ID
+#   APPLE_TEAM_ID            – Developer Team ID
+#   DEVELOPER_ID_CERT_P12    – base64 of your "Developer ID Application" .p12
+#   DEVELOPER_ID_CERT_PWD    – password for the .p12
+#
+# Then replace the `codesign --sign -` line with:
+#
+#   echo "$DEVELOPER_ID_CERT_P12" | base64 --decode > /tmp/cert.p12
+#   KEYCHAIN=build.keychain
+#   security create-keychain -p '' "$KEYCHAIN"
+#   security set-keychain-settings -lut 21600 "$KEYCHAIN"
+#   security unlock-keychain -p '' "$KEYCHAIN"
+#   security import /tmp/cert.p12 -k "$KEYCHAIN" -P "$DEVELOPER_ID_CERT_PWD" -T /usr/bin/codesign
+#   security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
+#   security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k '' "$KEYCHAIN"
+#   codesign --force --deep --options runtime --timestamp \
+#       --sign "Developer ID Application: <Your Name> ($APPLE_TEAM_ID)" "$APP_DIR"
+#
+# And after building the DMG, notarise + staple:
+#
+#   xcrun notarytool submit "$DMG_PATH" \
+#       --apple-id "$APPLE_ID" --password "$APPLE_APP_PASSWORD" \
+#       --team-id "$APPLE_TEAM_ID" --wait
+#   xcrun stapler staple "$DMG_PATH"
+# ---------------------------------------------------------------------------
