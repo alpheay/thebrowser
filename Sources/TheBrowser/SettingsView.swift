@@ -21,6 +21,7 @@ struct SettingsView: View {
 
     @State private var selectedTab: SettingsTab = .general
     @State private var showClearAllConfirm = false
+    @StateObject private var googleAccountStore = GoogleAccountStore.shared
 
     var body: some View {
         HStack(spacing: 0) {
@@ -83,12 +84,23 @@ struct SettingsView: View {
         switch selectedTab {
         case .general:
             generalSettings
+        case .account:
+            accountSettings
         case .ai:
             aiSettings
         case .keybindings:
             keybindingsSettings
         case .migration:
             migrationSettings
+        }
+    }
+
+    // MARK: - Account
+
+    private var accountSettings: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            pageHeader(title: "Account", subtitle: "Sign in with Google to personalize The Browser.")
+            GoogleAccountView(store: googleAccountStore)
         }
     }
 
@@ -127,10 +139,10 @@ struct SettingsView: View {
 
     private var aiSettings: some View {
         VStack(alignment: .leading, spacing: 28) {
-            pageHeader(title: "AI Harness", subtitle: "The command-line agent that powers chat.")
+            pageHeader(title: "AI Engine", subtitle: "The command-line model that powers chat.")
 
             section("Provider") {
-                row(label: "Backend", help: "Which CLI agent answers your prompts.") {
+                row(label: "Backend", help: "Which CLI model answers your prompts.") {
                     SegmentPicker(selection: $aiProvider, options: AIProviderKind.allCases.map { ($0.rawValue, $0.displayName) })
                 }
 
@@ -144,7 +156,7 @@ struct SettingsView: View {
                     PlainTextField(text: $aiModel, placeholder: "Provider default")
                 }
 
-                row(label: "System prompt", help: "Prepended to every conversation.") {
+                row(label: "System prompt", help: "Replaces the provider's default prompt.") {
                     MultilineField(text: $aiSystemPrompt, height: 108)
                 }
 
@@ -158,14 +170,14 @@ struct SettingsView: View {
                     }
                 }
 
-                row(label: "Extra args", help: "Passed to the CLI invocation.") {
+                row(label: "Extra args", help: "Passed before The Browser's replacement controls.") {
                     MultilineField(text: $aiExtraArguments, height: 70)
                 }
             }
 
             if provider == .claude {
-                section("Claude tools") {
-                    row(label: "Tools") {
+                section("Claude tool surface") {
+                    row(label: "Tools", help: "Leave blank to disable Claude's default tools.") {
                         PlainTextField(text: $aiTools, placeholder: "Bash,Edit,Read")
                     }
 
@@ -280,6 +292,7 @@ struct SettingsView: View {
 
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
+    case account
     case ai
     case keybindings
     case migration
@@ -289,7 +302,8 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .general: "General"
-        case .ai: "AI Harness"
+        case .account: "Account"
+        case .ai: "AI Engine"
         case .keybindings: "Keybindings"
         case .migration: "Migration"
         }
@@ -298,6 +312,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     var symbolName: String {
         switch self {
         case .general: "slider.horizontal.3"
+        case .account: "person.crop.circle"
         case .ai: "sparkles"
         case .keybindings: "keyboard"
         case .migration: "arrow.triangle.2.circlepath"

@@ -194,12 +194,16 @@ private func runProvider(configuration: AIHarnessConfiguration, prompt: String) 
     let outputURL = tempDirectory.appendingPathComponent("thebrowser-\(configuration.provider.rawValue)-\(UUID().uuidString).txt")
     let stdoutURL = tempDirectory.appendingPathComponent("thebrowser-\(configuration.provider.rawValue)-stdout-\(UUID().uuidString).log")
     let stderrURL = tempDirectory.appendingPathComponent("thebrowser-\(configuration.provider.rawValue)-stderr-\(UUID().uuidString).log")
+    let systemPromptFileURL = try systemPromptFileIfNeeded(for: configuration, in: tempDirectory)
 
     _ = FileManager.default.createFile(atPath: stdoutURL.path, contents: nil)
     _ = FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
 
     defer {
         try? FileManager.default.removeItem(at: outputURL)
+        if let systemPromptFileURL {
+            try? FileManager.default.removeItem(at: systemPromptFileURL)
+        }
         try? FileManager.default.removeItem(at: stdoutURL)
         try? FileManager.default.removeItem(at: stderrURL)
     }
@@ -212,7 +216,12 @@ private func runProvider(configuration: AIHarnessConfiguration, prompt: String) 
     process.standardOutput = stdout
     process.standardError = stderr
     process.currentDirectoryURL = URL(fileURLWithPath: configuration.workspacePath, isDirectory: true)
-    process.arguments = CLIArguments.arguments(for: configuration, prompt: prompt, outputURL: outputURL)
+    process.arguments = CLIArguments.arguments(
+        for: configuration,
+        prompt: prompt,
+        outputURL: outputURL,
+        systemPromptFileURL: systemPromptFileURL
+    )
 
     try process.run()
     process.waitUntilExit()
@@ -246,32 +255,87 @@ private func runProvider(configuration: AIHarnessConfiguration, prompt: String) 
     throw AIProviderError.emptyResponse
 }
 
+private func systemPromptFileIfNeeded(for configuration: AIHarnessConfiguration, in directory: URL) throws -> URL? {
+    guard configuration.provider == .codex else { return nil }
+
+    let url = directory.appendingPathComponent("thebrowser-codex-system-\(UUID().uuidString).md")
+    try CLIArguments.effectiveSystemPrompt(for: configuration).write(to: url, atomically: true, encoding: .utf8)
+    return url
+}
+
 enum CLIArguments {
-    static func arguments(for configuration: AIHarnessConfiguration, prompt: String, outputURL: URL) -> [String] {
+    private static let codexDisabledHarnessFeatures = [
+        "apps",
+        "browser_use",
+        "browser_use_external",
+        "computer_use",
+        "image_generation",
+        "in_app_browser",
+        "multi_agent",
+        "plugins",
+        "shell_tool",
+        "tool_search",
+        "tool_suggest",
+        "unified_exec",
+        "workspace_dependencies"
+    ]
+
+    static func arguments(
+        for configuration: AIHarnessConfiguration,
+        prompt: String,
+        outputURL: URL,
+        systemPromptFileURL: URL? = nil
+    ) -> [String] {
         switch configuration.provider {
         case .codex:
-            return codexArguments(for: configuration, prompt: prompt, outputURL: outputURL)
+            return codexArguments(
+                for: configuration,
+                prompt: prompt,
+                outputURL: outputURL,
+                systemPromptFileURL: systemPromptFileURL
+            )
         case .claude:
             return claudeArguments(for: configuration, prompt: prompt)
         }
     }
 
-    static func codexArguments(for configuration: AIHarnessConfiguration, prompt: String, outputURL: URL) -> [String] {
+    static func codexArguments(
+        for configuration: AIHarnessConfiguration,
+        prompt: String,
+        outputURL: URL,
+        systemPromptFileURL: URL? = nil
+    ) -> [String] {
         var arguments = [
             "exec",
             "--color", "never",
             "--skip-git-repo-check",
             "--ignore-user-config",
             "--ignore-rules",
+            "--ephemeral",
             "--sandbox", configuration.sandbox
         ]
 
         appendModel(configuration.model, to: &arguments)
         arguments.append(contentsOf: extraArguments(from: configuration.extraArguments))
+
+        for feature in codexDisabledHarnessFeatures {
+            arguments.append(contentsOf: ["--disable", feature])
+        }
+
+        if let systemPromptFileURL {
+            appendConfigOverride("model_instructions_file", stringValue: systemPromptFileURL.path, to: &arguments)
+        }
+
+        appendConfigOverride("include_permissions_instructions", boolValue: false, to: &arguments)
+        appendConfigOverride("include_apps_instructions", boolValue: false, to: &arguments)
+        appendConfigOverride("include_environment_context", boolValue: false, to: &arguments)
+        appendConfigOverride("skills.include_instructions", boolValue: false, to: &arguments)
+        appendConfigOverride("include_apply_patch_tool", boolValue: false, to: &arguments)
+
         arguments.append(contentsOf: [
             "-C", configuration.workspacePath,
             "-o", outputURL.path,
-            codexPrompt(systemPrompt: effectiveSystemPrompt(for: configuration), prompt: prompt)
+            prompt
         ])
 
         return arguments
@@ -281,56 +345,32 @@ enum CLIArguments {
         var arguments = [
             "--print",
             "--output-format", "json",
-            "--no-session-persistence"
+            "--no-session-persistence",
+            "--bare",
+            "--disable-slash-commands",
+            "--strict-mcp-config",
+            "--no-chrome"
         ]
 
         appendModel(configuration.model, to: &arguments)
-        arguments.append(contentsOf: ["--system-prompt", effectiveSystemPrompt(for: configuration)])
+        arguments.append(contentsOf: extraArguments(from: configuration.extraArguments))
 
-        appendOptionalFlag("--tools", value: configuration.tools, to: &arguments)
+        arguments.append(contentsOf: ["--system-prompt", effectiveSystemPrompt(for: configuration)])
+        arguments.append(contentsOf: ["--tools", trimmed(configuration.tools)])
+
         appendOptionalFlag("--allowedTools", value: configuration.allowedTools, to: &arguments)
         appendOptionalFlag("--disallowedTools", value: configuration.disallowedTools, to: &arguments)
         appendOptionalFlag("--mcp-config", value: configuration.mcpConfigPath, to: &arguments)
-        arguments.append(contentsOf: extraArguments(from: configuration.extraArguments))
         arguments.append(prompt)
 
         return arguments
     }
 
-    static func codexPrompt(systemPrompt: String, prompt: String) -> String {
-        let trimmedSystemPrompt = trimmed(systemPrompt)
-
-        if trimmedSystemPrompt.isEmpty {
-            return prompt
-        }
-
-        return """
-        System instructions:
-        \(trimmedSystemPrompt)
-
-        \(prompt)
-        """
-    }
-
-    /// Builds the system prompt sent to the underlying CLI: the user's
-    /// configured prompt plus a single line identifying the active provider
-    /// and model. Replaces (not appends to) each CLI's default system prompt
-    /// so things like the user's email, current date, CLAUDE.md, and codex
-    /// user config don't leak into responses.
+    /// Builds the replacement prompt sent to the underlying CLI. It is exactly
+    /// the user's configured prompt after whitespace trim: no provider identity,
+    /// harness banner, model name, tool list, date, or local config context.
     static func effectiveSystemPrompt(for configuration: AIHarnessConfiguration) -> String {
-        let userPrompt = trimmed(configuration.systemPrompt)
-        let identity = identityLine(provider: configuration.provider, model: configuration.model)
-        if userPrompt.isEmpty { return identity }
-        return "\(userPrompt)\n\n\(identity)"
-    }
-
-    static func identityLine(provider: AIProviderKind, model: String) -> String {
-        let trimmedModel = trimmed(model)
-        if trimmedModel.isEmpty {
-            return "You are running as the default \(provider.displayName) model."
-        }
-        let displayName = AIModelOption.find(provider: provider, modelID: trimmedModel)?.displayName ?? trimmedModel
-        return "You are \(displayName) (\(provider.displayName), model id: \(trimmedModel))."
+        trimmed(configuration.systemPrompt)
     }
 
     static func appendModel(_ model: String, to arguments: inout [String]) {
@@ -345,6 +385,21 @@ enum CLIArguments {
         if !value.isEmpty {
             arguments.append(contentsOf: [flag, value])
         }
+    }
+
+    static func appendConfigOverride(_ key: String, boolValue: Bool, to arguments: inout [String]) {
+        arguments.append(contentsOf: ["-c", "\(key)=\(boolValue ? "true" : "false")"])
+    }
+
+    static func appendConfigOverride(_ key: String, stringValue: String, to arguments: inout [String]) {
+        arguments.append(contentsOf: ["-c", "\(key)=\(tomlStringLiteral(stringValue))"])
+    }
+
+    static func tomlStringLiteral(_ value: String) -> String {
+        let escaped = value
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return "\"\(escaped)\""
     }
 
     static func extraArguments(from value: String) -> [String] {

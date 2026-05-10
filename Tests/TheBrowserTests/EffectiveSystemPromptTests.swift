@@ -2,84 +2,43 @@ import Foundation
 import Testing
 @testable import TheBrowser
 
-@Suite("Effective system prompt and identity line")
+@Suite("Replacement system prompt")
 struct EffectiveSystemPromptTests {
-    @Test("Identity line uses the model's display name when known")
-    func identityWithKnownModel() {
-        let line = CLIArguments.identityLine(provider: .claude, model: "claude-opus-4-7")
+    @Test("Effective system prompt is exactly the user's prompt after trim",
+          arguments: AIProviderKind.allCases)
+    func effectivePromptIsOnlyUserPrompt(provider: AIProviderKind) {
+        let config = TestSupport.makeConfiguration(
+            provider: provider,
+            model: provider == .claude ? "claude-opus-4-7" : "gpt-5.5",
+            systemPrompt: "  Be terse.\nStay practical.  "
+        )
 
-        #expect(line.contains("Claude Opus 4.7"))
-        #expect(line.contains("Claude"))
-        #expect(line.contains("claude-opus-4-7"))
+        #expect(CLIArguments.effectiveSystemPrompt(for: config) == "Be terse.\nStay practical.")
     }
 
-    @Test("Identity line falls back to the raw model id when the model is unknown")
-    func identityWithUnknownModel() {
-        let line = CLIArguments.identityLine(provider: .claude, model: "claude-mystery-99")
+    @Test("Blank user prompt stays blank instead of falling back to provider identity")
+    func blankPromptStaysBlank() {
+        let claude = TestSupport.makeConfiguration(provider: .claude, model: "claude-sonnet-4-6", systemPrompt: "  \n\t ")
+        let codex = TestSupport.makeConfiguration(provider: .codex, model: "gpt-5.5", systemPrompt: "")
 
-        #expect(line.contains("claude-mystery-99"))
-        #expect(line.contains("Claude"))
+        #expect(CLIArguments.effectiveSystemPrompt(for: claude) == "")
+        #expect(CLIArguments.effectiveSystemPrompt(for: codex) == "")
     }
 
-    @Test("Identity line whitespace-trims the model id before display and lookup")
-    func identityTrimsModel() {
-        let line = CLIArguments.identityLine(provider: .codex, model: "  gpt-5.5  ")
-
-        #expect(line.contains("GPT-5.5"))
-        #expect(line.contains("gpt-5.5"))
-        #expect(!line.contains("  gpt-5.5  "))
-    }
-
-    @Test("Identity line for an empty model names only the provider")
-    func identityWithoutModel() {
-        let claude = CLIArguments.identityLine(provider: .claude, model: "")
-        let codex = CLIArguments.identityLine(provider: .codex, model: "   ")
-
-        #expect(claude.contains("Claude"))
-        #expect(claude.lowercased().contains("default"))
-        #expect(codex.contains("Codex"))
-        #expect(codex.lowercased().contains("default"))
-    }
-
-    @Test("Effective system prompt joins the user's prompt with the identity line, separated by a blank line")
-    func combinesUserPromptAndIdentity() {
+    @Test("Effective prompt contains no harness identity, model, or tool banner")
+    func promptHasNoHarnessLeakage() {
         let config = TestSupport.makeConfiguration(
             provider: .claude,
-            model: "claude-opus-4-7",
-            systemPrompt: "Be terse."
+            model: "claude-sonnet-4-6",
+            systemPrompt: "You are The Browser's native AI assistant."
         )
 
-        let combined = CLIArguments.effectiveSystemPrompt(for: config)
+        let prompt = CLIArguments.effectiveSystemPrompt(for: config)
 
-        #expect(combined.hasPrefix("Be terse."))
-        #expect(combined.contains("\n\n"))
-        #expect(combined.contains("Claude Opus 4.7"))
-    }
-
-    @Test("Effective system prompt trims surrounding whitespace from the user's prompt")
-    func trimsUserPrompt() {
-        let config = TestSupport.makeConfiguration(
-            provider: .claude,
-            model: "claude-opus-4-7",
-            systemPrompt: "   Be terse.\n\n  "
-        )
-
-        let combined = CLIArguments.effectiveSystemPrompt(for: config)
-
-        #expect(combined.hasPrefix("Be terse."))
-        #expect(!combined.hasPrefix(" "))
-    }
-
-    @Test("Effective system prompt is just the identity line when the user prompt is blank")
-    func identityOnlyWhenBlank() {
-        let blank = TestSupport.makeConfiguration(
-            provider: .codex,
-            model: "gpt-5.5",
-            systemPrompt: "   \n  "
-        )
-
-        let combined = CLIArguments.effectiveSystemPrompt(for: blank)
-
-        #expect(combined == CLIArguments.identityLine(provider: .codex, model: "gpt-5.5"))
+        #expect(!prompt.contains("Claude"))
+        #expect(!prompt.contains("Codex"))
+        #expect(!prompt.localizedCaseInsensitiveContains("tool"))
+        #expect(!prompt.localizedCaseInsensitiveContains("model id"))
+        #expect(!prompt.localizedCaseInsensitiveContains("running as"))
     }
 }
