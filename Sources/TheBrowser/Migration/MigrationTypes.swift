@@ -23,15 +23,8 @@ enum MigrationSource: String, CaseIterable, Codable, Identifiable, Sendable {
 
     var symbolName: String {
         switch self {
-        case .chrome: "circle.hexagongrid.fill"
-        case .firefox: "flame.fill"
-        }
-    }
-
-    var tint: Color {
-        switch self {
-        case .chrome: Color(hex: 0x7BC7FF)
-        case .firefox: Color(hex: 0xFF9A62)
+        case .chrome: "globe"
+        case .firefox: "flame"
         }
     }
 }
