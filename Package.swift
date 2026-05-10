@@ -11,6 +11,7 @@ let package = Package(
         .executable(name: "TheBrowser", targets: ["TheBrowser"])
     ],
     targets: [
-        .executableTarget(name: "TheBrowser")
+        .executableTarget(name: "TheBrowser"),
+        .testTarget(name: "TheBrowserTests", dependencies: ["TheBrowser"])
     ]
 )

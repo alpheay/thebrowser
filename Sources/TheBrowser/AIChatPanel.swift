@@ -14,9 +14,7 @@ struct ChatMessage: Identifiable, Equatable {
 
 @MainActor
 final class ChatViewModel: ObservableObject {
-    @Published var messages: [ChatMessage] = [
-        ChatMessage(role: .assistant, text: "I'm wired through the AI harness. Ask me to reason about the current page, draft something, or hand the next task to the agent.")
-    ]
+    @Published var messages: [ChatMessage] = []
     @Published var draft = ""
     @Published var isSending = false
 

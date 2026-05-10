@@ -55,8 +55,7 @@ struct AIHarnessConfiguration: Sendable {
     var mcpConfigPath: String
     var extraArguments: String
 
-    static func current() -> AIHarnessConfiguration {
-        let defaults = UserDefaults.standard
+    static func current(defaults: UserDefaults = .standard) -> AIHarnessConfiguration {
         let provider = AIProviderKind(rawValue: defaults.string(forKey: PreferenceKey.aiProvider) ?? "") ?? .codex
         let cliPath: String
 
@@ -101,7 +100,7 @@ struct AIProviderClient {
         }.value
     }
 
-    private static func prompt(for message: String, context: BrowserPageContext) -> String {
+    static func prompt(for message: String, context: BrowserPageContext) -> String {
         let pageURL = context.url.isEmpty ? "Home page" : context.url
 
         return """
@@ -142,7 +141,7 @@ private func runProvider(configuration: AIHarnessConfiguration, prompt: String) 
     process.standardOutput = stdout
     process.standardError = stderr
     process.currentDirectoryURL = URL(fileURLWithPath: configuration.workspacePath, isDirectory: true)
-    process.arguments = arguments(for: configuration, prompt: prompt, outputURL: outputURL)
+    process.arguments = CLIArguments.arguments(for: configuration, prompt: prompt, outputURL: outputURL)
 
     try process.run()
     process.waitUntilExit()
@@ -176,99 +175,101 @@ private func runProvider(configuration: AIHarnessConfiguration, prompt: String) 
     throw AIProviderError.emptyResponse
 }
 
-private func arguments(for configuration: AIHarnessConfiguration, prompt: String, outputURL: URL) -> [String] {
-    switch configuration.provider {
-    case .codex:
-        return codexArguments(for: configuration, prompt: prompt, outputURL: outputURL)
-    case .claude:
-        return claudeArguments(for: configuration, prompt: prompt)
+enum CLIArguments {
+    static func arguments(for configuration: AIHarnessConfiguration, prompt: String, outputURL: URL) -> [String] {
+        switch configuration.provider {
+        case .codex:
+            return codexArguments(for: configuration, prompt: prompt, outputURL: outputURL)
+        case .claude:
+            return claudeArguments(for: configuration, prompt: prompt)
+        }
+    }
+
+    static func codexArguments(for configuration: AIHarnessConfiguration, prompt: String, outputURL: URL) -> [String] {
+        var arguments = [
+            "exec",
+            "--color", "never",
+            "--skip-git-repo-check",
+            "--sandbox", configuration.sandbox
+        ]
+
+        appendModel(configuration.model, to: &arguments)
+        arguments.append(contentsOf: extraArguments(from: configuration.extraArguments))
+        arguments.append(contentsOf: [
+            "-C", configuration.workspacePath,
+            "-o", outputURL.path,
+            codexPrompt(systemPrompt: configuration.systemPrompt, prompt: prompt)
+        ])
+
+        return arguments
+    }
+
+    static func claudeArguments(for configuration: AIHarnessConfiguration, prompt: String) -> [String] {
+        var arguments = [
+            "--print",
+            "--output-format", "json",
+            "--no-session-persistence"
+        ]
+
+        appendModel(configuration.model, to: &arguments)
+
+        let systemPrompt = trimmed(configuration.systemPrompt)
+        if !systemPrompt.isEmpty {
+            arguments.append(contentsOf: ["--append-system-prompt", systemPrompt])
+        }
+
+        appendOptionalFlag("--tools", value: configuration.tools, to: &arguments)
+        appendOptionalFlag("--allowedTools", value: configuration.allowedTools, to: &arguments)
+        appendOptionalFlag("--disallowedTools", value: configuration.disallowedTools, to: &arguments)
+        appendOptionalFlag("--mcp-config", value: configuration.mcpConfigPath, to: &arguments)
+        arguments.append(contentsOf: extraArguments(from: configuration.extraArguments))
+        arguments.append(prompt)
+
+        return arguments
+    }
+
+    static func codexPrompt(systemPrompt: String, prompt: String) -> String {
+        let trimmedSystemPrompt = trimmed(systemPrompt)
+
+        if trimmedSystemPrompt.isEmpty {
+            return prompt
+        }
+
+        return """
+        System instructions:
+        \(trimmedSystemPrompt)
+
+        \(prompt)
+        """
+    }
+
+    static func appendModel(_ model: String, to arguments: inout [String]) {
+        let model = trimmed(model)
+        if !model.isEmpty {
+            arguments.append(contentsOf: ["--model", model])
+        }
+    }
+
+    static func appendOptionalFlag(_ flag: String, value: String, to arguments: inout [String]) {
+        let value = trimmed(value)
+        if !value.isEmpty {
+            arguments.append(contentsOf: [flag, value])
+        }
+    }
+
+    static func extraArguments(from value: String) -> [String] {
+        value
+            .components(separatedBy: .newlines)
+            .map(trimmed)
+            .filter { !$0.isEmpty }
+    }
+
+    static func trimmed(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 
-private func codexArguments(for configuration: AIHarnessConfiguration, prompt: String, outputURL: URL) -> [String] {
-    var arguments = [
-        "exec",
-        "--color", "never",
-        "--skip-git-repo-check",
-        "--sandbox", configuration.sandbox
-    ]
-
-    appendModel(configuration.model, to: &arguments)
-    arguments.append(contentsOf: extraArguments(from: configuration.extraArguments))
-    arguments.append(contentsOf: [
-        "-C", configuration.workspacePath,
-        "-o", outputURL.path,
-        codexPrompt(systemPrompt: configuration.systemPrompt, prompt: prompt)
-    ])
-
-    return arguments
-}
-
-private func claudeArguments(for configuration: AIHarnessConfiguration, prompt: String) -> [String] {
-    var arguments = [
-        "--print",
-        "--output-format", "json",
-        "--no-session-persistence"
-    ]
-
-    appendModel(configuration.model, to: &arguments)
-
-    let systemPrompt = trimmed(configuration.systemPrompt)
-    if !systemPrompt.isEmpty {
-        arguments.append(contentsOf: ["--append-system-prompt", systemPrompt])
-    }
-
-    appendOptionalFlag("--tools", value: configuration.tools, to: &arguments)
-    appendOptionalFlag("--allowedTools", value: configuration.allowedTools, to: &arguments)
-    appendOptionalFlag("--disallowedTools", value: configuration.disallowedTools, to: &arguments)
-    appendOptionalFlag("--mcp-config", value: configuration.mcpConfigPath, to: &arguments)
-    arguments.append(contentsOf: extraArguments(from: configuration.extraArguments))
-    arguments.append(prompt)
-
-    return arguments
-}
-
-private func codexPrompt(systemPrompt: String, prompt: String) -> String {
-    let trimmedSystemPrompt = trimmed(systemPrompt)
-
-    if trimmedSystemPrompt.isEmpty {
-        return prompt
-    }
-
-    return """
-    System instructions:
-    \(trimmedSystemPrompt)
-
-    \(prompt)
-    """
-}
-
-private func appendModel(_ model: String, to arguments: inout [String]) {
-    let model = trimmed(model)
-    if !model.isEmpty {
-        arguments.append(contentsOf: ["--model", model])
-    }
-}
-
-private func appendOptionalFlag(_ flag: String, value: String, to arguments: inout [String]) {
-    let value = trimmed(value)
-    if !value.isEmpty {
-        arguments.append(contentsOf: [flag, value])
-    }
-}
-
-private func extraArguments(from value: String) -> [String] {
-    value
-        .components(separatedBy: .newlines)
-        .map(trimmed)
-        .filter { !$0.isEmpty }
-}
-
-private func trimmed(_ value: String) -> String {
-    value.trimmingCharacters(in: .whitespacesAndNewlines)
-}
-
-private struct ClaudeJSONResponse: Decodable {
+struct ClaudeJSONResponse: Decodable {
     var result: String?
 
     static func result(from output: String) -> String? {
