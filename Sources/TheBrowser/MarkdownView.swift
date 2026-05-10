@@ -7,12 +7,16 @@ import SwiftUI
 /// is delegated to `AttributedString(markdown:)`.
 struct MarkdownView: View {
     let text: String
+    /// Optional ordered list of citation URLs. When provided, any `[N]`
+    /// pattern (1-indexed) found inside inline text will be styled as a
+    /// small clickable citation pill linking to `citations[N-1]`.
+    var citations: [URL]? = nil
 
     var body: some View {
         let blocks = MarkdownParser.parse(text)
         VStack(alignment: .leading, spacing: 10) {
             ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
-                MarkdownBlockView(block: block)
+                MarkdownBlockView(block: block, citations: citations)
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -212,22 +216,23 @@ enum MarkdownParser {
 
 private struct MarkdownBlockView: View {
     let block: MarkdownBlock
+    var citations: [URL]?
 
     var body: some View {
         switch block {
         case .heading(let level, let text):
-            HeadingView(level: level, text: text)
+            HeadingView(level: level, text: text, citations: citations)
         case .paragraph(let text):
-            InlineText(text: text)
+            InlineText(text: text, citations: citations)
                 .lineSpacing(3)
         case .codeBlock(let lang, let code):
             CodeBlockView(language: lang, code: code)
         case .unorderedList(let items):
-            ListView(items: items, ordered: false)
+            ListView(items: items, ordered: false, citations: citations)
         case .orderedList(let items):
-            ListView(items: items, ordered: true)
+            ListView(items: items, ordered: true, citations: citations)
         case .blockquote(let text):
-            BlockquoteView(text: text)
+            BlockquoteView(text: text, citations: citations)
         case .horizontalRule:
             Rectangle()
                 .fill(Palette.stroke)
@@ -240,9 +245,10 @@ private struct MarkdownBlockView: View {
 private struct HeadingView: View {
     let level: Int
     let text: String
+    var citations: [URL]?
 
     var body: some View {
-        InlineText(text: text)
+        InlineText(text: text, citations: citations)
             .font(.system(size: fontSize, weight: .semibold))
             .padding(.top, level <= 2 ? 4 : 1)
     }
@@ -300,6 +306,7 @@ private struct CodeBlockView: View {
 private struct ListView: View {
     let items: [String]
     let ordered: Bool
+    var citations: [URL]?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -309,7 +316,7 @@ private struct ListView: View {
                         .font(.system(size: 13, weight: ordered ? .medium : .bold))
                         .foregroundStyle(Palette.textMuted)
                         .frame(width: 18, alignment: .trailing)
-                    InlineText(text: item)
+                    InlineText(text: item, citations: citations)
                         .lineSpacing(2)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
@@ -320,13 +327,14 @@ private struct ListView: View {
 
 private struct BlockquoteView: View {
     let text: String
+    var citations: [URL]?
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             RoundedRectangle(cornerRadius: 1, style: .continuous)
                 .fill(Palette.strokeStrong)
                 .frame(width: 2)
-            InlineText(text: text)
+            InlineText(text: text, citations: citations)
                 .foregroundStyle(Palette.textSecondary)
                 .italic()
                 .lineSpacing(3)
@@ -339,6 +347,7 @@ private struct BlockquoteView: View {
 
 private struct InlineText: View {
     let text: String
+    var citations: [URL]? = nil
 
     var body: some View {
         Text(formatted)
@@ -371,6 +380,43 @@ private struct InlineText: View {
             }
         }
 
+        if let citations, !citations.isEmpty {
+            Self.applyCitations(to: &attributed, urls: citations)
+        }
+
         return attributed
+    }
+
+    /// Scan the rendered text for `[N]` patterns and turn each into a small
+    /// monospace citation pill linking to `urls[N-1]`. Citations are applied
+    /// after the markdown link styling pass so they override any default
+    /// underline / size and look distinct from regular inline links.
+    private static func applyCitations(to attributed: inout AttributedString, urls: [URL]) {
+        let plain = String(attributed.characters)
+        guard let regex = try? NSRegularExpression(pattern: #"\[(\d+)\]"#) else { return }
+        let nsRange = NSRange(plain.startIndex..<plain.endIndex, in: plain)
+        let matches = regex.matches(in: plain, range: nsRange)
+
+        for match in matches {
+            guard
+                let numberSwiftRange = Range(match.range(at: 1), in: plain),
+                let n = Int(plain[numberSwiftRange]),
+                n >= 1, n <= urls.count,
+                let citationSwiftRange = Range(match.range, in: plain)
+            else { continue }
+
+            let lowerOffset = plain.distance(from: plain.startIndex, to: citationSwiftRange.lowerBound)
+            let upperOffset = plain.distance(from: plain.startIndex, to: citationSwiftRange.upperBound)
+            let lower = attributed.index(attributed.startIndex, offsetByCharacters: lowerOffset)
+            let upper = attributed.index(attributed.startIndex, offsetByCharacters: upperOffset)
+            let range = lower..<upper
+
+            attributed[range].link = urls[n - 1]
+            attributed[range].font = .system(size: 9.5, weight: .semibold, design: .monospaced)
+            attributed[range].foregroundColor = Palette.textPrimary
+            attributed[range].backgroundColor = Color.white.opacity(0.10)
+            attributed[range].underlineStyle = nil
+            attributed[range].kern = 0.4
+        }
     }
 }

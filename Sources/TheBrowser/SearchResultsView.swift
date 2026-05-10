@@ -5,13 +5,18 @@ struct SearchResultsView: View {
     var reloadToken: Int
     var onOpen: (URL) -> Void
 
+    @AppStorage(PreferenceKey.aiProvider) private var aiProvider = AIProviderKind.codex.rawValue
+
     @State private var state: SearchResultsState = .idle
+    @State private var aiPhase: AIAnswerPhaseState = .hidden
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 22) {
                 header
                     .padding(.top, 32)
+
+                aiAnswerSection
 
                 content
             }
@@ -127,17 +132,94 @@ struct SearchResultsView: View {
         .surfaceCard(radius: 8)
     }
 
+    @ViewBuilder
+    private var aiAnswerSection: some View {
+        switch aiPhase {
+        case .hidden:
+            EmptyView()
+        case .loading(let urls, let titles):
+            AIAnswerView(
+                phase: .loading,
+                citationURLs: urls,
+                citationTitles: titles,
+                providerName: provider.displayName,
+                modelName: modelDisplayLabel,
+                onOpenSource: onOpen
+            )
+            .transition(.asymmetric(
+                insertion: .opacity.combined(with: .offset(y: 8)),
+                removal: .opacity
+            ))
+        case .loaded(let answer, let urls, let titles):
+            AIAnswerView(
+                phase: .loaded(answer),
+                citationURLs: urls,
+                citationTitles: titles,
+                providerName: provider.displayName,
+                modelName: modelDisplayLabel,
+                onOpenSource: onOpen
+            )
+            .transition(.asymmetric(
+                insertion: .opacity.combined(with: .offset(y: 8)),
+                removal: .opacity
+            ))
+        case .failed:
+            EmptyView()
+        }
+    }
+
+    private var provider: AIProviderKind {
+        AIProviderKind(rawValue: aiProvider) ?? .codex
+    }
+
+    /// AI summaries use the provider's fast/lightweight model, not the user's
+    /// primary chat model — surface that in the badge so the source of the
+    /// answer is unambiguous.
+    private var modelDisplayLabel: String {
+        let fastID = provider.fastModelID
+        return AIModelOption.find(provider: provider, modelID: fastID)?.displayName ?? fastID
+    }
+
     @MainActor
     private func load() async {
         state = .loading
+        let isQuestion = QuestionDetector.isQuestion(searchPage.query)
+        // Reset stale answer state on every (re)load — the previous query's
+        // citations would otherwise flash for the new search.
+        aiPhase = .hidden
 
         do {
             let response = try await SearchResultsClient.search(query: searchPage.query)
             guard !Task.isCancelled else { return }
             state = .loaded(response)
+
+            guard isQuestion, !response.results.isEmpty else { return }
+
+            let urls = AIAnswerClient.citationURLs(for: response.results)
+            let titles = response.results.prefix(urls.count).map(\.title)
+            withAnimation(Motion.springSoft) {
+                aiPhase = .loading(urls: urls, titles: titles)
+            }
+
+            do {
+                let answer = try await AIAnswerClient.answer(
+                    question: searchPage.query,
+                    results: response.results
+                )
+                guard !Task.isCancelled else { return }
+                withAnimation(Motion.springSoft) {
+                    aiPhase = .loaded(answer: answer, urls: urls, titles: titles)
+                }
+            } catch {
+                guard !Task.isCancelled else { return }
+                withAnimation(Motion.springSoft) {
+                    aiPhase = .failed
+                }
+            }
         } catch {
             guard !Task.isCancelled else { return }
             state = .failed(error.localizedDescription)
+            aiPhase = .hidden
         }
     }
 }
@@ -147,6 +229,13 @@ private enum SearchResultsState: Equatable {
     case loading
     case loaded(SearchResponse)
     case failed(String)
+}
+
+private enum AIAnswerPhaseState: Equatable {
+    case hidden
+    case loading(urls: [URL], titles: [String])
+    case loaded(answer: String, urls: [URL], titles: [String])
+    case failed
 }
 
 private struct SearchResultRow: View {
