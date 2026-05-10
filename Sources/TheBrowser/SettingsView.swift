@@ -1,10 +1,18 @@
 import SwiftUI
 
 struct SettingsView: View {
+    @AppStorage(PreferenceKey.aiProvider) private var aiProvider = AIProviderKind.codex.rawValue
+    @AppStorage(PreferenceKey.aiWorkspacePath) private var aiWorkspacePath = AppDefaults.defaultWorkspacePath()
+    @AppStorage(PreferenceKey.aiModel) private var aiModel = ""
+    @AppStorage(PreferenceKey.aiSystemPrompt) private var aiSystemPrompt = AppDefaults.defaultAISystemPrompt
+    @AppStorage(PreferenceKey.aiTools) private var aiTools = ""
+    @AppStorage(PreferenceKey.aiAllowedTools) private var aiAllowedTools = ""
+    @AppStorage(PreferenceKey.aiDisallowedTools) private var aiDisallowedTools = ""
+    @AppStorage(PreferenceKey.aiMCPConfigPath) private var aiMCPConfigPath = ""
+    @AppStorage(PreferenceKey.aiExtraArguments) private var aiExtraArguments = ""
     @AppStorage(PreferenceKey.codexCLIPath) private var codexCLIPath = AppDefaults.defaultCodexCLIPath()
-    @AppStorage(PreferenceKey.codexWorkspacePath) private var codexWorkspacePath = AppDefaults.defaultCodexWorkspacePath()
-    @AppStorage(PreferenceKey.codexModel) private var codexModel = ""
     @AppStorage(PreferenceKey.codexSandbox) private var codexSandbox = "read-only"
+    @AppStorage(PreferenceKey.claudeCLIPath) private var claudeCLIPath = AppDefaults.defaultClaudeCLIPath()
     @AppStorage(PreferenceKey.searchEngine) private var searchEngine = SearchEngine.defaultValue.rawValue
     @AppStorage(PreferenceKey.toggleChatShortcut) private var toggleChatShortcut = "command+j"
     @AppStorage(PreferenceKey.toggleTabsShortcut) private var toggleTabsShortcut = "command+b"
@@ -19,7 +27,7 @@ struct SettingsView: View {
                     Text("Settings")
                         .font(.system(size: 24, weight: .semibold))
                         .foregroundStyle(Palette.textPrimary)
-                    Text("Codex, shortcuts, and browser surfaces.")
+                    Text("AI providers, shortcuts, and browser surfaces.")
                         .font(.system(size: 12.5, weight: .medium))
                         .foregroundStyle(Palette.textMuted)
                 }
@@ -36,36 +44,86 @@ struct SettingsView: View {
                     }
                 }
 
-                section("Codex CLI") {
+                section("AI Harness") {
+                    settingRow("Provider") {
+                        Picker("", selection: $aiProvider) {
+                            ForEach(AIProviderKind.allCases) { provider in
+                                Text(provider.displayName).tag(provider.rawValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+
                     settingRow("CLI path") {
-                        TextField("Codex CLI path", text: $codexCLIPath)
+                        TextField("Provider CLI path", text: currentCLIPathBinding)
                             .textFieldStyle(.plain)
                             .padding(8)
                             .surfaceCard(radius: 8)
                     }
 
                     settingRow("Workspace") {
-                        TextField("Workspace path", text: $codexWorkspacePath)
+                        TextField("Workspace path", text: $aiWorkspacePath)
                             .textFieldStyle(.plain)
                             .padding(8)
                             .surfaceCard(radius: 8)
                     }
 
                     settingRow("Model") {
-                        TextField("Default from Codex config", text: $codexModel)
+                        TextField("Provider default", text: $aiModel)
                             .textFieldStyle(.plain)
                             .padding(8)
                             .surfaceCard(radius: 8)
                     }
 
-                    settingRow("Sandbox") {
-                        Picker("", selection: $codexSandbox) {
-                            Text("Read Only").tag("read-only")
-                            Text("Workspace Write").tag("workspace-write")
-                            Text("Danger Full Access").tag("danger-full-access")
+                    settingRow("System prompt") {
+                        multilineEditor(text: $aiSystemPrompt, height: 108)
+                    }
+
+                    if provider == .claude {
+                        settingRow("Tools") {
+                            TextField("Bash,Edit,Read", text: $aiTools)
+                                .textFieldStyle(.plain)
+                                .padding(8)
+                                .surfaceCard(radius: 8)
                         }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
+
+                        settingRow("Auto-approve") {
+                            TextField("Bash(git *),Read,Edit", text: $aiAllowedTools)
+                                .textFieldStyle(.plain)
+                                .padding(8)
+                                .surfaceCard(radius: 8)
+                        }
+
+                        settingRow("Deny tools") {
+                            TextField("Bash(rm *),Edit", text: $aiDisallowedTools)
+                                .textFieldStyle(.plain)
+                                .padding(8)
+                                .surfaceCard(radius: 8)
+                        }
+
+                        settingRow("MCP config") {
+                            TextField("Path to MCP JSON config", text: $aiMCPConfigPath)
+                                .textFieldStyle(.plain)
+                                .padding(8)
+                                .surfaceCard(radius: 8)
+                        }
+                    }
+
+                    if provider == .codex {
+                        settingRow("Sandbox") {
+                            Picker("", selection: $codexSandbox) {
+                                Text("Read Only").tag("read-only")
+                                Text("Workspace Write").tag("workspace-write")
+                                Text("Danger Full Access").tag("danger-full-access")
+                            }
+                            .pickerStyle(.segmented)
+                            .labelsHidden()
+                        }
+                    }
+
+                    settingRow("Extra args") {
+                        multilineEditor(text: $aiExtraArguments, height: 70)
                     }
                 }
 
@@ -115,13 +173,37 @@ struct SettingsView: View {
 
     @ViewBuilder
     private func settingRow<Content: View>(_ label: String, @ViewBuilder content: () -> Content) -> some View {
-        HStack(alignment: .center, spacing: 16) {
+        HStack(alignment: .top, spacing: 16) {
             Text(label)
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(Palette.textSecondary)
+                .padding(.top, 8)
                 .frame(width: 140, alignment: .leading)
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    private var provider: AIProviderKind {
+        AIProviderKind(rawValue: aiProvider) ?? .codex
+    }
+
+    private var currentCLIPathBinding: Binding<String> {
+        switch provider {
+        case .codex:
+            return $codexCLIPath
+        case .claude:
+            return $claudeCLIPath
+        }
+    }
+
+    private func multilineEditor(text: Binding<String>, height: CGFloat) -> some View {
+        TextEditor(text: text)
+            .scrollContentBackground(.hidden)
+            .font(.system(size: 12.5))
+            .foregroundStyle(Palette.textPrimary)
+            .frame(height: height)
+            .padding(8)
+            .surfaceCard(radius: 8)
     }
 }

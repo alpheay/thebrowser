@@ -15,12 +15,12 @@ struct ChatMessage: Identifiable, Equatable {
 @MainActor
 final class ChatViewModel: ObservableObject {
     @Published var messages: [ChatMessage] = [
-        ChatMessage(role: .assistant, text: "I'm wired through Codex CLI. Ask me to reason about the current page, draft something, or hand the next task to the agent.")
+        ChatMessage(role: .assistant, text: "I'm wired through the AI harness. Ask me to reason about the current page, draft something, or hand the next task to the agent.")
     ]
     @Published var draft = ""
     @Published var isSending = false
 
-    private let client = CodexCLIClient()
+    private let client = AIProviderClient()
 
     func send(context: BrowserPageContext) {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -51,6 +51,7 @@ struct AIChatPanel: View {
     var context: BrowserPageContext
     var onClose: () -> Void
 
+    @AppStorage(PreferenceKey.aiProvider) private var aiProvider = AIProviderKind.codex.rawValue
     @FocusState private var composerFocused: Bool
 
     var body: some View {
@@ -71,7 +72,7 @@ struct AIChatPanel: View {
             Image(systemName: "sparkles")
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(Palette.textPrimary)
-            Text("Codex")
+            Text(provider.displayName)
                 .font(Typography.title)
                 .foregroundStyle(Palette.textPrimary)
 
@@ -165,7 +166,7 @@ struct AIChatPanel: View {
             HStack(alignment: .bottom, spacing: 10) {
                 ZStack(alignment: .topLeading) {
                     if viewModel.draft.isEmpty {
-                        Text("Ask Codex anything")
+                        Text("Ask \(provider.displayName) anything")
                             .font(.system(size: 13.5))
                             .foregroundStyle(Palette.textMuted)
                             .padding(.horizontal, 14)
@@ -205,6 +206,10 @@ struct AIChatPanel: View {
         }
         .padding(14)
         .hairline(.top)
+    }
+
+    private var provider: AIProviderKind {
+        AIProviderKind(rawValue: aiProvider) ?? .codex
     }
 }
 

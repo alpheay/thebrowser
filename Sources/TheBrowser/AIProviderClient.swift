@@ -1,0 +1,291 @@
+import Foundation
+
+enum AIProviderKind: String, CaseIterable, Identifiable, Sendable {
+    case codex
+    case claude
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .codex:
+            return "Codex"
+        case .claude:
+            return "Claude"
+        }
+    }
+
+    var assistantDescription: String {
+        switch self {
+        case .codex:
+            return "Codex CLI"
+        case .claude:
+            return "Claude CLI"
+        }
+    }
+}
+
+enum AIProviderError: LocalizedError {
+    case missingExecutable(provider: AIProviderKind, path: String)
+    case processFailed(provider: AIProviderKind, status: Int32, output: String)
+    case emptyResponse
+
+    var errorDescription: String? {
+        switch self {
+        case .missingExecutable(let provider, let path):
+            return "\(provider.assistantDescription) was not found at \(path). Open Settings and choose the CLI path."
+        case .processFailed(let provider, let status, let output):
+            return "\(provider.displayName) exited with status \(status).\n\(output)"
+        case .emptyResponse:
+            return "The selected AI provider finished without returning a message."
+        }
+    }
+}
+
+struct AIHarnessConfiguration: Sendable {
+    var provider: AIProviderKind
+    var cliPath: String
+    var workspacePath: String
+    var model: String
+    var sandbox: String
+    var systemPrompt: String
+    var tools: String
+    var allowedTools: String
+    var disallowedTools: String
+    var mcpConfigPath: String
+    var extraArguments: String
+
+    static func current() -> AIHarnessConfiguration {
+        let defaults = UserDefaults.standard
+        let provider = AIProviderKind(rawValue: defaults.string(forKey: PreferenceKey.aiProvider) ?? "") ?? .codex
+        let cliPath: String
+
+        switch provider {
+        case .codex:
+            cliPath = defaults.string(forKey: PreferenceKey.codexCLIPath) ?? AppDefaults.defaultCodexCLIPath()
+        case .claude:
+            cliPath = defaults.string(forKey: PreferenceKey.claudeCLIPath) ?? AppDefaults.defaultClaudeCLIPath()
+        }
+
+        let workspacePath = defaults.persistedString(forKey: PreferenceKey.aiWorkspacePath)
+            ?? defaults.persistedString(forKey: PreferenceKey.codexWorkspacePath)
+            ?? AppDefaults.defaultWorkspacePath()
+        let model = defaults.persistedString(forKey: PreferenceKey.aiModel)
+            ?? defaults.persistedString(forKey: PreferenceKey.codexModel)
+            ?? ""
+        let sandbox = defaults.string(forKey: PreferenceKey.codexSandbox) ?? "read-only"
+
+        return AIHarnessConfiguration(
+            provider: provider,
+            cliPath: cliPath,
+            workspacePath: workspacePath,
+            model: model,
+            sandbox: sandbox,
+            systemPrompt: defaults.string(forKey: PreferenceKey.aiSystemPrompt) ?? AppDefaults.defaultAISystemPrompt,
+            tools: defaults.string(forKey: PreferenceKey.aiTools) ?? "",
+            allowedTools: defaults.string(forKey: PreferenceKey.aiAllowedTools) ?? "",
+            disallowedTools: defaults.string(forKey: PreferenceKey.aiDisallowedTools) ?? "",
+            mcpConfigPath: defaults.string(forKey: PreferenceKey.aiMCPConfigPath) ?? "",
+            extraArguments: defaults.string(forKey: PreferenceKey.aiExtraArguments) ?? ""
+        )
+    }
+}
+
+struct AIProviderClient {
+    func ask(_ message: String, context: BrowserPageContext) async throws -> String {
+        let configuration = AIHarnessConfiguration.current()
+        let prompt = Self.prompt(for: message, context: context)
+
+        return try await Task.detached(priority: .userInitiated) {
+            try runProvider(configuration: configuration, prompt: prompt)
+        }.value
+    }
+
+    private static func prompt(for message: String, context: BrowserPageContext) -> String {
+        let pageURL = context.url.isEmpty ? "Home page" : context.url
+
+        return """
+        Current tab:
+        Title: \(context.title)
+        URL: \(pageURL)
+
+        User request:
+        \(message)
+        """
+    }
+}
+
+private func runProvider(configuration: AIHarnessConfiguration, prompt: String) throws -> String {
+    guard FileManager.default.isExecutableFile(atPath: configuration.cliPath) else {
+        throw AIProviderError.missingExecutable(provider: configuration.provider, path: configuration.cliPath)
+    }
+
+    let tempDirectory = FileManager.default.temporaryDirectory
+    let outputURL = tempDirectory.appendingPathComponent("thebrowser-\(configuration.provider.rawValue)-\(UUID().uuidString).txt")
+    let stdoutURL = tempDirectory.appendingPathComponent("thebrowser-\(configuration.provider.rawValue)-stdout-\(UUID().uuidString).log")
+    let stderrURL = tempDirectory.appendingPathComponent("thebrowser-\(configuration.provider.rawValue)-stderr-\(UUID().uuidString).log")
+
+    _ = FileManager.default.createFile(atPath: stdoutURL.path, contents: nil)
+    _ = FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
+
+    defer {
+        try? FileManager.default.removeItem(at: outputURL)
+        try? FileManager.default.removeItem(at: stdoutURL)
+        try? FileManager.default.removeItem(at: stderrURL)
+    }
+
+    let stdout = try FileHandle(forWritingTo: stdoutURL)
+    let stderr = try FileHandle(forWritingTo: stderrURL)
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: configuration.cliPath)
+    process.standardOutput = stdout
+    process.standardError = stderr
+    process.currentDirectoryURL = URL(fileURLWithPath: configuration.workspacePath, isDirectory: true)
+    process.arguments = arguments(for: configuration, prompt: prompt, outputURL: outputURL)
+
+    try process.run()
+    process.waitUntilExit()
+
+    try stdout.close()
+    try stderr.close()
+
+    let finalMessage = (try? String(contentsOf: outputURL, encoding: .utf8))?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let stdoutText = (try? String(contentsOf: stdoutURL, encoding: .utf8)) ?? ""
+    let stderrText = (try? String(contentsOf: stderrURL, encoding: .utf8)) ?? ""
+
+    guard process.terminationStatus == 0 else {
+        let combined = [stderrText, stdoutText].filter { !$0.isEmpty }.joined(separator: "\n")
+        throw AIProviderError.processFailed(provider: configuration.provider, status: process.terminationStatus, output: combined)
+    }
+
+    if configuration.provider == .codex, let finalMessage, !finalMessage.isEmpty {
+        return finalMessage
+    }
+
+    let fallback = stdoutText.trimmingCharacters(in: .whitespacesAndNewlines)
+    if !fallback.isEmpty {
+        if configuration.provider == .claude, let result = ClaudeJSONResponse.result(from: fallback) {
+            return result
+        }
+
+        return fallback
+    }
+
+    throw AIProviderError.emptyResponse
+}
+
+private func arguments(for configuration: AIHarnessConfiguration, prompt: String, outputURL: URL) -> [String] {
+    switch configuration.provider {
+    case .codex:
+        return codexArguments(for: configuration, prompt: prompt, outputURL: outputURL)
+    case .claude:
+        return claudeArguments(for: configuration, prompt: prompt)
+    }
+}
+
+private func codexArguments(for configuration: AIHarnessConfiguration, prompt: String, outputURL: URL) -> [String] {
+    var arguments = [
+        "exec",
+        "--color", "never",
+        "--skip-git-repo-check",
+        "--sandbox", configuration.sandbox
+    ]
+
+    appendModel(configuration.model, to: &arguments)
+    arguments.append(contentsOf: extraArguments(from: configuration.extraArguments))
+    arguments.append(contentsOf: [
+        "-C", configuration.workspacePath,
+        "-o", outputURL.path,
+        codexPrompt(systemPrompt: configuration.systemPrompt, prompt: prompt)
+    ])
+
+    return arguments
+}
+
+private func claudeArguments(for configuration: AIHarnessConfiguration, prompt: String) -> [String] {
+    var arguments = [
+        "--print",
+        "--output-format", "json",
+        "--no-session-persistence"
+    ]
+
+    appendModel(configuration.model, to: &arguments)
+
+    let systemPrompt = trimmed(configuration.systemPrompt)
+    if !systemPrompt.isEmpty {
+        arguments.append(contentsOf: ["--append-system-prompt", systemPrompt])
+    }
+
+    appendOptionalFlag("--tools", value: configuration.tools, to: &arguments)
+    appendOptionalFlag("--allowedTools", value: configuration.allowedTools, to: &arguments)
+    appendOptionalFlag("--disallowedTools", value: configuration.disallowedTools, to: &arguments)
+    appendOptionalFlag("--mcp-config", value: configuration.mcpConfigPath, to: &arguments)
+    arguments.append(contentsOf: extraArguments(from: configuration.extraArguments))
+    arguments.append(prompt)
+
+    return arguments
+}
+
+private func codexPrompt(systemPrompt: String, prompt: String) -> String {
+    let trimmedSystemPrompt = trimmed(systemPrompt)
+
+    if trimmedSystemPrompt.isEmpty {
+        return prompt
+    }
+
+    return """
+    System instructions:
+    \(trimmedSystemPrompt)
+
+    \(prompt)
+    """
+}
+
+private func appendModel(_ model: String, to arguments: inout [String]) {
+    let model = trimmed(model)
+    if !model.isEmpty {
+        arguments.append(contentsOf: ["--model", model])
+    }
+}
+
+private func appendOptionalFlag(_ flag: String, value: String, to arguments: inout [String]) {
+    let value = trimmed(value)
+    if !value.isEmpty {
+        arguments.append(contentsOf: [flag, value])
+    }
+}
+
+private func extraArguments(from value: String) -> [String] {
+    value
+        .components(separatedBy: .newlines)
+        .map(trimmed)
+        .filter { !$0.isEmpty }
+}
+
+private func trimmed(_ value: String) -> String {
+    value.trimmingCharacters(in: .whitespacesAndNewlines)
+}
+
+private struct ClaudeJSONResponse: Decodable {
+    var result: String?
+
+    static func result(from output: String) -> String? {
+        guard let data = output.data(using: .utf8),
+              let response = try? JSONDecoder().decode(ClaudeJSONResponse.self, from: data),
+              let result = response.result?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !result.isEmpty
+        else {
+            return nil
+        }
+
+        return result
+    }
+}
+
+private extension UserDefaults {
+    func persistedString(forKey key: String) -> String? {
+        object(forKey: key) as? String
+    }
+}
