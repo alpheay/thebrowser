@@ -247,11 +247,32 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         ]
     }
 
+    /// Forces dark presentation via CSS filter inversion, with a sample-and-strip
+    /// fallback so sites that already paint dark aren't double-inverted.
     private static let darkModeUserScript = WKUserScript(
         source: """
         (() => {
+            const FILTER_STYLE_ID = "thebrowser-force-dark-filter";
+            const SCHEME_STYLE_ID = "thebrowser-dark-color-scheme";
+            const BACKDROP_STYLE_ID = "thebrowser-dark-backdrop";
+
+            const hostname = location.hostname || "";
+            const isYouTube = hostname.endsWith("youtube.com");
+
+            // Hosts where the filter approach causes more harm than good
+            // (their own theming gets visibly destroyed, or they're styled
+            // surfaces we already match). Skip the filter, keep color-scheme.
+            const FILTER_SKIP_HOSTS = [
+                "youtube.com",
+                "accounts.google.com",
+                "accounts.youtube.com"
+            ];
+            const shouldSkipFilter = FILTER_SKIP_HOSTS.some((host) =>
+                hostname === host || hostname.endsWith("." + host)
+            );
+
             const forceYouTubeDarkMode = () => {
-                if (!location.hostname.endsWith("youtube.com")) {
+                if (!isYouTube) {
                     return;
                 }
 
@@ -272,22 +293,116 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             };
 
             const applyDarkColorScheme = () => {
-                if (!document.documentElement || document.getElementById("thebrowser-dark-color-scheme")) {
+                if (!document.documentElement || document.getElementById(SCHEME_STYLE_ID)) {
                     return;
                 }
 
                 const style = document.createElement("style");
-                style.id = "thebrowser-dark-color-scheme";
+                style.id = SCHEME_STYLE_ID;
                 style.textContent = ":root { color-scheme: dark !important; }";
                 document.documentElement.appendChild(style);
             };
 
-            forceYouTubeDarkMode();
+            // Painted even on skipped hosts so the first frame isn't white
+            // before the site's own styles arrive.
+            const applyDarkBackdrop = () => {
+                if (!document.documentElement || document.getElementById(BACKDROP_STYLE_ID)) {
+                    return;
+                }
+                const style = document.createElement("style");
+                style.id = BACKDROP_STYLE_ID;
+                style.textContent = "html { background-color: #1a1a1a; }";
+                document.documentElement.appendChild(style);
+            };
+
+            const installFilter = () => {
+                if (!document.documentElement || document.getElementById(FILTER_STYLE_ID)) {
+                    return;
+                }
+                const style = document.createElement("style");
+                style.id = FILTER_STYLE_ID;
+                style.textContent = `
+                    html {
+                        filter: invert(1) hue-rotate(180deg) !important;
+                        background-color: #ffffff !important;
+                    }
+                    img, picture, video, iframe, embed, object, canvas,
+                    svg image,
+                    [style*="background-image"],
+                    [style*="background:url"],
+                    [style*="background: url"] {
+                        filter: invert(1) hue-rotate(180deg) !important;
+                    }
+                `;
+                document.documentElement.appendChild(style);
+            };
+
+            const removeFilter = () => {
+                document.getElementById(FILTER_STYLE_ID)?.remove();
+            };
+
+            const parseColor = (value) => {
+                if (!value) return null;
+                const match = value.match(/rgba?\\((\\d+)\\s*,\\s*(\\d+)\\s*,\\s*(\\d+)(?:\\s*,\\s*([\\d.]+))?\\)/);
+                if (!match) return null;
+                const r = parseInt(match[1], 10);
+                const g = parseInt(match[2], 10);
+                const b = parseInt(match[3], 10);
+                const a = match[4] !== undefined ? parseFloat(match[4]) : 1;
+                return { r, g, b, a };
+            };
+
+            const luminance = (rgb) => 0.299 * rgb.r + 0.587 * rgb.g + 0.114 * rgb.b;
+
+            const reconcileWithSiteTheme = () => {
+                if (shouldSkipFilter) {
+                    return;
+                }
+                const body = document.body;
+                if (!body) {
+                    return;
+                }
+
+                // Disable our filter while sampling so we read the site's
+                // own painted colors, not the inverted-by-us ones.
+                const filterStyle = document.getElementById(FILTER_STYLE_ID);
+                if (filterStyle) filterStyle.disabled = true;
+
+                let bg = parseColor(getComputedStyle(body).backgroundColor);
+                if (!bg || bg.a === 0) {
+                    bg = parseColor(getComputedStyle(document.documentElement).backgroundColor);
+                }
+
+                if (filterStyle) filterStyle.disabled = false;
+
+                if (!bg || bg.a === 0) {
+                    return;
+                }
+
+                if (luminance(bg) < 128) {
+                    removeFilter();
+                }
+            };
+
+            applyDarkBackdrop();
             applyDarkColorScheme();
-            document.addEventListener("DOMContentLoaded", () => {
-                forceYouTubeDarkMode();
+            forceYouTubeDarkMode();
+            if (!shouldSkipFilter) {
+                installFilter();
+            }
+
+            const onReady = () => {
+                applyDarkBackdrop();
                 applyDarkColorScheme();
-            }, { once: true });
+                forceYouTubeDarkMode();
+                reconcileWithSiteTheme();
+            };
+
+            if (document.readyState === "loading") {
+                document.addEventListener("DOMContentLoaded", onReady, { once: true });
+            } else {
+                onReady();
+            }
         })();
         """,
         injectionTime: .atDocumentStart,
