@@ -62,6 +62,14 @@ final class ChatSessionStore {
         return dir
     }
 
+    /// Removes a single session's directory (and the `messages.json` inside)
+    /// from disk. No-op if the directory doesn't exist.
+    func delete(sessionID: String) {
+        guard !sessionID.isEmpty else { return }
+        let dir = root.appendingPathComponent(sessionID, isDirectory: true)
+        try? FileManager.default.removeItem(at: dir)
+    }
+
     /// Removes every persisted session under the root. The root directory
     /// itself is preserved so subsequent `directory(for:)` calls keep working.
     func clearAll() {

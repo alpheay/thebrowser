@@ -57,14 +57,24 @@ struct SessionHistoryPopover: View {
                                 .frame(height: 1)
                                 .padding(.horizontal, 12)
                         }
-                        SessionHistoryRow(summary: summary) {
-                            onPick(summary.id)
-                        }
+                        SessionHistoryRow(
+                            summary: summary,
+                            onPick: { onPick(summary.id) },
+                            onDelete: { delete(summary.id) }
+                        )
+                        .transition(.opacity.combined(with: .move(edge: .leading)))
                     }
                 }
                 .padding(.vertical, 6)
             }
             .scrollIndicators(.hidden)
+        }
+    }
+
+    private func delete(_ id: String) {
+        ChatSessionStore.shared.delete(sessionID: id)
+        withAnimation(Motion.springSoft) {
+            summaries.removeAll { $0.id == id }
         }
     }
 
@@ -87,25 +97,32 @@ struct SessionHistoryPopover: View {
 private struct SessionHistoryRow: View {
     let summary: SessionSummary
     let onPick: () -> Void
+    let onDelete: () -> Void
 
     @State private var isHovering = false
 
     var body: some View {
         Button(action: onPick) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(title)
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(Palette.textPrimary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+            HStack(spacing: 6) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(title)
+                        .font(.system(size: 12.5, weight: .semibold))
+                        .foregroundStyle(Palette.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
 
-                Text(subtitle)
-                    .font(.system(size: 10.5, weight: .regular))
-                    .foregroundStyle(Palette.textFaint)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    Text(subtitle)
+                        .font(.system(size: 10.5, weight: .regular))
+                        .foregroundStyle(Palette.textFaint)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                TrashButton(action: onDelete)
+                    .opacity(isHovering ? 1 : 0)
+                    .allowsHitTesting(isHovering)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 10)
             .padding(.vertical, 8)
             .background {
@@ -154,4 +171,29 @@ private struct SessionHistoryRow: View {
         f.unitsStyle = .short
         return f
     }()
+}
+
+private struct TrashButton: View {
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "trash")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isHovering ? Color(red: 1.0, green: 0.35, blue: 0.35) : Palette.textFaint)
+                .frame(width: 24, height: 24)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isHovering ? Color.red.opacity(0.14) : Color.clear)
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(Motion.hoverFade) { isHovering = hovering }
+        }
+        .help("Delete conversation")
+    }
 }
