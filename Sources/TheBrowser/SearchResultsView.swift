@@ -182,16 +182,38 @@ struct SearchResultsView: View {
 
     @MainActor
     private func load() async {
-        state = .loading
         let isQuestion = QuestionDetector.isQuestion(searchPage.query)
-        // Reset stale answer state on every (re)load — the previous query's
-        // citations would otherwise flash for the new search.
-        aiPhase = .hidden
+
+        // Hydrate AI cache up front so back-nav and reload paint the prior
+        // answer before the search call even returns — no spinner, no
+        // re-prompt. The actor read is a dictionary lookup, so the suspend
+        // is sub-millisecond and the cached answer effectively appears with
+        // the rest of the view.
+        let cachedAnswer = isQuestion
+            ? await AIAnswerCache.shared.entry(for: searchPage.query)
+            : nil
+        if let cachedAnswer {
+            aiPhase = .loaded(
+                answer: cachedAnswer.answer,
+                urls: cachedAnswer.citationURLs,
+                titles: cachedAnswer.citationTitles
+            )
+        } else {
+            // Reset stale state on cache miss — without this, the previous
+            // query's citations would flash above the new search results.
+            aiPhase = .hidden
+        }
+
+        state = .loading
 
         do {
             let response = try await SearchResultsClient.search(query: searchPage.query)
             guard !Task.isCancelled else { return }
             state = .loaded(response)
+
+            // Cached answer is already on screen — search results refresh
+            // independently below, but the model does not get re-prompted.
+            if cachedAnswer != nil { return }
 
             guard isQuestion, !response.results.isEmpty else { return }
 
@@ -210,6 +232,10 @@ struct SearchResultsView: View {
                 withAnimation(Motion.springSoft) {
                     aiPhase = .loaded(answer: answer, urls: urls, titles: titles)
                 }
+                await AIAnswerCache.shared.set(
+                    .init(answer: answer, citationURLs: urls, citationTitles: titles),
+                    for: searchPage.query
+                )
             } catch {
                 guard !Task.isCancelled else { return }
                 withAnimation(Motion.springSoft) {
@@ -219,7 +245,11 @@ struct SearchResultsView: View {
         } catch {
             guard !Task.isCancelled else { return }
             state = .failed(error.localizedDescription)
-            aiPhase = .hidden
+            // If the search fetch fails but a cached AI answer is already
+            // rendered, leave it in place — it's still useful on its own.
+            if cachedAnswer == nil {
+                aiPhase = .hidden
+            }
         }
     }
 }
