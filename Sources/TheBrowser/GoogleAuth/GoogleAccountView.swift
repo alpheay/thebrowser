@@ -5,17 +5,16 @@ import SwiftUI
 struct GoogleAccountView: View {
     @ObservedObject var store: GoogleAccountStore
     @AppStorage(PreferenceKey.googleOAuthClientID) private var clientIDPref = ""
+    @FocusState private var clientIDFocused: Bool
 
     var body: some View {
         VStack(alignment: .leading, spacing: 22) {
             if store.isSignedIn {
                 signedInBody
+            } else if !store.hasClientID {
+                setupBody
             } else {
                 signedOutBody
-            }
-
-            if !store.isSignedIn {
-                clientIDConfigurationCard
             }
         }
     }
@@ -62,7 +61,7 @@ struct GoogleAccountView: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
 
-                GoogleSignInButton(enabled: store.hasClientID, busy: store.phase == .signingIn) {
+                GoogleSignInButton(enabled: true, busy: store.phase == .signingIn) {
                     Task { await performSignIn() }
                 }
                 .padding(.top, 2)
@@ -96,98 +95,152 @@ struct GoogleAccountView: View {
         await store.signIn(anchor: anchor)
     }
 
-    // MARK: - Client ID configuration
+    // MARK: - First-run setup
 
-    private var clientIDConfigurationCard: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("OAUTH SETUP")
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(1.8)
-                .foregroundStyle(Palette.textFaint)
-
-            VStack(alignment: .leading, spacing: 0) {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack(alignment: .top, spacing: 12) {
-                        Image(systemName: "key.fill")
-                            .font(.system(size: 13, weight: .regular))
+    private var setupBody: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 14) {
+                    Image(systemName: "lock.shield")
+                        .font(.system(size: 22, weight: .light))
+                        .foregroundStyle(Palette.textPrimary)
+                        .frame(width: 28, alignment: .center)
+                        .padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("Connect The Browser to Google")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Palette.textPrimary)
+                        Text("Sign-in runs through Google's standard OAuth flow in your default browser. The Browser never sees your password — it only receives a profile token after you approve.")
+                            .font(.system(size: 12, weight: .medium))
                             .foregroundStyle(Palette.textMuted)
-                            .frame(width: 18)
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text("Google OAuth Client ID")
-                                .font(.system(size: 12.5, weight: .semibold))
-                                .foregroundStyle(Palette.textPrimary)
-                            Text("Create an iOS-type OAuth Client ID in the Google Cloud Console, then paste it below. The redirect URI is auto-derived.")
-                                .font(.system(size: 11.5, weight: .medium))
-                                .foregroundStyle(Palette.textMuted)
-                                .fixedSize(horizontal: false, vertical: true)
-                        }
-                    }
-
-                    ClientIDField(text: $clientIDPref)
-
-                    HStack(spacing: 12) {
-                        OpenConsoleLink()
-                        Spacer()
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
-                .padding(16)
+
+                StepList(steps: [
+                    "Open the Google Cloud Console and create an OAuth Client ID of type iOS.",
+                    "Use the Bundle ID com.thebrowser (or any value — it isn't validated for native flows).",
+                    "Paste the Client ID below. The redirect URI is auto-derived."
+                ])
+
+                ClientIDField(text: $clientIDPref, focused: $clientIDFocused)
+
+                HStack(spacing: 10) {
+                    OpenConsoleButton()
+                    Spacer()
+                    Text(clientIDFooterText)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(clientIDValid ? Color(red: 0.6, green: 0.85, blue: 0.6) : Palette.textFaint)
+                        .animation(Motion.hoverFade, value: clientIDValid)
+                }
             }
+            .padding(20)
             .background {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .fill(Palette.surface)
             }
             .overlay {
-                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
                     .stroke(Palette.stroke, lineWidth: 1)
             }
         }
+        .onAppear { clientIDFocused = true }
+    }
+
+    private var clientIDValid: Bool {
+        clientIDPref
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .hasSuffix(".apps.googleusercontent.com")
+    }
+
+    private var clientIDFooterText: String {
+        clientIDValid ? "Looks good — open the Account tab to sign in." : "Format: <prefix>.apps.googleusercontent.com"
     }
 }
 
+// MARK: - Setup helpers
+
 private struct ClientIDField: View {
     @Binding var text: String
-    @FocusState private var focused: Bool
+    var focused: FocusState<Bool>.Binding
 
     var body: some View {
         TextField("123456789-abcdef.apps.googleusercontent.com", text: $text)
             .textFieldStyle(.plain)
-            .font(.system(size: 11.5, weight: .regular, design: .monospaced))
+            .font(.system(size: 12, weight: .regular, design: .monospaced))
             .foregroundStyle(Palette.textPrimary)
-            .focused($focused)
-            .padding(.horizontal, 10)
-            .frame(height: 32)
+            .focused(focused)
+            .padding(.horizontal, 12)
+            .frame(height: 34)
             .background {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
                     .fill(Palette.bgRaised)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .stroke(focused ? Palette.strokeStrong : Palette.stroke, lineWidth: 1)
+                    .stroke(focused.wrappedValue ? Palette.strokeStrong : Palette.stroke, lineWidth: 1)
             }
-            .animation(Motion.hoverFade, value: focused)
+            .animation(Motion.hoverFade, value: focused.wrappedValue)
     }
 }
 
-private struct OpenConsoleLink: View {
+private struct OpenConsoleButton: View {
     @State private var isHovering = false
 
     var body: some View {
         Button {
-            if let url = URL(string: "https://console.cloud.google.com/apis/credentials") {
+            if let url = URL(string: "https://console.cloud.google.com/apis/credentials/oauthclient") {
                 NSWorkspace.shared.open(url)
             }
         } label: {
-            HStack(spacing: 5) {
-                Image(systemName: "arrow.up.right.square")
-                    .font(.system(size: 11, weight: .semibold))
+            HStack(spacing: 6) {
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 10, weight: .semibold))
                 Text("Open Google Cloud Console")
                     .font(.system(size: 11.5, weight: .semibold))
             }
-            .foregroundStyle(isHovering ? Palette.textPrimary : Palette.textSecondary)
+            .foregroundStyle(Palette.textPrimary)
+            .padding(.horizontal, 12)
+            .frame(height: 28)
+            .background {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(isHovering ? Palette.surfaceHover : Palette.surface)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(Palette.stroke, lineWidth: 1)
+            }
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .animation(Motion.hoverFade, value: isHovering)
+    }
+}
+
+private struct StepList: View {
+    let steps: [String]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(Array(steps.enumerated()), id: \.offset) { index, step in
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text("\(index + 1)")
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .foregroundStyle(Palette.textPrimary)
+                        .frame(width: 18, height: 18)
+                        .background {
+                            Circle().fill(Palette.bgRaised)
+                        }
+                        .overlay {
+                            Circle().stroke(Palette.stroke, lineWidth: 1)
+                        }
+                    Text(step)
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        }
     }
 }
 
