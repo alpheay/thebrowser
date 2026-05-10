@@ -23,7 +23,7 @@ struct TheBrowserApp: App {
 
         Settings {
             SettingsView()
-                .frame(width: 620)
+                .frame(minWidth: 900, idealWidth: 960, minHeight: 640, idealHeight: 720)
                 .preferredColorScheme(.dark)
                 .background(Palette.bg)
         }

@@ -226,7 +226,7 @@ struct MigrationView: View {
                 viewModel.startMigration()
             } label: {
                 HStack(spacing: 6) {
-                    Text("Start migration")
+                    Text("Start")
                     Image(systemName: "arrow.right")
                         .font(.system(size: 11, weight: .semibold))
                 }
