@@ -89,7 +89,15 @@ final class ChatSessionStore {
             pageTitle: pageContext.title,
             pageURL: pageContext.url,
             messages: messages.map { msg in
-                MessagePayload(role: msg.role.persistedValue, text: msg.text)
+                MessagePayload(
+                    role: msg.role.persistedValue,
+                    text: msg.text,
+                    toolChain: msg.toolChain.isEmpty
+                        ? nil
+                        : msg.toolChain.map {
+                            ToolInvocationPayload(tool: $0.tool, input: $0.input, succeeded: $0.succeeded)
+                        }
+                )
             }
         )
 
@@ -112,7 +120,10 @@ final class ChatSessionStore {
 
         return payload.messages.compactMap { item in
             guard let role = ChatMessage.Role(persistedValue: item.role) else { return nil }
-            return ChatMessage(role: role, text: item.text)
+            let chain = (item.toolChain ?? []).map {
+                ChatMessage.ToolInvocation(tool: $0.tool, input: $0.input, succeeded: $0.succeeded)
+            }
+            return ChatMessage(role: role, text: item.text, toolChain: chain)
         }
     }
 
@@ -129,6 +140,13 @@ final class ChatSessionStore {
     private struct MessagePayload: Codable {
         var role: String
         var text: String
+        var toolChain: [ToolInvocationPayload]?
+    }
+
+    private struct ToolInvocationPayload: Codable {
+        var tool: String
+        var input: String
+        var succeeded: Bool
     }
 }
 

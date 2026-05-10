@@ -98,6 +98,17 @@ struct NativeBrowserToolResult: Equatable, Sendable {
         \(content)
         """
     }
+
+    /// The compact, UI-facing record of this tool call. Strips the prompt
+    /// transcript and just keeps the name, raw input, and outcome — enough
+    /// to render in the chat tool-chain row.
+    var invocation: ChatMessage.ToolInvocation {
+        ChatMessage.ToolInvocation(
+            tool: call.name.rawValue,
+            input: call.rawInput,
+            succeeded: succeeded
+        )
+    }
 }
 
 struct NativeBrowserToolExecutor {

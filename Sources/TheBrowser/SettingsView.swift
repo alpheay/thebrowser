@@ -9,6 +9,7 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.aiDisallowedTools) private var aiDisallowedTools = ""
     @AppStorage(PreferenceKey.aiMCPConfigPath) private var aiMCPConfigPath = ""
     @AppStorage(PreferenceKey.aiExtraArguments) private var aiExtraArguments = ""
+    @AppStorage(PreferenceKey.aiShowToolChain) private var aiShowToolChain = true
     @AppStorage(PreferenceKey.codexCLIPath) private var codexCLIPath = AppDefaults.defaultCodexCLIPath()
     @AppStorage(PreferenceKey.codexSandbox) private var codexSandbox = "read-only"
     @AppStorage(PreferenceKey.claudeCLIPath) private var claudeCLIPath = AppDefaults.defaultClaudeCLIPath()
@@ -172,6 +173,13 @@ struct SettingsView: View {
 
                 row(label: "Extra args", help: "Passed before The Browser's replacement controls.") {
                     MultilineField(text: $aiExtraArguments, height: 70)
+                }
+
+                row(label: "Tool chain", help: "Show the row of native browser tools the model called for each answer.") {
+                    HStack {
+                        Spacer()
+                        ToggleSwitch(isOn: $aiShowToolChain)
+                    }
                 }
             }
 
@@ -451,6 +459,37 @@ private struct DestructiveButton: View {
     private var backgroundFill: Color {
         if isHovering { return Color(red: 0.7, green: 0.2, blue: 0.2).opacity(0.18) }
         return Color(red: 0.7, green: 0.2, blue: 0.2).opacity(0.10)
+    }
+}
+
+/// Compact pill switch in the project's monochrome palette. Matches the
+/// existing `SegmentPicker` chrome (1px hairline, `bgRaised` plate) so toggle
+/// rows sit flush next to segmented controls in the same section card.
+private struct ToggleSwitch: View {
+    @Binding var isOn: Bool
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: { isOn.toggle() }) {
+            ZStack(alignment: isOn ? .trailing : .leading) {
+                Capsule()
+                    .fill(isOn ? Color.white : Palette.bgRaised)
+                    .frame(width: 38, height: 22)
+                    .overlay {
+                        Capsule().stroke(isOn ? Color.clear : Palette.stroke, lineWidth: 1)
+                    }
+
+                Circle()
+                    .fill(isOn ? Palette.bg : Palette.textSecondary)
+                    .frame(width: 16, height: 16)
+                    .padding(3)
+            }
+            .scaleEffect(isHovering ? 1.04 : 1.0)
+            .animation(Motion.springSnap, value: isOn)
+            .animation(Motion.hoverFade, value: isHovering)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
     }
 }
 

@@ -8,9 +8,20 @@ struct ChatMessage: Identifiable, Equatable {
         case system
     }
 
+    /// One link in the tool chain for an assistant turn. Captures the tool
+    /// the model invoked, the argument it passed (URL or query), and whether
+    /// the call succeeded — enough to render a compact provenance trail in
+    /// the chat without re-running the call.
+    struct ToolInvocation: Equatable, Hashable {
+        var tool: String
+        var input: String
+        var succeeded: Bool
+    }
+
     let id = UUID()
     var role: Role
     var text: String
+    var toolChain: [ToolInvocation] = []
 }
 
 @MainActor
@@ -52,13 +63,13 @@ final class ChatViewModel: ObservableObject {
         Task {
             do {
                 let response = try await client.ask(prompt: prompt, sessionDirectory: directory)
-                let finalResponse = try await resolveNativeBrowserTools(
+                let (finalResponse, toolChain) = try await resolveNativeBrowserTools(
                     initialResponse: response,
                     basePrompt: prompt,
                     sessionDirectory: directory,
                     nativeTools: nativeTools
                 )
-                messages.append(ChatMessage(role: .assistant, text: finalResponse))
+                messages.append(ChatMessage(role: .assistant, text: finalResponse, toolChain: toolChain))
             } catch {
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
                 messages.append(ChatMessage(role: .system, text: message))
@@ -84,13 +95,13 @@ final class ChatViewModel: ObservableObject {
         basePrompt: String,
         sessionDirectory: URL,
         nativeTools: NativeBrowserToolExecutor
-    ) async throws -> String {
+    ) async throws -> (text: String, toolChain: [ChatMessage.ToolInvocation]) {
         var response = initialResponse
         var results: [NativeBrowserToolResult] = []
 
         for _ in 0..<4 {
             guard let call = NativeBrowserToolCall.parse(from: response) else {
-                return response
+                return (response, results.map(\.invocation))
             }
 
             let result = await nativeTools.execute(call)
@@ -103,11 +114,12 @@ final class ChatViewModel: ObservableObject {
             response = try await client.ask(prompt: continuation, sessionDirectory: sessionDirectory)
         }
 
+        let chain = results.map(\.invocation)
         if let last = results.last {
-            return "I used several browser tools and stopped to avoid looping.\n\n\(last.promptText)"
+            return ("I used several browser tools and stopped to avoid looping.\n\n\(last.promptText)", chain)
         }
 
-        return response
+        return (response, chain)
     }
 }
 
@@ -119,6 +131,7 @@ struct AIChatPanel: View {
 
     @AppStorage(PreferenceKey.aiProvider) private var aiProvider = AIProviderKind.codex.rawValue
     @AppStorage(PreferenceKey.aiModel) private var aiModel = ""
+    @AppStorage(PreferenceKey.aiShowToolChain) private var showToolChain = true
     @FocusState private var composerFocused: Bool
     @State private var showingModelPicker = false
 
@@ -217,7 +230,7 @@ struct AIChatPanel: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     ForEach(viewModel.messages) { message in
-                        MessageView(message: message)
+                        MessageView(message: message, showToolChain: showToolChain)
                             .id(message.id)
                             .transition(.asymmetric(
                                 insertion: .opacity.combined(with: .offset(y: 8)),
@@ -545,13 +558,17 @@ private struct SuggestionChip: View {
 
 private struct MessageView: View {
     var message: ChatMessage
+    var showToolChain: Bool
 
     var body: some View {
         switch message.role {
         case .user:
             UserBubble(text: message.text)
         case .assistant:
-            AssistantMessage(text: message.text)
+            AssistantMessage(
+                text: message.text,
+                toolChain: showToolChain ? message.toolChain : []
+            )
         case .system:
             SystemPill(text: message.text)
         }
@@ -618,10 +635,15 @@ private struct UserBubble: View {
 
 private struct AssistantMessage: View {
     var text: String
+    var toolChain: [ChatMessage.ToolInvocation]
     @State private var isHovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
+            if !toolChain.isEmpty {
+                ToolChainView(invocations: toolChain)
+            }
+
             MarkdownView(text: text)
 
             if isHovering {
@@ -633,6 +655,110 @@ private struct AssistantMessage: View {
         .onHover { hovering in
             withAnimation(.easeOut(duration: 0.16)) { isHovering = hovering }
         }
+    }
+}
+
+// MARK: - Tool chain
+
+/// Sequenced chain of native browser tool calls the model fired off for an
+/// assistant turn. Rendered above the answer text as a row of compact chips
+/// linked by a hairline chevron — the visual emphasis is on the trail, not
+/// the individual chips, so they all share the same neutral palette as the
+/// surrounding chrome.
+private struct ToolChainView: View {
+    let invocations: [ChatMessage.ToolInvocation]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("TOOL CHAIN")
+                .font(.system(size: 9, weight: .semibold))
+                .tracking(1.4)
+                .foregroundStyle(Palette.textFaint)
+
+            HStack(alignment: .center, spacing: 5) {
+                ForEach(Array(invocations.enumerated()), id: \.offset) { index, invocation in
+                    if index > 0 {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 8, weight: .semibold))
+                            .foregroundStyle(Palette.textFaint)
+                    }
+                    ToolChainChip(invocation: invocation)
+                }
+            }
+        }
+    }
+}
+
+private struct ToolChainChip: View {
+    let invocation: ChatMessage.ToolInvocation
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: iconName)
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(invocation.succeeded ? Palette.textSecondary : Palette.textMuted)
+
+            Text(label)
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(Palette.textPrimary)
+
+            if !displayInput.isEmpty {
+                Text(displayInput)
+                    .font(.system(size: 10.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.textMuted)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background {
+            Capsule().fill(Palette.surface)
+        }
+        .overlay {
+            Capsule().stroke(Palette.stroke, lineWidth: 1)
+        }
+        .help(helpText)
+    }
+
+    private var iconName: String {
+        switch invocation.tool {
+        case "open": return "safari"
+        case "search": return "magnifyingglass"
+        case "fetch": return "arrow.down.doc"
+        default: return "wrench"
+        }
+    }
+
+    private var label: String {
+        switch invocation.tool {
+        case "open": return "open"
+        case "search": return "search"
+        case "fetch": return "fetch"
+        default: return invocation.tool
+        }
+    }
+
+    /// Compact form of the argument for inline display: URLs collapse to
+    /// their host, queries stay as-is. Falls back to the raw input.
+    private var displayInput: String {
+        let trimmed = invocation.input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return "" }
+
+        if invocation.tool == "open" || invocation.tool == "fetch" {
+            if let url = URL(string: trimmed), let host = url.host(percentEncoded: false), !host.isEmpty {
+                return host
+            }
+            if let url = URL(string: "https://\(trimmed)"), let host = url.host(percentEncoded: false), !host.isEmpty {
+                return host
+            }
+        }
+        return trimmed
+    }
+
+    private var helpText: String {
+        let status = invocation.succeeded ? "" : " (failed)"
+        return "\(invocation.tool): \(invocation.input)\(status)"
     }
 }
 

@@ -70,6 +70,25 @@ struct ChatSessionStoreTests {
         #expect(FileManager.default.fileExists(atPath: deltaFile.path))
     }
 
+    @Test("save and load round-trips the assistant tool chain")
+    func toolChainRoundTrips() {
+        let (store, root) = Self.makeIsolatedStore()
+        defer { Self.cleanup(root) }
+
+        let chain = [
+            ChatMessage.ToolInvocation(tool: "open", input: "https://youtube.com", succeeded: true),
+            ChatMessage.ToolInvocation(tool: "search", input: "best ramen brooklyn", succeeded: false)
+        ]
+        let assistant = ChatMessage(role: .assistant, text: "Done.", toolChain: chain)
+        let context = BrowserPageContext(title: "T", url: "u")
+        store.save(messages: [ChatMessage(role: .user, text: "hi"), assistant], sessionID: "chain", pageContext: context)
+
+        let reloaded = store.load(sessionID: "chain")
+        #expect(reloaded.count == 2)
+        #expect(reloaded[0].toolChain.isEmpty)
+        #expect(reloaded[1].toolChain == chain)
+    }
+
     @Test("clearAll is a no-op when the root does not yet exist")
     func clearAllWithoutRootDoesNothing() {
         let missingRoot = FileManager.default.temporaryDirectory
