@@ -2,10 +2,7 @@ import AppKit
 import SwiftUI
 
 struct KeyboardShortcutHost: NSViewRepresentable {
-    var toggleChatShortcut: String
-    var toggleTabsShortcut: String
-    var onToggleChat: () -> Void
-    var onToggleTabs: () -> Void
+    var bindings: [String: () -> Void]
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)
@@ -48,14 +45,8 @@ struct KeyboardShortcutHost: NSViewRepresentable {
                         return
                     }
 
-                    if shortcut == self.parent.toggleChatShortcut {
-                        self.parent.onToggleChat()
-                        handled = true
-                        return
-                    }
-
-                    if shortcut == self.parent.toggleTabsShortcut {
-                        self.parent.onToggleTabs()
+                    if let action = self.parent.bindings[shortcut] {
+                        action()
                         handled = true
                     }
                 }

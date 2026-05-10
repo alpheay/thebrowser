@@ -7,6 +7,7 @@ final class BrowserModel: ObservableObject {
     @Published var isTabRailVisible = true
     @Published var isChatVisible = true
     @Published var addressDraft = ""
+    @Published var addressFocusToken = 0
 
     init() {
         let firstTab = BrowserTab()
@@ -52,6 +53,10 @@ final class BrowserModel: ObservableObject {
         }
     }
 
+    func closeSelected() {
+        close(selectedTab)
+    }
+
     func navigateSelected(to input: String? = nil) {
         let target = input ?? addressDraft
         selectedTab.navigate(to: target)
@@ -73,5 +78,9 @@ final class BrowserModel: ObservableObject {
 
     func toggleChat() {
         isChatVisible.toggle()
+    }
+
+    func focusAddress() {
+        addressFocusToken &+= 1
     }
 }

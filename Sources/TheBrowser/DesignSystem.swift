@@ -13,68 +13,180 @@ extension Color {
 }
 
 enum Palette {
-    static let ink = Color(hex: 0x090807)
-    static let graphite = Color(hex: 0x171311)
-    static let panel = Color(hex: 0x211d1a, alpha: 0.74)
-    static let stroke = Color.white.opacity(0.11)
-    static let pearl = Color(hex: 0xf8f3ea)
-    static let muted = Color(hex: 0xb8aca0)
-    static let coral = Color(hex: 0xff6f61)
-    static let saffron = Color(hex: 0xf6c85f)
-    static let mint = Color(hex: 0x8fd19e)
-    static let cyan = Color(hex: 0x5ed6d1)
-    static let plum = Color(hex: 0xb990ff)
+    // Plates
+    static let bg = Color(hex: 0x0A0A0A)
+    static let bgRaised = Color(hex: 0x131313)
+    static let bgSunken = Color(hex: 0x050505)
+
+    // Surfaces
+    static let surface = Color(hex: 0x181818)
+    static let surfaceHover = Color(hex: 0x222222)
+    static let surfaceActive = Color(hex: 0x2C2C2C)
+
+    // Strokes
+    static let stroke = Color.white.opacity(0.08)
+    static let strokeStrong = Color.white.opacity(0.14)
+    static let strokeFaint = Color.white.opacity(0.04)
+
+    // Text
+    static let text = Color.white
+    static let textPrimary = Color.white.opacity(0.95)
+    static let textSecondary = Color.white.opacity(0.62)
+    static let textMuted = Color.white.opacity(0.40)
+    static let textFaint = Color.white.opacity(0.22)
+
+    // Accent — white only
+    static let accent = Color.white
+    static let accentSoft = Color.white.opacity(0.14)
+    static let accentGlow = Color.white.opacity(0.22)
+}
+
+enum Typography {
+    static let display = Font.system(size: 28, weight: .light, design: .rounded)
+    static let wordmark = Font.system(size: 16, weight: .light, design: .rounded)
+    static let title = Font.system(size: 15, weight: .semibold)
+    static let body = Font.system(size: 13.5, weight: .medium)
+    static let label = Font.system(size: 12, weight: .semibold)
+    static let caption = Font.system(size: 11, weight: .medium)
+    static let mono = Font.system(size: 11, weight: .regular, design: .monospaced)
+}
+
+enum Motion {
+    static let springSnap = Animation.spring(response: 0.32, dampingFraction: 0.86)
+    static let springSoft = Animation.spring(response: 0.45, dampingFraction: 0.9)
+    static let springBloom = Animation.spring(response: 0.42, dampingFraction: 0.62)
+    static let microTap = Animation.easeOut(duration: 0.12)
+    static let hoverFade = Animation.easeOut(duration: 0.14)
+}
+
+enum Metrics {
+    static let trafficLightGutter: CGFloat = 78
+    static let toolbarHeight: CGFloat = 56
+    static let railWidth: CGFloat = 240
+    static let chatWidth: CGFloat = 360
+    static let webviewInset: CGFloat = 8
+    static let webviewRadius: CGFloat = 10
 }
 
 struct IconButtonStyle: ButtonStyle {
     var selected = false
+    var size: CGFloat = 30
 
     func makeBody(configuration: Configuration) -> some View {
+        IconButtonBody(configuration: configuration, selected: selected, size: size)
+    }
+}
+
+private struct IconButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    let selected: Bool
+    let size: CGFloat
+    @State private var isHovering = false
+
+    var body: some View {
         configuration.label
-            .font(.system(size: 14, weight: .semibold))
-            .foregroundStyle(selected ? Palette.ink : Palette.pearl)
-            .frame(width: 34, height: 34)
+            .font(.system(size: 13, weight: .semibold))
+            .foregroundStyle(selected ? Palette.text : Palette.textPrimary)
+            .frame(width: size, height: size)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(selected ? Palette.pearl : Color.white.opacity(configuration.isPressed ? 0.15 : 0.07))
+                    .fill(backgroundFill)
             }
             .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(Color.white.opacity(selected ? 0.34 : 0.12), lineWidth: 1)
+                if selected {
+                    RoundedRectangle(cornerRadius: 8, style: .continuous)
+                        .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                }
             }
-            .scaleEffect(configuration.isPressed ? 0.96 : 1)
-            .animation(.snappy(duration: 0.16), value: configuration.isPressed)
+            .scaleEffect(configuration.isPressed ? 0.94 : 1)
+            .animation(Motion.microTap, value: configuration.isPressed)
+            .animation(Motion.hoverFade, value: isHovering)
+            .onHover { isHovering = $0 }
+    }
+
+    private var backgroundFill: Color {
+        if selected { return Palette.surfaceActive }
+        if configuration.isPressed { return Palette.surfaceActive }
+        if isHovering { return Palette.surfaceHover }
+        return Color.clear
     }
 }
 
 struct PillButtonStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
+        PillButtonBody(configuration: configuration)
+    }
+}
+
+private struct PillButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    @State private var isHovering = false
+
+    var body: some View {
         configuration.label
-            .font(.system(size: 13, weight: .semibold))
-            .foregroundStyle(Palette.pearl)
+            .font(.system(size: 12.5, weight: .semibold))
+            .foregroundStyle(Palette.textPrimary)
             .padding(.horizontal, 12)
-            .padding(.vertical, 8)
+            .frame(height: 30)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Color.white.opacity(configuration.isPressed ? 0.16 : 0.08))
+                    .fill(isHovering || configuration.isPressed ? Palette.surfaceHover : Palette.surface)
             }
             .overlay {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .stroke(Palette.stroke, lineWidth: 1)
             }
+            .animation(Motion.hoverFade, value: isHovering)
+            .onHover { isHovering = $0 }
     }
 }
 
 extension View {
-    func glassPanel(cornerRadius: CGFloat = 8) -> some View {
+    func surfaceCard(radius: CGFloat = 10) -> some View {
         background {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-                .fill(.regularMaterial)
-                .environment(\.colorScheme, .dark)
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
+                .fill(Palette.surface)
         }
         .overlay {
-            RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            RoundedRectangle(cornerRadius: radius, style: .continuous)
                 .stroke(Palette.stroke, lineWidth: 1)
         }
+    }
+
+    func frostedRail() -> some View {
+        background {
+            ZStack {
+                Rectangle().fill(.regularMaterial)
+                Rectangle().fill(Color.black.opacity(0.42))
+            }
+            .environment(\.colorScheme, .dark)
+        }
+    }
+
+    func hairline(_ edge: Edge) -> some View {
+        overlay(alignment: alignment(for: edge)) {
+            Group {
+                switch edge {
+                case .leading, .trailing:
+                    Rectangle().fill(Palette.stroke).frame(width: 1)
+                case .top, .bottom:
+                    Rectangle().fill(Palette.stroke).frame(height: 1)
+                }
+            }
+        }
+    }
+
+    private func alignment(for edge: Edge) -> Alignment {
+        switch edge {
+        case .leading: .leading
+        case .trailing: .trailing
+        case .top: .top
+        case .bottom: .bottom
+        }
+    }
+
+    // Preserved for backwards compatibility — same look as surfaceCard now.
+    func glassPanel(cornerRadius: CGFloat = 8) -> some View {
+        surfaceCard(radius: cornerRadius)
     }
 }

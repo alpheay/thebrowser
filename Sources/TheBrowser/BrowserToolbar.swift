@@ -2,101 +2,191 @@ import SwiftUI
 
 struct BrowserToolbar: View {
     @ObservedObject var model: BrowserModel
+    @ObservedObject var selectedTab: BrowserTab
+
+    @FocusState private var addressFocused: Bool
+    @State private var submitPulse = false
 
     var body: some View {
-        VStack(spacing: 8) {
-            HStack(spacing: 8) {
-                Button {
-                    model.selectedTab.goBack()
-                } label: {
-                    Image(systemName: "chevron.left")
-                }
-                .buttonStyle(IconButtonStyle())
-                .help("Back")
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                // Traffic-light gutter (system controls live here)
+                Color.clear
+                    .frame(width: Metrics.trafficLightGutter, height: 30)
 
-                Button {
-                    model.selectedTab.goForward()
-                } label: {
-                    Image(systemName: "chevron.right")
-                }
-                .buttonStyle(IconButtonStyle())
-                .help("Forward")
+                navCluster
 
-                Button {
-                    if model.selectedTab.isLoading {
-                        model.selectedTab.stopLoading()
-                    } else {
-                        model.selectedTab.reload()
-                    }
-                } label: {
-                    Image(systemName: model.selectedTab.isLoading ? "xmark" : "arrow.clockwise")
-                }
-                .buttonStyle(IconButtonStyle())
-                .help("Reload")
+                addressBar
+                    .padding(.horizontal, 12)
 
-                Button {
-                    model.goHome()
-                } label: {
-                    Image(systemName: "sparkle")
-                }
-                .buttonStyle(IconButtonStyle())
-                .help("New space")
-
-                HStack(spacing: 8) {
-                    Image(systemName: "magnifyingglass")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(Palette.muted)
-
-                    TextField("Search or enter address", text: $model.addressDraft)
-                        .textFieldStyle(.plain)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundStyle(Palette.pearl)
-                        .onSubmit {
-                            model.navigateSelected()
-                        }
-                }
-                .padding(.horizontal, 12)
-                .frame(height: 36)
-                .glassPanel()
-
-                Button {
-                    withAnimation(.snappy) {
-                        model.toggleTabs()
-                    }
-                } label: {
-                    Image(systemName: "sidebar.left")
-                }
-                .buttonStyle(IconButtonStyle(selected: model.isTabRailVisible))
-                .help("Toggle side tabs")
-
-                Button {
-                    withAnimation(.snappy) {
-                        model.toggleChat()
-                    }
-                } label: {
-                    Image(systemName: "sparkles")
-                }
-                .buttonStyle(IconButtonStyle(selected: model.isChatVisible))
-                .help("Toggle AI chat")
+                rightCluster
             }
+            .padding(.horizontal, 10)
+            .frame(height: Metrics.toolbarHeight)
 
-            if model.selectedTab.isLoading {
-                GeometryReader { proxy in
-                    ZStack(alignment: .leading) {
-                        Capsule()
-                            .fill(Color.white.opacity(0.07))
-                        Capsule()
-                            .fill(Palette.saffron)
-                            .frame(width: proxy.size.width * max(0.04, model.selectedTab.estimatedProgress))
+            // Loading hairline
+            ZStack(alignment: .leading) {
+                Rectangle()
+                    .fill(Color.clear)
+                    .frame(height: 1.5)
+                if selectedTab.isLoading {
+                    GeometryReader { proxy in
+                        Rectangle()
+                            .fill(Palette.accent)
+                            .frame(width: proxy.size.width * max(0.04, selectedTab.estimatedProgress), height: 1.5)
+                            .animation(.easeOut(duration: 0.3), value: selectedTab.estimatedProgress)
                     }
+                    .frame(height: 1.5)
+                    .transition(.opacity)
                 }
-                .frame(height: 2)
-                .padding(.horizontal, 2)
-                .transition(.opacity)
+            }
+            .frame(height: 1.5)
+        }
+        .background(Palette.bg)
+    }
+
+    private var navCluster: some View {
+        HStack(spacing: 4) {
+            Button { selectedTab.goBack() } label: {
+                Image(systemName: "chevron.left")
+            }
+            .buttonStyle(IconButtonStyle())
+            .help("Back")
+
+            Button { selectedTab.goForward() } label: {
+                Image(systemName: "chevron.right")
+            }
+            .buttonStyle(IconButtonStyle())
+            .help("Forward")
+
+            Button {
+                if selectedTab.isLoading {
+                    selectedTab.stopLoading()
+                } else {
+                    selectedTab.reload()
+                }
+            } label: {
+                Image(systemName: selectedTab.isLoading ? "xmark" : "arrow.clockwise")
+                    .contentTransition(.symbolEffect(.replace))
+            }
+            .buttonStyle(IconButtonStyle())
+            .help(selectedTab.isLoading ? "Stop" : "Reload")
+        }
+    }
+
+    private var addressBar: some View {
+        HStack(spacing: 10) {
+            leadingGlyph
+
+            TextField("Search or enter address", text: $model.addressDraft)
+                .textFieldStyle(.plain)
+                .font(.system(size: 13.5, weight: .medium))
+                .foregroundStyle(Palette.textPrimary)
+                .focused($addressFocused)
+                .onSubmit {
+                    submitPulse.toggle()
+                    model.navigateSelected()
+                }
+
+            if let url = selectedTab.url, url.scheme == "https" {
+                Image(systemName: "lock.fill")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Palette.textMuted)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.top, 10)
-        .padding(.bottom, model.selectedTab.isLoading ? 6 : 10)
+        .padding(.horizontal, 12)
+        .frame(height: 36)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Palette.surface)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(addressFocused ? Color.white.opacity(0.18) : Color.clear, lineWidth: 1)
+                .animation(.easeOut(duration: 0.12), value: addressFocused)
+        }
+        .background {
+            // Soft glow when focused
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(addressFocused ? Color.white.opacity(0.06) : Color.clear)
+                .blur(radius: 12)
+                .animation(.easeOut(duration: 0.18), value: addressFocused)
+        }
+        .frame(maxWidth: 720)
+        .scaleEffect(submitPulse ? 0.985 : 1)
+        .animation(.spring(response: 0.24, dampingFraction: 0.6), value: submitPulse)
+        .onChange(of: model.addressFocusToken) { _, _ in
+            addressFocused = true
+        }
+        .onChange(of: submitPulse) { _, newValue in
+            if newValue {
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 240_000_000)
+                    submitPulse = false
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var leadingGlyph: some View {
+        if selectedTab.isLoading {
+            ProgressView()
+                .controlSize(.small)
+                .scaleEffect(0.6)
+                .frame(width: 16, height: 16)
+        } else if let host = selectedTab.url?.host(percentEncoded: false), !selectedTab.isHome {
+            FaviconView(host: host)
+                .frame(width: 16, height: 16)
+        } else {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Palette.textMuted)
+                .frame(width: 16, height: 16)
+        }
+    }
+
+    private var rightCluster: some View {
+        HStack(spacing: 6) {
+            Button {
+                withAnimation(Motion.springSnap) { model.toggleChat() }
+            } label: {
+                Image(systemName: "sparkles")
+            }
+            .buttonStyle(IconButtonStyle(selected: model.isChatVisible))
+            .help("Toggle AI chat")
+
+            Button {
+                withAnimation(Motion.springSnap) { model.toggleTabs() }
+            } label: {
+                Image(systemName: "sidebar.left")
+            }
+            .buttonStyle(IconButtonStyle(selected: model.isTabRailVisible))
+            .help("Toggle side tabs")
+        }
+    }
+}
+
+struct FaviconView: View {
+    let host: String
+
+    var body: some View {
+        AsyncImage(url: faviconURL) { phase in
+            switch phase {
+            case .success(let image):
+                image
+                    .resizable()
+                    .interpolation(.high)
+                    .aspectRatio(contentMode: .fit)
+            default:
+                Image(systemName: "globe")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Palette.textMuted)
+            }
+        }
+    }
+
+    private var faviconURL: URL? {
+        URL(string: "https://www.google.com/s2/favicons?domain=\(host)&sz=64")
     }
 }

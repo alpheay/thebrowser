@@ -15,7 +15,7 @@ struct ChatMessage: Identifiable, Equatable {
 @MainActor
 final class ChatViewModel: ObservableObject {
     @Published var messages: [ChatMessage] = [
-        ChatMessage(role: .assistant, text: "I am wired through Codex CLI. Ask me to reason about the current page, draft something, or help shape the next task.")
+        ChatMessage(role: .assistant, text: "I'm wired through Codex CLI. Ask me to reason about the current page, draft something, or hand the next task to the agent.")
     ]
     @Published var draft = ""
     @Published var isSending = false
@@ -51,183 +51,340 @@ struct AIChatPanel: View {
     var context: BrowserPageContext
     var onClose: () -> Void
 
+    @FocusState private var composerFocused: Bool
+
     var body: some View {
         VStack(spacing: 0) {
             header
-
-            Divider()
-                .overlay(Palette.stroke)
-
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 12) {
-                        ForEach(viewModel.messages) { message in
-                            ChatBubble(message: message)
-                                .id(message.id)
-                        }
-
-                        if viewModel.isSending {
-                            ThinkingRow()
-                        }
-                    }
-                    .padding(16)
-                }
-                .onChange(of: viewModel.messages.count) { _, _ in
-                    if let lastID = viewModel.messages.last?.id {
-                        withAnimation(.snappy) {
-                            proxy.scrollTo(lastID, anchor: .bottom)
-                        }
-                    }
-                }
-            }
-
+            messageList
             composer
         }
-        .frame(width: 380)
-        .background(Palette.graphite)
-        .overlay(alignment: .leading) {
-            Rectangle()
-                .fill(Palette.stroke)
-                .frame(width: 1)
-        }
+        .frame(width: Metrics.chatWidth)
+        .frame(maxHeight: .infinity)
+        .frostedRail()
+        .hairline(.leading)
     }
+
+    // MARK: - Header
 
     private var header: some View {
-        HStack(spacing: 12) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Palette.pearl)
-                Image(systemName: "sparkles")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Palette.ink)
-            }
-            .frame(width: 34, height: 34)
+        HStack(spacing: 10) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Palette.textPrimary)
+            Text("Codex")
+                .font(Typography.title)
+                .foregroundStyle(Palette.textPrimary)
 
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Codex")
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundStyle(Palette.pearl)
-                Text(context.url.isEmpty ? "Home context" : context.title)
-                    .font(.system(size: 11, weight: .medium))
-                    .foregroundStyle(Palette.muted)
+            if !context.title.isEmpty || !context.url.isEmpty {
+                Text("·")
+                    .font(Typography.caption)
+                    .foregroundStyle(Palette.textFaint)
+                Text(context.title.isEmpty ? "Home" : context.title)
+                    .font(Typography.body)
+                    .foregroundStyle(Palette.textSecondary)
                     .lineLimit(1)
+                    .truncationMode(.middle)
             }
 
-            Spacer()
+            Spacer(minLength: 8)
 
             Button(action: onClose) {
-                Image(systemName: "sidebar.right")
+                Image(systemName: "xmark")
+                    .font(.system(size: 11, weight: .semibold))
             }
-            .buttonStyle(IconButtonStyle())
-            .help("Hide AI chat")
+            .buttonStyle(IconButtonStyle(size: 26))
+            .help("Hide chat")
         }
-        .padding(14)
+        .padding(.horizontal, 14)
+        .frame(height: 48)
+        .hairline(.bottom)
     }
 
-    private var composer: some View {
-        VStack(spacing: 10) {
-            HStack(alignment: .bottom, spacing: 10) {
-                TextField("Ask Codex", text: $viewModel.draft, axis: .vertical)
-                    .textFieldStyle(.plain)
-                    .lineLimit(1...5)
-                    .font(.system(size: 14))
-                    .padding(12)
-                    .glassPanel()
-                    .onSubmit {
-                        viewModel.send(context: context)
+    // MARK: - Messages
+
+    private var messageList: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 18) {
+                    ForEach(viewModel.messages) { message in
+                        MessageView(message: message)
+                            .id(message.id)
                     }
 
-                Button {
-                    viewModel.send(context: context)
-                } label: {
-                    Image(systemName: "paperplane.fill")
+                    if viewModel.isSending {
+                        ThinkingPulse()
+                            .id("thinking")
+                    }
                 }
-                .buttonStyle(IconButtonStyle(selected: !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty))
-                .disabled(viewModel.isSending)
-                .help("Send")
+                .padding(.horizontal, 16)
+                .padding(.vertical, 16)
+            }
+            .onChange(of: viewModel.messages.count) { _, _ in
+                if let lastID = viewModel.messages.last?.id {
+                    withAnimation(Motion.springSoft) {
+                        proxy.scrollTo(lastID, anchor: .bottom)
+                    }
+                }
+            }
+            .onChange(of: viewModel.isSending) { _, isSending in
+                if isSending {
+                    withAnimation(Motion.springSoft) {
+                        proxy.scrollTo("thinking", anchor: .bottom)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - Composer
+
+    private var composer: some View {
+        VStack(spacing: 8) {
+            // Context pill
+            if !context.title.isEmpty || !context.url.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "link")
+                        .font(.system(size: 9, weight: .semibold))
+                    Text("Context: \(context.title.isEmpty ? "Home" : context.title)")
+                        .font(.system(size: 10.5, weight: .medium))
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .foregroundStyle(Palette.textMuted)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background {
+                    Capsule().fill(Palette.surface)
+                }
+                .overlay {
+                    Capsule().stroke(Palette.stroke, lineWidth: 1)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            HStack(alignment: .bottom, spacing: 10) {
+                ZStack(alignment: .topLeading) {
+                    if viewModel.draft.isEmpty {
+                        Text("Ask Codex anything")
+                            .font(.system(size: 13.5))
+                            .foregroundStyle(Palette.textMuted)
+                            .padding(.horizontal, 14)
+                            .padding(.vertical, 12)
+                            .allowsHitTesting(false)
+                    }
+                    TextEditor(text: $viewModel.draft)
+                        .focused($composerFocused)
+                        .scrollContentBackground(.hidden)
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(Palette.textPrimary)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .frame(minHeight: 38, maxHeight: 160)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .onSubmit {
+                            viewModel.send(context: context)
+                        }
+                }
+                .background {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(Palette.surface)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .stroke(composerFocused ? Color.white.opacity(0.16) : Palette.stroke, lineWidth: 1)
+                        .animation(.easeOut(duration: 0.12), value: composerFocused)
+                }
+
+                SendButton(
+                    enabled: !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                    sending: viewModel.isSending,
+                    action: { viewModel.send(context: context) }
+                )
+                .padding(.bottom, 4)
             }
         }
         .padding(14)
-        .background(Palette.ink.opacity(0.74))
+        .hairline(.top)
     }
 }
 
-private struct ChatBubble: View {
+// MARK: - Message bubbles
+
+private struct MessageView: View {
     var message: ChatMessage
 
     var body: some View {
-        HStack {
-            if message.role == .user {
-                Spacer(minLength: 32)
-            }
-
-            Text(message.text)
-                .font(.system(size: 13.5))
-                .foregroundStyle(foreground)
-                .textSelection(.enabled)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 10)
-                .background {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .fill(background)
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 8, style: .continuous)
-                        .stroke(stroke, lineWidth: 1)
-                }
-                .frame(maxWidth: 310, alignment: message.role == .user ? .trailing : .leading)
-
-            if message.role != .user {
-                Spacer(minLength: 32)
-            }
-        }
-    }
-
-    private var foreground: Color {
         switch message.role {
         case .user:
-            Palette.ink
+            UserBubble(text: message.text)
         case .assistant:
-            Palette.pearl
+            AssistantMessage(text: message.text)
         case .system:
-            Palette.saffron
-        }
-    }
-
-    private var background: Color {
-        switch message.role {
-        case .user:
-            Palette.pearl
-        case .assistant:
-            Color.white.opacity(0.08)
-        case .system:
-            Palette.saffron.opacity(0.09)
-        }
-    }
-
-    private var stroke: Color {
-        switch message.role {
-        case .user:
-            Color.white.opacity(0.2)
-        case .assistant:
-            Palette.stroke
-        case .system:
-            Palette.saffron.opacity(0.24)
+            SystemPill(text: message.text)
         }
     }
 }
 
-private struct ThinkingRow: View {
+private struct UserBubble: View {
+    var text: String
+
     var body: some View {
-        HStack(spacing: 8) {
-            ProgressView()
-                .controlSize(.small)
-            Text("Codex is thinking")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Palette.muted)
+        HStack {
+            Spacer(minLength: 32)
+            Text(text)
+                .font(.system(size: 13.5))
+                .foregroundStyle(Palette.textPrimary)
+                .textSelection(.enabled)
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background {
+                    UnevenRoundedRectangle(
+                        topLeadingRadius: 14,
+                        bottomLeadingRadius: 14,
+                        bottomTrailingRadius: 4,
+                        topTrailingRadius: 14,
+                        style: .continuous
+                    )
+                    .fill(Palette.surfaceActive)
+                }
+                .frame(maxWidth: 260, alignment: .trailing)
+        }
+    }
+}
+
+private struct AssistantMessage: View {
+    var text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            // Leading white bar
+            RoundedRectangle(cornerRadius: 1, style: .continuous)
+                .fill(Palette.accent)
+                .frame(width: 2)
+                .frame(maxHeight: .infinity)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("CODEX")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .tracking(1.4)
+                    .foregroundStyle(Palette.textFaint)
+
+                Text(text)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(Palette.textPrimary)
+                    .textSelection(.enabled)
+                    .lineSpacing(2)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+private struct SystemPill: View {
+    var text: String
+
+    var body: some View {
+        HStack {
+            Spacer()
+            Text(text)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(Palette.textMuted)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 8)
+                .background {
+                    Capsule().fill(Palette.surface)
+                }
+                .overlay {
+                    Capsule().stroke(Palette.strokeStrong, lineWidth: 1)
+                }
             Spacer()
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+    }
+}
+
+private struct ThinkingPulse: View {
+    @State private var phase = 0
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            RoundedRectangle(cornerRadius: 1, style: .continuous)
+                .fill(Palette.accent)
+                .frame(width: 2, height: 14)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("CODEX")
+                    .font(.system(size: 9.5, weight: .semibold))
+                    .tracking(1.4)
+                    .foregroundStyle(Palette.textFaint)
+
+                HStack(spacing: 4) {
+                    ForEach(0..<3, id: \.self) { index in
+                        Circle()
+                            .fill(Palette.textSecondary)
+                            .frame(width: 4, height: 4)
+                            .scaleEffect(phase == index ? 1.0 : 0.6)
+                            .opacity(phase == index ? 1.0 : 0.4)
+                    }
+                }
+                .frame(height: 14)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .onAppear {
+            startPulse()
+        }
+    }
+
+    private func startPulse() {
+        Task { @MainActor in
+            while !Task.isCancelled {
+                for index in 0..<3 {
+                    withAnimation(.easeInOut(duration: 0.24)) {
+                        phase = index
+                    }
+                    try? await Task.sleep(nanoseconds: 240_000_000)
+                }
+            }
+        }
+    }
+}
+
+private struct SendButton: View {
+    var enabled: Bool
+    var sending: Bool
+    var action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.up")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(enabled ? Palette.bg : Palette.textMuted)
+                .frame(width: 30, height: 30)
+                .background {
+                    Circle()
+                        .fill(buttonFill)
+                }
+                .overlay {
+                    Circle()
+                        .stroke(enabled ? Color.clear : Palette.stroke, lineWidth: 1)
+                }
+                .scaleEffect(isHovering && enabled ? 1.04 : 1.0)
+                .animation(Motion.springSnap, value: isHovering)
+                .animation(Motion.springSnap, value: enabled)
+        }
+        .buttonStyle(.plain)
+        .disabled(!enabled || sending)
+        .onHover { isHovering = $0 }
+        .help("Send")
+    }
+
+    private var buttonFill: Color {
+        if !enabled { return Palette.surface }
+        return Palette.accent
     }
 }

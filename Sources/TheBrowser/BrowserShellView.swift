@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct BrowserShellView: View {
@@ -6,33 +7,118 @@ struct BrowserShellView: View {
 
     @AppStorage(PreferenceKey.toggleChatShortcut) private var toggleChatShortcut = "command+j"
     @AppStorage(PreferenceKey.toggleTabsShortcut) private var toggleTabsShortcut = "command+b"
+    @AppStorage(PreferenceKey.newTabShortcut) private var newTabShortcut = "command+t"
+    @AppStorage(PreferenceKey.closeTabShortcut) private var closeTabShortcut = "command+w"
+    @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
+
+    @State private var isPeekingRail = false
+    @State private var peekDismissTask: Task<Void, Never>? = nil
+
+    private var railOverlayVisible: Bool {
+        model.isTabRailVisible || isPeekingRail
+    }
 
     var body: some View {
-        ZStack {
-            AmbientBackground()
+        ZStack(alignment: .top) {
+            // Layer 0: window plate
+            Palette.bg
+                .ignoresSafeArea()
 
+            // Layer 1: main content area (toolbar + body)
+            VStack(spacing: 0) {
+                BrowserToolbar(model: model, selectedTab: model.selectedTab)
+
+                bodyContent
+            }
+            .ignoresSafeArea(edges: .bottom)
+
+            // Layer 2: rail (overlay anchored leading) — sits on top of content body
             HStack(spacing: 0) {
-                if model.isTabRailVisible {
+                if railOverlayVisible {
                     TabRailView(model: model)
+                        .padding(.top, Metrics.toolbarHeight)
                         .transition(.move(edge: .leading).combined(with: .opacity))
+                        .onHover { hovering in
+                            if !model.isTabRailVisible {
+                                if hovering {
+                                    cancelPeekDismiss()
+                                } else {
+                                    schedulePeekDismiss()
+                                }
+                            }
+                        }
+                }
+                Spacer(minLength: 0)
+            }
+            .ignoresSafeArea(edges: .bottom)
+
+            // Layer 3: invisible hover strip on leading edge — only when rail is hidden
+            if !model.isTabRailVisible {
+                HStack(spacing: 0) {
+                    Color.clear
+                        .frame(width: 6)
+                        .frame(maxHeight: .infinity)
+                        .contentShape(Rectangle())
+                        .onContinuousHover { phase in
+                            switch phase {
+                            case .active:
+                                cancelPeekDismiss()
+                                if !isPeekingRail {
+                                    withAnimation(Motion.springSnap) {
+                                        isPeekingRail = true
+                                    }
+                                }
+                            case .ended:
+                                schedulePeekDismiss()
+                            }
+                        }
+                    Spacer()
+                }
+                .padding(.top, Metrics.toolbarHeight)
+                .ignoresSafeArea(edges: .bottom)
+            }
+
+            // Hidden keyboard shortcut host
+            KeyboardShortcutHost(bindings: shortcutBindings)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+        }
+        .background(Palette.bg)
+        .onChange(of: model.selectedTabID) { _, _ in
+            model.updateAddressFromSelectedTab()
+        }
+        .animation(Motion.springSnap, value: model.isChatVisible)
+        .animation(Motion.springSnap, value: model.isTabRailVisible)
+        .animation(Motion.springSnap, value: isPeekingRail)
+    }
+
+    // MARK: - Body
+
+    private var bodyContent: some View {
+        ZStack {
+            HStack(spacing: 0) {
+                // Reserve rail width when rail is toggled visible (NOT for peek)
+                if model.isTabRailVisible {
+                    Color.clear.frame(width: Metrics.railWidth)
                 }
 
-                VStack(spacing: 0) {
-                    BrowserToolbar(model: model)
-
-                    ZStack {
-                        if model.selectedTab.isHome {
-                            HomePageView { destination in
-                                model.addressDraft = destination
-                                model.navigateSelected(to: destination)
-                            }
-                        } else {
-                            BrowserWebView(tab: model.selectedTab)
-                                .id(model.selectedTab.id)
-                                .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
-                                .padding(.horizontal, 10)
-                                .padding(.bottom, 10)
+                // Content surface
+                ZStack {
+                    if model.selectedTab.isHome {
+                        HomePageView { destination in
+                            model.addressDraft = destination
+                            model.navigateSelected(to: destination)
                         }
+                    } else {
+                        BrowserWebView(tab: model.selectedTab)
+                            .id(model.selectedTab.id)
+                            .clipShape(RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous)
+                                    .stroke(Palette.stroke, lineWidth: 1)
+                            }
+                            .padding(.horizontal, Metrics.webviewInset)
+                            .padding(.bottom, Metrics.webviewInset)
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -41,63 +127,55 @@ struct BrowserShellView: View {
                     AIChatPanel(
                         viewModel: chatModel,
                         context: model.selectedContext,
-                        onClose: { withAnimation(.snappy) { model.toggleChat() } }
+                        onClose: {
+                            withAnimation(Motion.springSnap) { model.toggleChat() }
+                        }
                     )
                     .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
         }
-        .background(Palette.ink)
-        .overlay(alignment: .bottomLeading) {
-            KeyboardShortcutHost(
-                toggleChatShortcut: toggleChatShortcut,
-                toggleTabsShortcut: toggleTabsShortcut,
-                onToggleChat: { withAnimation(.snappy) { model.toggleChat() } },
-                onToggleTabs: { withAnimation(.snappy) { model.toggleTabs() } }
-            )
-            .frame(width: 1, height: 1)
-        }
-        .onChange(of: model.selectedTabID) { _, _ in
-            model.updateAddressFromSelectedTab()
-        }
-        .animation(.snappy(duration: 0.24), value: model.isChatVisible)
-        .animation(.snappy(duration: 0.24), value: model.isTabRailVisible)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
-}
 
-private struct AmbientBackground: View {
-    var body: some View {
-        TimelineView(.animation) { timeline in
-            Canvas { context, size in
-                let time = timeline.date.timeIntervalSinceReferenceDate
-                let center = CGPoint(
-                    x: size.width * (0.5 + 0.08 * cos(time / 8)),
-                    y: size.height * (0.44 + 0.08 * sin(time / 10))
-                )
+    // MARK: - Hover-peek timing
 
-                let rect = CGRect(origin: .zero, size: size)
-                context.fill(Path(rect), with: .color(Palette.ink))
-
-                let bands: [(Color, CGFloat, CGFloat)] = [
-                    (Palette.coral.opacity(0.44), 0.16, 0.14),
-                    (Palette.saffron.opacity(0.33), -0.21, 0.10),
-                    (Palette.cyan.opacity(0.28), 0.24, -0.18),
-                    (Palette.plum.opacity(0.24), -0.12, -0.22)
-                ]
-
-                for (color, xOffset, yOffset) in bands {
-                    let bandRect = CGRect(
-                        x: center.x + size.width * xOffset - size.width * 0.32,
-                        y: center.y + size.height * yOffset - size.height * 0.18,
-                        width: size.width * 0.64,
-                        height: size.height * 0.36
-                    )
-                    let path = Path(roundedRect: bandRect, cornerRadius: min(size.width, size.height) * 0.18)
-                    context.addFilter(.blur(radius: 80))
-                    context.fill(path, with: .color(color))
+    private func schedulePeekDismiss() {
+        peekDismissTask?.cancel()
+        peekDismissTask = Task { @MainActor in
+            try? await Task.sleep(nanoseconds: 240_000_000)
+            if !Task.isCancelled {
+                withAnimation(Motion.springSnap) {
+                    isPeekingRail = false
                 }
             }
         }
-        .ignoresSafeArea()
+    }
+
+    private func cancelPeekDismiss() {
+        peekDismissTask?.cancel()
+        peekDismissTask = nil
+    }
+
+    // MARK: - Shortcut bindings
+
+    private var shortcutBindings: [String: () -> Void] {
+        [
+            toggleChatShortcut: {
+                withAnimation(Motion.springSnap) { model.toggleChat() }
+            },
+            toggleTabsShortcut: {
+                withAnimation(Motion.springSnap) { model.toggleTabs() }
+            },
+            newTabShortcut: {
+                model.addTab()
+            },
+            closeTabShortcut: {
+                model.closeSelected()
+            },
+            focusAddressShortcut: {
+                model.focusAddress()
+            }
+        ]
     }
 }

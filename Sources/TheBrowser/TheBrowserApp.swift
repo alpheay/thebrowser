@@ -11,6 +11,7 @@ struct TheBrowserApp: App {
             BrowserShellView()
                 .frame(minWidth: 1080, minHeight: 700)
                 .preferredColorScheme(.dark)
+                .background(Palette.bg)
         }
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact)
@@ -19,6 +20,7 @@ struct TheBrowserApp: App {
             SettingsView()
                 .frame(width: 620)
                 .preferredColorScheme(.dark)
+                .background(Palette.bg)
         }
     }
 }

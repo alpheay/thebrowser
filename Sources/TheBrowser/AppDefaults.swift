@@ -7,6 +7,9 @@ enum PreferenceKey {
     static let codexSandbox = "codex.sandbox"
     static let toggleChatShortcut = "shortcut.toggleChat"
     static let toggleTabsShortcut = "shortcut.toggleTabs"
+    static let newTabShortcut = "shortcut.newTab"
+    static let closeTabShortcut = "shortcut.closeTab"
+    static let focusAddressShortcut = "shortcut.focusAddress"
 }
 
 enum AppDefaults {
@@ -17,7 +20,10 @@ enum AppDefaults {
             PreferenceKey.codexModel: "",
             PreferenceKey.codexSandbox: "read-only",
             PreferenceKey.toggleChatShortcut: "command+j",
-            PreferenceKey.toggleTabsShortcut: "command+b"
+            PreferenceKey.toggleTabsShortcut: "command+b",
+            PreferenceKey.newTabShortcut: "command+t",
+            PreferenceKey.closeTabShortcut: "command+w",
+            PreferenceKey.focusAddressShortcut: "command+l"
         ])
     }
 
