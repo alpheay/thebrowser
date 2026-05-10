@@ -14,6 +14,13 @@ final class ChatSessionStore {
             .appendingPathComponent("sessions", isDirectory: true)
     }()
 
+    /// Override the sessions root for tests; production code uses `rootURL`.
+    private let root: URL
+
+    init(root: URL = ChatSessionStore.rootURL) {
+        self.root = root
+    }
+
     private let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -40,9 +47,20 @@ final class ChatSessionStore {
     /// demand.
     @discardableResult
     func directory(for sessionID: String) -> URL {
-        let dir = Self.rootURL.appendingPathComponent(sessionID, isDirectory: true)
+        let dir = root.appendingPathComponent(sessionID, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
+    }
+
+    /// Removes every persisted session under the root. The root directory
+    /// itself is preserved so subsequent `directory(for:)` calls keep working.
+    func clearAll() {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: root.path) else { return }
+        guard let contents = try? fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return }
+        for url in contents {
+            try? fileManager.removeItem(at: url)
+        }
     }
 
     private func ensureDirectory(for sessionID: String) {

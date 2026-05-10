@@ -117,19 +117,9 @@ struct SettingsView: View {
         }
         .alert("Clear all chat history?", isPresented: $showClearAllConfirm) {
             Button("Cancel", role: .cancel) {}
-            Button("Clear all", role: .destructive) { clearAllChatSessions() }
+            Button("Clear all", role: .destructive) { ChatSessionStore.shared.clearAll() }
         } message: {
             Text("This permanently deletes every saved conversation under ~/.thebrowser/sessions. Open chats stay until you start a new conversation.")
-        }
-    }
-
-    private func clearAllChatSessions() {
-        let fileManager = FileManager.default
-        let root = ChatSessionStore.rootURL
-        guard fileManager.fileExists(atPath: root.path) else { return }
-        guard let contents = try? fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return }
-        for url in contents {
-            try? fileManager.removeItem(at: url)
         }
     }
 
