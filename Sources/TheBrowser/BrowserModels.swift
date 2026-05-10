@@ -23,9 +23,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.websiteDataStore = .default()
+        configuration.userContentController.addUserScript(Self.darkModeUserScript)
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
-        webView.appearance = NSAppearance(named: .aqua)
+        webView.appearance = NSAppearance(named: .darkAqua)
+        webView.underPageBackgroundColor = .black
 
         super.init()
 
@@ -176,6 +178,28 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             }
         ]
     }
+
+    private static let darkModeUserScript = WKUserScript(
+        source: """
+        (() => {
+            const applyDarkColorScheme = () => {
+                if (!document.documentElement || document.getElementById("thebrowser-dark-color-scheme")) {
+                    return;
+                }
+
+                const style = document.createElement("style");
+                style.id = "thebrowser-dark-color-scheme";
+                style.textContent = ":root { color-scheme: dark !important; }";
+                document.documentElement.appendChild(style);
+            };
+
+            applyDarkColorScheme();
+            document.addEventListener("DOMContentLoaded", applyDarkColorScheme, { once: true });
+        })();
+        """,
+        injectionTime: .atDocumentStart,
+        forMainFrameOnly: false
+    )
 }
 
 extension BrowserTab: WKNavigationDelegate {
