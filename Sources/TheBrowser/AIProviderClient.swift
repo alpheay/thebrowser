@@ -37,11 +37,12 @@ enum AIProviderKind: String, CaseIterable, Identifiable, Sendable {
         switch self {
         case .codex:
             return [
-                AIModelOption(provider: .codex, modelID: "gpt-5", displayName: "GPT-5"),
-                AIModelOption(provider: .codex, modelID: "gpt-5-codex", displayName: "GPT-5 Codex"),
-                AIModelOption(provider: .codex, modelID: "gpt-5-mini", displayName: "GPT-5 Mini"),
-                AIModelOption(provider: .codex, modelID: "o4-mini", displayName: "o4-mini"),
-                AIModelOption(provider: .codex, modelID: "o3", displayName: "o3")
+                AIModelOption(provider: .codex, modelID: "gpt-5.5", displayName: "GPT-5.5"),
+                AIModelOption(provider: .codex, modelID: "gpt-5.4", displayName: "GPT-5.4"),
+                AIModelOption(provider: .codex, modelID: "gpt-5.4-mini", displayName: "GPT-5.4 Mini"),
+                AIModelOption(provider: .codex, modelID: "gpt-5.3-codex", displayName: "GPT-5.3 Codex"),
+                AIModelOption(provider: .codex, modelID: "gpt-5.3-codex-spark", displayName: "GPT-5.3 Codex Spark"),
+                AIModelOption(provider: .codex, modelID: "gpt-5.2", displayName: "GPT-5.2")
             ]
         case .claude:
             return [
