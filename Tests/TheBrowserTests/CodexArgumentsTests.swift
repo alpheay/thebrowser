@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Codex CLI arguments")
 struct CodexArgumentsTests {
-    @Test("Baseline arguments include exec, color, sandbox, workspace, output, and prompt")
+    @Test("Baseline arguments include exec, color, sandbox, --ignore-user-config, --ignore-rules, workspace, output, and the system-instruction-wrapped prompt")
     func baselineArguments() {
         let config = TestSupport.makeConfiguration(
             provider: .codex,
@@ -22,11 +22,28 @@ struct CodexArgumentsTests {
             "exec",
             "--color", "never",
             "--skip-git-repo-check",
+            "--ignore-user-config",
+            "--ignore-rules",
             "--sandbox", "read-only",
             "-C", "/work",
             "-o", "/tmp/out.txt",
-            "hi"
+            CLIArguments.codexPrompt(
+                systemPrompt: CLIArguments.effectiveSystemPrompt(for: config),
+                prompt: "hi"
+            )
         ])
+    }
+
+    @Test("Baseline always includes --ignore-user-config and --ignore-rules to stop user-level config from leaking in")
+    func ignoreFlagsAlwaysPresent() {
+        let args = CLIArguments.codexArguments(
+            for: TestSupport.makeConfiguration(provider: .codex),
+            prompt: "p",
+            outputURL: TestSupport.outputURL
+        )
+
+        #expect(args.contains("--ignore-user-config"))
+        #expect(args.contains("--ignore-rules"))
     }
 
     @Test("Sandbox value is forwarded verbatim")
@@ -87,15 +104,18 @@ struct CodexArgumentsTests {
         #expect(last!.contains("What time is it?"))
     }
 
-    @Test("Empty system prompt leaves the user prompt untouched")
-    func emptySystemPromptLeavesPromptAlone() {
+    @Test("Even when the user's system prompt is blank, the identity line is wrapped in a System instructions block (so the bare CLI default is replaced)")
+    func emptyUserSystemPromptStillWrapsIdentity() {
         let args = CLIArguments.codexArguments(
             for: TestSupport.makeConfiguration(provider: .codex, systemPrompt: "   \n\n"),
             prompt: "raw user prompt",
             outputURL: TestSupport.outputURL
         )
 
-        #expect(args.last == "raw user prompt")
+        let last = try? #require(args.last)
+        #expect(last!.contains("System instructions:"))
+        #expect(last!.contains("You are"))
+        #expect(last!.contains("raw user prompt"))
     }
 
     @Test("Extra arguments are split by newlines and blanks dropped")
@@ -135,6 +155,7 @@ struct CodexArgumentsTests {
             "--output-format",
             "--no-session-persistence",
             "--append-system-prompt",
+            "--system-prompt",
             "--tools",
             "--allowedTools",
             "--disallowedTools",

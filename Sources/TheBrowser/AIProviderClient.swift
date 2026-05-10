@@ -261,6 +261,8 @@ enum CLIArguments {
             "exec",
             "--color", "never",
             "--skip-git-repo-check",
+            "--ignore-user-config",
+            "--ignore-rules",
             "--sandbox", configuration.sandbox
         ]
 
@@ -269,7 +271,7 @@ enum CLIArguments {
         arguments.append(contentsOf: [
             "-C", configuration.workspacePath,
             "-o", outputURL.path,
-            codexPrompt(systemPrompt: configuration.systemPrompt, prompt: prompt)
+            codexPrompt(systemPrompt: effectiveSystemPrompt(for: configuration), prompt: prompt)
         ])
 
         return arguments
@@ -283,11 +285,7 @@ enum CLIArguments {
         ]
 
         appendModel(configuration.model, to: &arguments)
-
-        let systemPrompt = trimmed(configuration.systemPrompt)
-        if !systemPrompt.isEmpty {
-            arguments.append(contentsOf: ["--append-system-prompt", systemPrompt])
-        }
+        arguments.append(contentsOf: ["--system-prompt", effectiveSystemPrompt(for: configuration)])
 
         appendOptionalFlag("--tools", value: configuration.tools, to: &arguments)
         appendOptionalFlag("--allowedTools", value: configuration.allowedTools, to: &arguments)
@@ -312,6 +310,27 @@ enum CLIArguments {
 
         \(prompt)
         """
+    }
+
+    /// Builds the system prompt sent to the underlying CLI: the user's
+    /// configured prompt plus a single line identifying the active provider
+    /// and model. Replaces (not appends to) each CLI's default system prompt
+    /// so things like the user's email, current date, CLAUDE.md, and codex
+    /// user config don't leak into responses.
+    static func effectiveSystemPrompt(for configuration: AIHarnessConfiguration) -> String {
+        let userPrompt = trimmed(configuration.systemPrompt)
+        let identity = identityLine(provider: configuration.provider, model: configuration.model)
+        if userPrompt.isEmpty { return identity }
+        return "\(userPrompt)\n\n\(identity)"
+    }
+
+    static func identityLine(provider: AIProviderKind, model: String) -> String {
+        let trimmedModel = trimmed(model)
+        if trimmedModel.isEmpty {
+            return "You are running as the default \(provider.displayName) model."
+        }
+        let displayName = AIModelOption.find(provider: provider, modelID: trimmedModel)?.displayName ?? trimmedModel
+        return "You are \(displayName) (\(provider.displayName), model id: \(trimmedModel))."
     }
 
     static func appendModel(_ model: String, to arguments: inout [String]) {

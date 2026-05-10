@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Claude CLI arguments")
 struct ClaudeArgumentsTests {
-    @Test("Baseline arguments include print, json output, and the user prompt at the end")
+    @Test("Baseline arguments include print, json output, --system-prompt, and the user prompt at the end")
     func baselineArguments() {
         let args = CLIArguments.claudeArguments(
             for: TestSupport.makeConfiguration(provider: .claude),
@@ -15,6 +15,7 @@ struct ClaudeArgumentsTests {
             "--print",
             "--output-format", "json",
             "--no-session-persistence",
+            "--system-prompt", CLIArguments.effectiveSystemPrompt(for: TestSupport.makeConfiguration(provider: .claude)),
             "hi"
         ])
     }
@@ -45,19 +46,22 @@ struct ClaudeArgumentsTests {
         #expect(args[modelIndex! + 1] == "claude-opus-4-7")
     }
 
-    @Test("System prompt uses --append-system-prompt flag with trimmed value")
-    func systemPromptUsesAppendFlag() {
+    @Test("System prompt uses --system-prompt flag (replaces, never appends, the default)")
+    func systemPromptUsesReplaceFlag() {
         let args = CLIArguments.claudeArguments(
             for: TestSupport.makeConfiguration(provider: .claude, systemPrompt: "  Be terse.  "),
             prompt: "p"
         )
 
-        let flagIndex = try? #require(args.firstIndex(of: "--append-system-prompt"))
-        #expect(args[flagIndex! + 1] == "Be terse.")
+        #expect(!args.contains("--append-system-prompt"))
+        let flagIndex = try? #require(args.firstIndex(of: "--system-prompt"))
+        let value = args[flagIndex! + 1]
+        #expect(value.hasPrefix("Be terse."))
+        #expect(value.contains("You are"))
     }
 
-    @Test("System prompt flag is omitted for empty/whitespace values")
-    func systemPromptOmittedWhenBlank() {
+    @Test("--system-prompt is always present, even when the configured prompt is blank, so the identity line replaces the CLI default")
+    func systemPromptAlwaysPresent() {
         let empty = CLIArguments.claudeArguments(
             for: TestSupport.makeConfiguration(provider: .claude, systemPrompt: ""),
             prompt: "p"
@@ -67,8 +71,12 @@ struct ClaudeArgumentsTests {
             prompt: "p"
         )
 
-        #expect(!empty.contains("--append-system-prompt"))
-        #expect(!whitespace.contains("--append-system-prompt"))
+        #expect(empty.contains("--system-prompt"))
+        #expect(whitespace.contains("--system-prompt"))
+
+        // The replacement must be non-empty: at minimum it carries the identity line.
+        let emptyFlagIndex = try? #require(empty.firstIndex(of: "--system-prompt"))
+        #expect(!empty[emptyFlagIndex! + 1].isEmpty)
     }
 
     @Test("Tool flags are included only when their value is non-empty after trim",
@@ -155,7 +163,11 @@ struct ClaudeArgumentsTests {
 
         let args = CLIArguments.claudeArguments(for: config, prompt: "p")
 
-        let codexOnly = ["exec", "--sandbox", "--skip-git-repo-check", "--color", "-C", "-o"]
+        let codexOnly = [
+            "exec", "--sandbox", "--skip-git-repo-check",
+            "--ignore-user-config", "--ignore-rules",
+            "--color", "-C", "-o"
+        ]
         for flag in codexOnly {
             #expect(!args.contains(flag), "Claude should not emit \(flag)")
         }
