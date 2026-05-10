@@ -53,6 +53,9 @@ struct BrowserShellView: View {
                                 return url
                             }
                         ),
+                        onOpenArtifact: { url in
+                            model.openOrFocusArtifact(at: url)
+                        },
                         onClose: {
                             withAnimation(Motion.springSnap) { model.toggleChat() }
                         }

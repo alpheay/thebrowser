@@ -155,4 +155,18 @@ final class BrowserModel: ObservableObject {
         select(tab)
         tab.loadArtifact(at: url)
     }
+
+    /// Selects an existing tab whose loaded URL matches `fileURL`; opens a
+    /// new tab with the artifact otherwise. Used by the chat tool-chain
+    /// chip so users can re-enter an artifact without spawning duplicates.
+    /// Comparison standardizes both sides because WKWebView's KVO observer
+    /// reassigns `tab.url` to the WebKit-normalized URL after load.
+    func openOrFocusArtifact(at fileURL: URL) {
+        let target = fileURL.standardizedFileURL
+        if let existing = tabs.first(where: { $0.url?.standardizedFileURL == target }) {
+            select(existing)
+            return
+        }
+        openArtifact(at: fileURL)
+    }
 }

@@ -75,9 +75,16 @@ struct ChatSessionStoreTests {
         let (store, root) = Self.makeIsolatedStore()
         defer { Self.cleanup(root) }
 
+        let artifactURL = URL(fileURLWithPath: "/tmp/2026-05-10_12-00-00_market-brief.html")
         let chain = [
             ChatMessage.ToolInvocation(tool: "open", input: "https://youtube.com", succeeded: true),
-            ChatMessage.ToolInvocation(tool: "search", input: "best ramen brooklyn", succeeded: false)
+            ChatMessage.ToolInvocation(tool: "search", input: "best ramen brooklyn", succeeded: false),
+            ChatMessage.ToolInvocation(
+                tool: "create_artifact",
+                input: "Market Brief",
+                succeeded: true,
+                artifactURL: artifactURL
+            )
         ]
         let assistant = ChatMessage(role: .assistant, text: "Done.", toolChain: chain)
         let context = BrowserPageContext(title: "T", url: "u")
@@ -87,6 +94,42 @@ struct ChatSessionStoreTests {
         #expect(reloaded.count == 2)
         #expect(reloaded[0].toolChain.isEmpty)
         #expect(reloaded[1].toolChain == chain)
+        #expect(reloaded[1].toolChain.last?.artifactURL == artifactURL)
+    }
+
+    @Test("Sessions saved before artifactURL existed still load (field is optional)")
+    func legacyToolChainPayloadDecodes() throws {
+        let (store, root) = Self.makeIsolatedStore()
+        defer { Self.cleanup(root) }
+
+        // Hand-rolled payload mirroring the pre-artifactURL on-disk format:
+        // toolChain entries lack the new key entirely.
+        let legacyJSON = """
+        {
+          "id" : "legacy",
+          "messages" : [
+            {
+              "role" : "assistant",
+              "text" : "Done.",
+              "toolChain" : [
+                { "tool" : "create_artifact", "input" : "Market Brief", "succeeded" : true }
+              ]
+            }
+          ],
+          "pageTitle" : "T",
+          "pageURL" : "u",
+          "updatedAt" : "2026-05-10T12:00:00Z"
+        }
+        """
+        let dir = root.appendingPathComponent("legacy", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try legacyJSON.data(using: .utf8)!.write(to: dir.appendingPathComponent("messages.json"))
+
+        let reloaded = store.load(sessionID: "legacy")
+        #expect(reloaded.count == 1)
+        #expect(reloaded[0].toolChain.count == 1)
+        #expect(reloaded[0].toolChain[0].tool == "create_artifact")
+        #expect(reloaded[0].toolChain[0].artifactURL == nil)
     }
 
     @Test("clearAll is a no-op when the root does not yet exist")

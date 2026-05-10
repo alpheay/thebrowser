@@ -105,7 +105,12 @@ final class ChatSessionStore {
                     toolChain: msg.toolChain.isEmpty
                         ? nil
                         : msg.toolChain.map {
-                            ToolInvocationPayload(tool: $0.tool, input: $0.input, succeeded: $0.succeeded)
+                            ToolInvocationPayload(
+                                tool: $0.tool,
+                                input: $0.input,
+                                succeeded: $0.succeeded,
+                                artifactURL: $0.artifactURL?.absoluteString
+                            )
                         }
                 )
             }
@@ -169,7 +174,12 @@ final class ChatSessionStore {
         return payload.messages.compactMap { item in
             guard let role = ChatMessage.Role(persistedValue: item.role) else { return nil }
             let chain = (item.toolChain ?? []).map {
-                ChatMessage.ToolInvocation(tool: $0.tool, input: $0.input, succeeded: $0.succeeded)
+                ChatMessage.ToolInvocation(
+                    tool: $0.tool,
+                    input: $0.input,
+                    succeeded: $0.succeeded,
+                    artifactURL: $0.artifactURL.flatMap(URL.init(string:))
+                )
             }
             return ChatMessage(role: role, text: item.text, toolChain: chain)
         }
@@ -195,6 +205,7 @@ final class ChatSessionStore {
         var tool: String
         var input: String
         var succeeded: Bool
+        var artifactURL: String?
     }
 }
 

@@ -198,6 +198,7 @@ struct NativeBrowserToolResult: Equatable, Sendable {
     var call: NativeBrowserToolCall
     var succeeded: Bool
     var content: String
+    var artifactURL: URL? = nil
 
     var promptText: String {
         """
@@ -214,7 +215,8 @@ struct NativeBrowserToolResult: Equatable, Sendable {
         ChatMessage.ToolInvocation(
             tool: call.name.rawValue,
             input: call.rawInput,
-            succeeded: succeeded
+            succeeded: succeeded,
+            artifactURL: artifactURL
         )
     }
 }
@@ -293,7 +295,8 @@ struct NativeBrowserToolExecutor {
             return NativeBrowserToolResult(
                 call: call,
                 succeeded: true,
-                content: "Artifact saved to \(url.path) and opened in a new tab."
+                content: "Artifact saved to \(url.path) and opened in a new tab.",
+                artifactURL: url
             )
         } catch {
             return NativeBrowserToolResult(

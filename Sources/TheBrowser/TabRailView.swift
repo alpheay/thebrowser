@@ -300,6 +300,9 @@ private struct TabIcon: View {
                 Image(systemName: "sparkle")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(selected ? Palette.textPrimary : Palette.textMuted)
+            } else if tab.isArtifact {
+                ArtifactMark()
+                    .foregroundStyle(selected ? Palette.textPrimary : Palette.textMuted)
             } else {
                 Image(systemName: "circle.dotted")
                     .font(.system(size: 12, weight: .semibold))

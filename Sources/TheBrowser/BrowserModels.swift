@@ -75,6 +75,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         return url?.absoluteString ?? ""
     }
 
+    var isArtifact: Bool {
+        guard let url, url.isFileURL else { return false }
+        let artifactRoot = ArtifactStore.rootURL.standardizedFileURL.path
+        return url.standardizedFileURL.path.hasPrefix(artifactRoot)
+    }
+
     func navigate(to rawInput: String) {
         guard let destination = AddressResolver.destination(for: rawInput) else {
             return

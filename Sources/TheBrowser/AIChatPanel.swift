@@ -11,11 +11,14 @@ struct ChatMessage: Identifiable, Equatable {
     /// One link in the tool chain for an assistant turn. Captures the tool
     /// the model invoked, the argument it passed (URL or query), and whether
     /// the call succeeded — enough to render a compact provenance trail in
-    /// the chat without re-running the call.
+    /// the chat without re-running the call. `artifactURL` is set only for
+    /// successful `create_artifact` calls so the chip can re-open or focus
+    /// the saved file.
     struct ToolInvocation: Equatable, Hashable {
         var tool: String
         var input: String
         var succeeded: Bool
+        var artifactURL: URL? = nil
     }
 
     let id = UUID()
@@ -150,6 +153,7 @@ struct AIChatPanel: View {
     var context: BrowserPageContext
     var tabs: [TabManifestEntry]
     var nativeTools: NativeBrowserToolExecutor
+    var onOpenArtifact: (URL) -> Void
     var onClose: () -> Void
 
     @AppStorage(PreferenceKey.aiProvider) private var aiProvider = AIProviderKind.codex.rawValue
@@ -269,7 +273,11 @@ struct AIChatPanel: View {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
                     ForEach(viewModel.messages) { message in
-                        MessageView(message: message, showToolChain: showToolChain)
+                        MessageView(
+                            message: message,
+                            showToolChain: showToolChain,
+                            onOpenArtifact: onOpenArtifact
+                        )
                             .id(message.id)
                             .transition(.asymmetric(
                                 insertion: .opacity.combined(with: .offset(y: 8)),
@@ -598,6 +606,7 @@ private struct SuggestionChip: View {
 private struct MessageView: View {
     var message: ChatMessage
     var showToolChain: Bool
+    var onOpenArtifact: (URL) -> Void
 
     var body: some View {
         switch message.role {
@@ -606,7 +615,8 @@ private struct MessageView: View {
         case .assistant:
             AssistantMessage(
                 text: message.text,
-                toolChain: showToolChain ? message.toolChain : []
+                toolChain: showToolChain ? message.toolChain : [],
+                onOpenArtifact: onOpenArtifact
             )
         case .system:
             SystemPill(text: message.text)
@@ -675,12 +685,13 @@ private struct UserBubble: View {
 private struct AssistantMessage: View {
     var text: String
     var toolChain: [ChatMessage.ToolInvocation]
+    var onOpenArtifact: (URL) -> Void
     @State private var isHovering = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             if !toolChain.isEmpty {
-                ToolChainView(invocations: toolChain)
+                ToolChainView(invocations: toolChain, onOpenArtifact: onOpenArtifact)
             }
 
             MarkdownView(text: text)
@@ -706,6 +717,7 @@ private struct AssistantMessage: View {
 /// surrounding chrome.
 private struct ToolChainView: View {
     let invocations: [ChatMessage.ToolInvocation]
+    var onOpenArtifact: (URL) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -721,7 +733,7 @@ private struct ToolChainView: View {
                             .font(.system(size: 8, weight: .semibold))
                             .foregroundStyle(Palette.textFaint)
                     }
-                    ToolChainChip(invocation: invocation)
+                    ToolChainChip(invocation: invocation, onOpenArtifact: onOpenArtifact)
                 }
             }
         }
@@ -730,8 +742,34 @@ private struct ToolChainView: View {
 
 private struct ToolChainChip: View {
     let invocation: ChatMessage.ToolInvocation
+    var onOpenArtifact: (URL) -> Void
+
+    @State private var isHovering = false
 
     var body: some View {
+        if let artifactURL, isClickable {
+            Button {
+                onOpenArtifact(artifactURL)
+            } label: {
+                chipBody
+            }
+            .buttonStyle(.plain)
+            .onHover { hovering in
+                withAnimation(Motion.hoverFade) { isHovering = hovering }
+                if hovering {
+                    NSCursor.pointingHand.push()
+                } else {
+                    NSCursor.pop()
+                }
+            }
+            .help(helpText)
+        } else {
+            chipBody
+                .help(helpText)
+        }
+    }
+
+    private var chipBody: some View {
         HStack(spacing: 5) {
             Image(systemName: iconName)
                 .font(.system(size: 9, weight: .semibold))
@@ -752,13 +790,21 @@ private struct ToolChainChip: View {
         .padding(.horizontal, 8)
         .padding(.vertical, 4)
         .background {
-            Capsule().fill(Palette.surface)
+            Capsule().fill(isHovering ? Palette.surfaceHover : Palette.surface)
         }
         .overlay {
-            Capsule().stroke(Palette.stroke, lineWidth: 1)
+            Capsule().stroke(isHovering ? Palette.strokeStrong : Palette.stroke, lineWidth: 1)
         }
-        .help(helpText)
+        .contentShape(Capsule())
     }
+
+    private var isClickable: Bool {
+        invocation.tool == "create_artifact"
+            && invocation.succeeded
+            && invocation.artifactURL != nil
+    }
+
+    private var artifactURL: URL? { invocation.artifactURL }
 
     private var iconName: String {
         switch invocation.tool {

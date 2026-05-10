@@ -149,6 +149,29 @@ struct NativeBrowserToolsTests {
         #expect(NativeBrowserToolCall.parse(from: json) == nil)
     }
 
+    @MainActor
+    @Test("create_artifact carries the saved file URL into the tool result and invocation")
+    func createArtifactPropagatesURL() async {
+        let savedURL = URL(fileURLWithPath: "/tmp/2026-05-10_12-00-00_market-brief.html")
+        let executor = NativeBrowserToolExecutor(
+            openURL: { _ in },
+            readTabsContent: { _ in "" },
+            saveAndOpenArtifact: { _, _ in savedURL }
+        )
+
+        let result = await executor.execute(
+            NativeBrowserToolCall(
+                name: .createArtifact,
+                title: "Market Brief",
+                html: "<!doctype html><body>hi</body>"
+            )
+        )
+
+        #expect(result.succeeded)
+        #expect(result.artifactURL == savedURL)
+        #expect(result.invocation.artifactURL == savedURL)
+    }
+
     @Test("ArtifactStore slugs titles for safe filenames")
     func artifactSlug() {
         #expect(ArtifactStore.slug(from: "Market Overview!") == "market-overview")
