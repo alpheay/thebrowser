@@ -164,20 +164,20 @@ private struct SearchResultRow: View {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(result.title)
                         .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(isHovering ? Palette.textPrimary : Palette.textPrimary)
+                        .foregroundStyle(Palette.textPrimary)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
 
                     Text(result.displayURL)
                         .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(Palette.textMuted)
+                        .foregroundStyle(Palette.textPrimary)
                         .lineLimit(1)
                         .truncationMode(.middle)
 
                     if !result.snippet.isEmpty {
                         Text(result.snippet)
                             .font(.system(size: 14, weight: .regular))
-                            .foregroundStyle(Palette.textSecondary)
+                            .foregroundStyle(Palette.textPrimary)
                             .lineLimit(3)
                             .fixedSize(horizontal: false, vertical: true)
                     }
