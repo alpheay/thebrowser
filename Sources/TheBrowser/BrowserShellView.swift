@@ -10,9 +10,11 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.newTabShortcut) private var newTabShortcut = "command+t"
     @AppStorage(PreferenceKey.closeTabShortcut) private var closeTabShortcut = "command+w"
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
+    @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
 
     @State private var isPeekingRail = false
     @State private var peekDismissTask: Task<Void, Never>? = nil
+    @State private var isShowingMigrationPrompt = false
 
     private var railOverlayVisible: Bool {
         model.isTabRailVisible || isPeekingRail
@@ -99,6 +101,18 @@ struct BrowserShellView: View {
         .background(Palette.bg)
         .onChange(of: model.selectedTabID) { _, _ in
             model.updateAddressFromSelectedTab()
+        }
+        .onAppear {
+            guard !migrationPromptCompleted else { return }
+            isShowingMigrationPrompt = true
+        }
+        .sheet(isPresented: $isShowingMigrationPrompt) {
+            MigrationView(presentation: .firstRun) {
+                migrationPromptCompleted = true
+                isShowingMigrationPrompt = false
+            }
+            .frame(width: 740, height: 620)
+            .preferredColorScheme(.dark)
         }
         .animation(Motion.springSnap, value: model.isChatVisible)
         .animation(Motion.springSnap, value: model.isTabRailVisible)

@@ -6,13 +6,6 @@ struct HomePageView: View {
 
     var onNavigate: (String) -> Void
 
-    private let shortcuts: [HomeShortcut] = [
-        HomeShortcut(title: "Research", destination: "https://www.perplexity.ai"),
-        HomeShortcut(title: "Codex docs", destination: "https://developers.openai.com/codex"),
-        HomeShortcut(title: "Hacker News", destination: "https://news.ycombinator.com"),
-        HomeShortcut(title: "GitHub", destination: "https://github.com")
-    ]
-
     var body: some View {
         ZStack {
             Palette.bg
@@ -88,13 +81,30 @@ struct HomePageView: View {
     }
 
     private var shortcutRow: some View {
-        HStack(spacing: 28) {
+        HStack(spacing: 20) {
             ForEach(shortcuts) { shortcut in
                 ShortcutLink(title: shortcut.title) {
                     onNavigate(shortcut.destination)
                 }
             }
         }
+        .padding(.horizontal, 36)
+    }
+
+    private var shortcuts: [HomeShortcut] {
+        let imported = MigrationImportStore.importedBookmarks(limit: 4)
+        if !imported.isEmpty {
+            return imported.map { bookmark in
+                HomeShortcut(title: bookmark.title, destination: bookmark.url)
+            }
+        }
+
+        return [
+            HomeShortcut(title: "Research", destination: "https://www.perplexity.ai"),
+            HomeShortcut(title: "Codex docs", destination: "https://developers.openai.com/codex"),
+            HomeShortcut(title: "Hacker News", destination: "https://news.ycombinator.com"),
+            HomeShortcut(title: "GitHub", destination: "https://github.com")
+        ]
     }
 
     private func submit() {
@@ -122,6 +132,9 @@ private struct ShortcutLink: View {
             Text(title)
                 .font(.system(size: 12.5, weight: .medium))
                 .foregroundStyle(isHovering ? Palette.textPrimary : Palette.textMuted)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .frame(maxWidth: 120)
                 .animation(.easeOut(duration: 0.12), value: isHovering)
         }
         .buttonStyle(.plain)

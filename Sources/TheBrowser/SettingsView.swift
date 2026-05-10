@@ -20,135 +20,165 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.closeTabShortcut) private var closeTabShortcut = "command+w"
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
 
+    @State private var selectedTab: SettingsTab = .general
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 28) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text("Settings")
-                        .font(.system(size: 24, weight: .semibold))
-                        .foregroundStyle(Palette.textPrimary)
-                    Text("AI providers, shortcuts, and browser surfaces.")
-                        .font(.system(size: 12.5, weight: .medium))
-                        .foregroundStyle(Palette.textMuted)
-                }
+                header
+                tabSwitcher
 
-                section("Browser") {
-                    settingRow("Web fallback") {
-                        Picker("", selection: $searchEngine) {
-                            ForEach(SearchEngine.allCases) { engine in
-                                Text(engine.displayName).tag(engine.rawValue)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                    }
-                }
-
-                section("AI Harness") {
-                    settingRow("Provider") {
-                        Picker("", selection: $aiProvider) {
-                            ForEach(AIProviderKind.allCases) { provider in
-                                Text(provider.displayName).tag(provider.rawValue)
-                            }
-                        }
-                        .pickerStyle(.segmented)
-                        .labelsHidden()
-                    }
-
-                    settingRow("CLI path") {
-                        TextField("Provider CLI path", text: currentCLIPathBinding)
-                            .textFieldStyle(.plain)
-                            .padding(8)
-                            .surfaceCard(radius: 8)
-                    }
-
-                    settingRow("Workspace") {
-                        TextField("Workspace path", text: $aiWorkspacePath)
-                            .textFieldStyle(.plain)
-                            .padding(8)
-                            .surfaceCard(radius: 8)
-                    }
-
-                    settingRow("Model") {
-                        TextField("Provider default", text: $aiModel)
-                            .textFieldStyle(.plain)
-                            .padding(8)
-                            .surfaceCard(radius: 8)
-                    }
-
-                    settingRow("System prompt") {
-                        multilineEditor(text: $aiSystemPrompt, height: 108)
-                    }
-
-                    if provider == .claude {
-                        settingRow("Tools") {
-                            TextField("Bash,Edit,Read", text: $aiTools)
-                                .textFieldStyle(.plain)
-                                .padding(8)
-                                .surfaceCard(radius: 8)
-                        }
-
-                        settingRow("Auto-approve") {
-                            TextField("Bash(git *),Read,Edit", text: $aiAllowedTools)
-                                .textFieldStyle(.plain)
-                                .padding(8)
-                                .surfaceCard(radius: 8)
-                        }
-
-                        settingRow("Deny tools") {
-                            TextField("Bash(rm *),Edit", text: $aiDisallowedTools)
-                                .textFieldStyle(.plain)
-                                .padding(8)
-                                .surfaceCard(radius: 8)
-                        }
-
-                        settingRow("MCP config") {
-                            TextField("Path to MCP JSON config", text: $aiMCPConfigPath)
-                                .textFieldStyle(.plain)
-                                .padding(8)
-                                .surfaceCard(radius: 8)
-                        }
-                    }
-
-                    if provider == .codex {
-                        settingRow("Sandbox") {
-                            Picker("", selection: $codexSandbox) {
-                                Text("Read Only").tag("read-only")
-                                Text("Workspace Write").tag("workspace-write")
-                                Text("Danger Full Access").tag("danger-full-access")
-                            }
-                            .pickerStyle(.segmented)
-                            .labelsHidden()
-                        }
-                    }
-
-                    settingRow("Extra args") {
-                        multilineEditor(text: $aiExtraArguments, height: 70)
-                    }
-                }
-
-                section("Keybindings") {
-                    settingRow("Toggle AI chat") {
-                        ShortcutRecorder(value: $toggleChatShortcut)
-                    }
-                    settingRow("Toggle side tabs") {
-                        ShortcutRecorder(value: $toggleTabsShortcut)
-                    }
-                    settingRow("New tab") {
-                        ShortcutRecorder(value: $newTabShortcut)
-                    }
-                    settingRow("Close tab") {
-                        ShortcutRecorder(value: $closeTabShortcut)
-                    }
-                    settingRow("Focus address") {
-                        ShortcutRecorder(value: $focusAddressShortcut)
-                    }
+                switch selectedTab {
+                case .general:
+                    generalSettings
+                case .migration:
+                    MigrationView(presentation: .settings)
+                        .frame(minHeight: 560)
                 }
             }
             .padding(28)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background(Palette.bg)
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Settings")
+                .font(.system(size: 24, weight: .semibold))
+                .foregroundStyle(Palette.textPrimary)
+            Text("AI providers, shortcuts, migration, and browser surfaces.")
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(Palette.textMuted)
+        }
+    }
+
+    private var tabSwitcher: some View {
+        Picker("", selection: $selectedTab) {
+            ForEach(SettingsTab.allCases) { tab in
+                Label(tab.title, systemImage: tab.symbolName).tag(tab)
+            }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(width: 280)
+    }
+
+    private var generalSettings: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            section("Browser") {
+                settingRow("Web fallback") {
+                    Picker("", selection: $searchEngine) {
+                        ForEach(SearchEngine.allCases) { engine in
+                            Text(engine.displayName).tag(engine.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+            }
+
+            section("AI Harness") {
+                settingRow("Provider") {
+                    Picker("", selection: $aiProvider) {
+                        ForEach(AIProviderKind.allCases) { provider in
+                            Text(provider.displayName).tag(provider.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                }
+
+                settingRow("CLI path") {
+                    TextField("Provider CLI path", text: currentCLIPathBinding)
+                        .textFieldStyle(.plain)
+                        .padding(8)
+                        .surfaceCard(radius: 8)
+                }
+
+                settingRow("Workspace") {
+                    TextField("Workspace path", text: $aiWorkspacePath)
+                        .textFieldStyle(.plain)
+                        .padding(8)
+                        .surfaceCard(radius: 8)
+                }
+
+                settingRow("Model") {
+                    TextField("Provider default", text: $aiModel)
+                        .textFieldStyle(.plain)
+                        .padding(8)
+                        .surfaceCard(radius: 8)
+                }
+
+                settingRow("System prompt") {
+                    multilineEditor(text: $aiSystemPrompt, height: 108)
+                }
+
+                if provider == .claude {
+                    settingRow("Tools") {
+                        TextField("Bash,Edit,Read", text: $aiTools)
+                            .textFieldStyle(.plain)
+                            .padding(8)
+                            .surfaceCard(radius: 8)
+                    }
+
+                    settingRow("Auto-approve") {
+                        TextField("Bash(git *),Read,Edit", text: $aiAllowedTools)
+                            .textFieldStyle(.plain)
+                            .padding(8)
+                            .surfaceCard(radius: 8)
+                    }
+
+                    settingRow("Deny tools") {
+                        TextField("Bash(rm *),Edit", text: $aiDisallowedTools)
+                            .textFieldStyle(.plain)
+                            .padding(8)
+                            .surfaceCard(radius: 8)
+                    }
+
+                    settingRow("MCP config") {
+                        TextField("Path to MCP JSON config", text: $aiMCPConfigPath)
+                            .textFieldStyle(.plain)
+                            .padding(8)
+                            .surfaceCard(radius: 8)
+                    }
+                }
+
+                if provider == .codex {
+                    settingRow("Sandbox") {
+                        Picker("", selection: $codexSandbox) {
+                            Text("Read Only").tag("read-only")
+                            Text("Workspace Write").tag("workspace-write")
+                            Text("Danger Full Access").tag("danger-full-access")
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
+                }
+
+                settingRow("Extra args") {
+                    multilineEditor(text: $aiExtraArguments, height: 70)
+                }
+            }
+
+            section("Keybindings") {
+                settingRow("Toggle AI chat") {
+                    ShortcutRecorder(value: $toggleChatShortcut)
+                }
+                settingRow("Toggle side tabs") {
+                    ShortcutRecorder(value: $toggleTabsShortcut)
+                }
+                settingRow("New tab") {
+                    ShortcutRecorder(value: $newTabShortcut)
+                }
+                settingRow("Close tab") {
+                    ShortcutRecorder(value: $closeTabShortcut)
+                }
+                settingRow("Focus address") {
+                    ShortcutRecorder(value: $focusAddressShortcut)
+                }
+            }
+        }
     }
 
     @ViewBuilder
@@ -205,5 +235,26 @@ struct SettingsView: View {
             .frame(height: height)
             .padding(8)
             .surfaceCard(radius: 8)
+    }
+}
+
+private enum SettingsTab: String, CaseIterable, Identifiable {
+    case general
+    case migration
+
+    var id: String { rawValue }
+
+    var title: String {
+        switch self {
+        case .general: "General"
+        case .migration: "Migration"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .general: "slider.horizontal.3"
+        case .migration: "arrow.triangle.2.circlepath"
+        }
     }
 }

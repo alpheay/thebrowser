@@ -17,6 +17,10 @@ enum PreferenceKey {
     static let codexSandbox = "codex.sandbox"
     static let claudeCLIPath = "claude.cliPath"
     static let searchEngine = "browser.searchEngine"
+    static let migrationPromptCompleted = "migration.promptCompleted"
+    static let migrationImportedBookmarks = "migration.importedBookmarks"
+    static let migrationImportedHistory = "migration.importedHistory"
+    static let migrationLastResult = "migration.lastResult"
     static let toggleChatShortcut = "shortcut.toggleChat"
     static let toggleTabsShortcut = "shortcut.toggleTabs"
     static let newTabShortcut = "shortcut.newTab"
@@ -43,6 +47,7 @@ enum AppDefaults {
             PreferenceKey.codexSandbox: "read-only",
             PreferenceKey.claudeCLIPath: defaultClaudeCLIPath(),
             PreferenceKey.searchEngine: SearchEngine.defaultValue.rawValue,
+            PreferenceKey.migrationPromptCompleted: false,
             PreferenceKey.toggleChatShortcut: "command+j",
             PreferenceKey.toggleTabsShortcut: "command+b",
             PreferenceKey.newTabShortcut: "command+t",
