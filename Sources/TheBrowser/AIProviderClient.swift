@@ -152,6 +152,23 @@ struct AIProviderClient {
         }.value
     }
 
+    /// Single-shot CLI call with no chat history or session persistence. Used
+    /// by ad-hoc features (e.g. inline AI answers above search results) that
+    /// just need a prompt → response round trip. The optional system prompt
+    /// override lets callers replace the user's chat persona with a task-
+    /// specific instruction without mutating saved settings.
+    func ask(prompt: String, systemPromptOverride: String? = nil) async throws -> String {
+        var configuration = AIHarnessConfiguration.current()
+        if let systemPromptOverride {
+            configuration.systemPrompt = systemPromptOverride
+        }
+
+        let resolvedConfig = configuration
+        return try await Task.detached(priority: .userInitiated) {
+            try runProvider(configuration: resolvedConfig, prompt: prompt)
+        }.value
+    }
+
     static func prompt(
         for message: String,
         context: BrowserPageContext,
@@ -215,6 +232,11 @@ private func runProvider(configuration: AIHarnessConfiguration, prompt: String) 
     process.executableURL = URL(fileURLWithPath: configuration.cliPath)
     process.standardOutput = stdout
     process.standardError = stderr
+    let standardInputData = CLIArguments.standardInputData(for: configuration, prompt: prompt)
+    let stdin = standardInputData == nil ? nil : Pipe()
+    if let stdin {
+        process.standardInput = stdin
+    }
     process.currentDirectoryURL = URL(fileURLWithPath: configuration.workspacePath, isDirectory: true)
     process.arguments = CLIArguments.arguments(
         for: configuration,
@@ -224,6 +246,10 @@ private func runProvider(configuration: AIHarnessConfiguration, prompt: String) 
     )
 
     try process.run()
+    if let standardInputData, let stdin {
+        stdin.fileHandleForWriting.write(standardInputData)
+        try? stdin.fileHandleForWriting.close()
+    }
     process.waitUntilExit()
 
     try stdout.close()
@@ -344,6 +370,7 @@ enum CLIArguments {
     static func claudeArguments(for configuration: AIHarnessConfiguration, prompt: String) -> [String] {
         var arguments = [
             "--print",
+            "--input-format", "text",
             "--output-format", "json",
             "--no-session-persistence",
             "--bare",
@@ -361,9 +388,17 @@ enum CLIArguments {
         appendOptionalFlag("--allowedTools", value: configuration.allowedTools, to: &arguments)
         appendOptionalFlag("--disallowedTools", value: configuration.disallowedTools, to: &arguments)
         appendOptionalFlag("--mcp-config", value: configuration.mcpConfigPath, to: &arguments)
-        arguments.append(prompt)
 
         return arguments
+    }
+
+    static func standardInputData(for configuration: AIHarnessConfiguration, prompt: String) -> Data? {
+        switch configuration.provider {
+        case .claude:
+            return Data(prompt.utf8)
+        case .codex:
+            return nil
+        }
     }
 
     /// Builds the replacement prompt sent to the underlying CLI. It is exactly

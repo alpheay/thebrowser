@@ -185,6 +185,7 @@ struct CodexArgumentsTests {
 
         let claudeOnly = [
             "--print",
+            "--input-format",
             "--output-format",
             "--no-session-persistence",
             "--append-system-prompt",

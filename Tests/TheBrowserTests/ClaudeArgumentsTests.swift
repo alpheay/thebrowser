@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Claude CLI arguments")
 struct ClaudeArgumentsTests {
-    @Test("Baseline arguments replace the prompt, run bare, disable slash commands, disable default tools, and keep the user prompt last")
+    @Test("Baseline arguments replace the prompt, run bare, disable slash commands, disable default tools, and leave user input for stdin")
     func baselineArguments() {
         let args = CLIArguments.claudeArguments(
             for: TestSupport.makeConfiguration(provider: .claude),
@@ -13,6 +13,7 @@ struct ClaudeArgumentsTests {
 
         #expect(args == [
             "--print",
+            "--input-format", "text",
             "--output-format", "json",
             "--no-session-persistence",
             "--bare",
@@ -20,9 +21,9 @@ struct ClaudeArgumentsTests {
             "--strict-mcp-config",
             "--no-chrome",
             "--system-prompt", CLIArguments.effectiveSystemPrompt(for: TestSupport.makeConfiguration(provider: .claude)),
-            "--tools", "",
-            "hi"
+            "--tools", ""
         ])
+        #expect(!args.contains("hi"))
     }
 
     @Test("Model flag appears only when model is non-empty")
@@ -138,8 +139,8 @@ struct ClaudeArgumentsTests {
         #expect(args.contains("--no-chrome"))
     }
 
-    @Test("User prompt is the final positional argument")
-    func userPromptIsLast() {
+    @Test("User prompt is supplied through stdin so variadic tool parsing cannot consume it")
+    func userPromptUsesStandardInput() throws {
         let config = TestSupport.makeConfiguration(
             provider: .claude,
             model: "claude-sonnet-4-6",
@@ -152,8 +153,11 @@ struct ClaudeArgumentsTests {
         )
 
         let args = CLIArguments.claudeArguments(for: config, prompt: "FINAL_PROMPT")
+        let stdin = try #require(CLIArguments.standardInputData(for: config, prompt: "FINAL_PROMPT"))
 
-        #expect(args.last == "FINAL_PROMPT")
+        #expect(!args.contains("FINAL_PROMPT"))
+        #expect(String(data: stdin, encoding: .utf8) == "FINAL_PROMPT")
+        #expect(args.firstIndex(of: "--tools") != nil)
     }
 
     @Test("Extra arguments are split by newlines and blanks dropped, order preserved")
@@ -201,5 +205,12 @@ struct ClaudeArgumentsTests {
         )
 
         #expect(args.first == "--print")
+    }
+
+    @Test("Codex still receives the prompt as an argv argument, not stdin")
+    func codexDoesNotUseStandardInput() {
+        let config = TestSupport.makeConfiguration(provider: .codex)
+
+        #expect(CLIArguments.standardInputData(for: config, prompt: "p") == nil)
     }
 }
