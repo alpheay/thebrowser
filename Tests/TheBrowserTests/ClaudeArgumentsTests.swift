@@ -1,0 +1,174 @@
+import Foundation
+import Testing
+@testable import TheBrowser
+
+@Suite("Claude CLI arguments")
+struct ClaudeArgumentsTests {
+    @Test("Baseline arguments include print, json output, and the user prompt at the end")
+    func baselineArguments() {
+        let args = CLIArguments.claudeArguments(
+            for: TestSupport.makeConfiguration(provider: .claude),
+            prompt: "hi"
+        )
+
+        #expect(args == [
+            "--print",
+            "--output-format", "json",
+            "--no-session-persistence",
+            "hi"
+        ])
+    }
+
+    @Test("Model flag appears only when model is non-empty")
+    func modelFlagOmittedWhenEmpty() {
+        let withoutModel = CLIArguments.claudeArguments(
+            for: TestSupport.makeConfiguration(provider: .claude, model: ""),
+            prompt: "p"
+        )
+        let whitespaceModel = CLIArguments.claudeArguments(
+            for: TestSupport.makeConfiguration(provider: .claude, model: " \n "),
+            prompt: "p"
+        )
+
+        #expect(!withoutModel.contains("--model"))
+        #expect(!whitespaceModel.contains("--model"))
+    }
+
+    @Test("Model flag is present and trimmed when non-empty")
+    func modelFlagIncluded() {
+        let args = CLIArguments.claudeArguments(
+            for: TestSupport.makeConfiguration(provider: .claude, model: "  claude-opus-4-7  "),
+            prompt: "p"
+        )
+
+        let modelIndex = try? #require(args.firstIndex(of: "--model"))
+        #expect(args[modelIndex! + 1] == "claude-opus-4-7")
+    }
+
+    @Test("System prompt uses --append-system-prompt flag with trimmed value")
+    func systemPromptUsesAppendFlag() {
+        let args = CLIArguments.claudeArguments(
+            for: TestSupport.makeConfiguration(provider: .claude, systemPrompt: "  Be terse.  "),
+            prompt: "p"
+        )
+
+        let flagIndex = try? #require(args.firstIndex(of: "--append-system-prompt"))
+        #expect(args[flagIndex! + 1] == "Be terse.")
+    }
+
+    @Test("System prompt flag is omitted for empty/whitespace values")
+    func systemPromptOmittedWhenBlank() {
+        let empty = CLIArguments.claudeArguments(
+            for: TestSupport.makeConfiguration(provider: .claude, systemPrompt: ""),
+            prompt: "p"
+        )
+        let whitespace = CLIArguments.claudeArguments(
+            for: TestSupport.makeConfiguration(provider: .claude, systemPrompt: "   \n\t  "),
+            prompt: "p"
+        )
+
+        #expect(!empty.contains("--append-system-prompt"))
+        #expect(!whitespace.contains("--append-system-prompt"))
+    }
+
+    @Test("Tool flags are included only when their value is non-empty after trim",
+          arguments: [
+            ("--tools", "Read,Edit"),
+            ("--allowedTools", "Bash"),
+            ("--disallowedTools", "Write"),
+            ("--mcp-config", "/tmp/mcp.json")
+          ])
+    func toolFlagPresentWhenValueProvided(flag: String, value: String) {
+        let config = TestSupport.makeConfiguration(
+            provider: .claude,
+            tools: flag == "--tools" ? value : "",
+            allowedTools: flag == "--allowedTools" ? value : "",
+            disallowedTools: flag == "--disallowedTools" ? value : "",
+            mcpConfigPath: flag == "--mcp-config" ? value : ""
+        )
+
+        let args = CLIArguments.claudeArguments(for: config, prompt: "p")
+
+        let flagIndex = try? #require(args.firstIndex(of: flag))
+        #expect(args[flagIndex! + 1] == value)
+    }
+
+    @Test("Tool flags are omitted when empty or whitespace-only")
+    func toolFlagsOmittedWhenBlank() {
+        let allBlank = TestSupport.makeConfiguration(
+            provider: .claude,
+            tools: "",
+            allowedTools: "   ",
+            disallowedTools: "\n\t",
+            mcpConfigPath: "  "
+        )
+
+        let args = CLIArguments.claudeArguments(for: allBlank, prompt: "p")
+
+        #expect(!args.contains("--tools"))
+        #expect(!args.contains("--allowedTools"))
+        #expect(!args.contains("--disallowedTools"))
+        #expect(!args.contains("--mcp-config"))
+    }
+
+    @Test("User prompt is the final positional argument")
+    func userPromptIsLast() {
+        let config = TestSupport.makeConfiguration(
+            provider: .claude,
+            model: "claude-sonnet-4-6",
+            systemPrompt: "rules",
+            tools: "Read",
+            allowedTools: "Bash",
+            disallowedTools: "Write",
+            mcpConfigPath: "/tmp/mcp.json",
+            extraArguments: "--verbose"
+        )
+
+        let args = CLIArguments.claudeArguments(for: config, prompt: "FINAL_PROMPT")
+
+        #expect(args.last == "FINAL_PROMPT")
+    }
+
+    @Test("Extra arguments are split by newlines and blanks dropped, order preserved")
+    func extraArgumentsSplit() {
+        let extras = "--verbose\n  \n--foo bar\n\n--baz"
+        let args = CLIArguments.claudeArguments(
+            for: TestSupport.makeConfiguration(provider: .claude, extraArguments: extras),
+            prompt: "p"
+        )
+
+        let verbose = try? #require(args.firstIndex(of: "--verbose"))
+        let foo = try? #require(args.firstIndex(of: "--foo bar"))
+        let baz = try? #require(args.firstIndex(of: "--baz"))
+        #expect(verbose! < foo!)
+        #expect(foo! < baz!)
+        #expect(!args.contains(""))
+    }
+
+    @Test("Claude never emits Codex-only flags")
+    func claudeNeverEmitsCodexFlags() {
+        let config = TestSupport.makeConfiguration(
+            provider: .claude,
+            workspacePath: "/work",
+            sandbox: "workspace-write"
+        )
+
+        let args = CLIArguments.claudeArguments(for: config, prompt: "p")
+
+        let codexOnly = ["exec", "--sandbox", "--skip-git-repo-check", "--color", "-C", "-o"]
+        for flag in codexOnly {
+            #expect(!args.contains(flag), "Claude should not emit \(flag)")
+        }
+    }
+
+    @Test("Dispatch via arguments(for:) routes to claude builder")
+    func dispatchSelectsClaudeBuilder() {
+        let args = CLIArguments.arguments(
+            for: TestSupport.makeConfiguration(provider: .claude),
+            prompt: "p",
+            outputURL: TestSupport.outputURL
+        )
+
+        #expect(args.first == "--print")
+    }
+}
