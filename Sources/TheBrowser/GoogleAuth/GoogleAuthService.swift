@@ -205,11 +205,13 @@ final class GoogleAuthService {
         callbackScheme: String,
         anchor: ASPresentationAnchor
     ) async throws -> URL {
-        try await withCheckedThrowingContinuation { continuation in
-            let session = ASWebAuthenticationSession(
-                url: authURL,
-                callbackURLScheme: callbackScheme
-            ) { callbackURL, error in
+        let provider = PresentationContextProvider.shared(for: anchor)
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<URL, Error>) in
+            // Completion handler must be @Sendable so it does not inherit
+            // @MainActor isolation from the enclosing class. ASWebAuthenticationSession
+            // invokes the callback on a background XPC reply queue on macOS 26,
+            // which traps Swift's executor assertion if the closure is MainActor-isolated.
+            let handler: @Sendable (URL?, Error?) -> Void = { callbackURL, error in
                 if let error {
                     if let authError = error as? ASWebAuthenticationSessionError,
                        authError.code == .canceledLogin {
@@ -225,7 +227,12 @@ final class GoogleAuthService {
                 }
                 continuation.resume(returning: callbackURL)
             }
-            session.presentationContextProvider = PresentationContextProvider.shared(for: anchor)
+            let session = ASWebAuthenticationSession(
+                url: authURL,
+                callbackURLScheme: callbackScheme,
+                completionHandler: handler
+            )
+            session.presentationContextProvider = provider
             session.prefersEphemeralWebBrowserSession = false
             if !session.start() {
                 continuation.resume(throwing: GoogleAuthError.authorizationFailed("System refused to start the sign-in sheet."))
