@@ -116,6 +116,20 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             candidates.append(trimmed)
         }
 
+        // Leading-JSON candidate: the first balanced `{…}` at position 0 of
+        // the response. Catches the case where the model emits a tool call
+        // followed by ANYTHING (more tool calls, a prose summary, both).
+        // Without this, a response like
+        //   {"tool":"read_tabs"}\n\n{"tool":"create_artifact",...}\n\nHere's the artifact…
+        // would slip past every other detector — the whole-text check fails
+        // (multiple objects), the trailing check fails (ends with prose),
+        // and there's no fence. Picking the FIRST tool call also gives the
+        // right execution order: read_tabs runs before create_artifact in
+        // the next turn's continuation.
+        if let leading = leadingJSONObject(in: trimmed) {
+            candidates.append(leading)
+        }
+
         // Fenced tool-call block. Anchors are intentionally absent so a fence
         // can sit after prose — models often introduce the call with a
         // sentence before the fence.
@@ -139,6 +153,78 @@ struct NativeBrowserToolCall: Equatable, Sendable {
         }
 
         return candidates.removingDuplicates()
+    }
+
+    /// Returns the substring of a complete top-level JSON object that starts
+    /// the input, or `nil` if the input doesn't start with one or the JSON is
+    /// followed by same-line prose. Walks forward tracking brace depth and
+    /// JSON string literals so braces inside quoted text don't confuse the
+    /// balance.
+    ///
+    /// To distinguish a real tool call ("model emitted JSON, then a new
+    /// paragraph") from a chatty mid-sentence reference ("model wrote
+    /// `{tool:"open",...}` — let me know if that's right"), the JSON must be
+    /// the entire response *or* be followed by a newline before any further
+    /// non-whitespace content. Same-line continuation reads as prose, not a
+    /// tool call.
+    private static func leadingJSONObject(in text: String) -> String? {
+        guard text.hasPrefix("{") else { return nil }
+
+        var depth = 0
+        var inString = false
+        var escaped = false
+
+        for index in text.indices {
+            let character = text[index]
+
+            if escaped {
+                escaped = false
+                continue
+            }
+            if inString {
+                if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+                continue
+            }
+            if character == "\"" {
+                inString = true
+                continue
+            }
+            if character == "{" {
+                depth += 1
+            } else if character == "}" {
+                depth -= 1
+                if depth == 0 {
+                    let endIndex = text.index(after: index)
+                    let candidate = String(text[text.startIndex..<endIndex])
+                    let remainder = text[endIndex..<text.endIndex]
+                    return remainderIsParagraphBreakOrEmpty(remainder) ? candidate : nil
+                }
+                if depth < 0 {
+                    return nil
+                }
+            }
+        }
+        return nil
+    }
+
+    /// True when `remainder` is empty, all whitespace, or contains a newline
+    /// before its first non-whitespace character. False when prose continues
+    /// on the same line as the preceding token (which signals conversation,
+    /// not a structured tool call).
+    private static func remainderIsParagraphBreakOrEmpty(_ remainder: Substring) -> Bool {
+        for character in remainder {
+            if character.isNewline {
+                return true
+            }
+            if !character.isWhitespace {
+                return false
+            }
+        }
+        return true
     }
 
     /// Returns the substring of a complete top-level JSON object that ends
@@ -325,7 +411,13 @@ enum NativeBrowserToolPrompt {
     {"tool":"read_tabs","indices":[1,3]}
     {"tool":"create_artifact","title":"Market Overview","html":"<!doctype html><html>…</html>"}
 
-    Use a tool only when it helps the user's request. If the user asks you to open or navigate to a site, use the open tool instead of saying you will do it. If no tool is needed, answer normally. When describing your tools to the user, use words instead of tool-call JSON examples. Never say a browser action happened unless a native tool result in this conversation says it succeeded. Do not claim you can click buttons, fill forms, manage bookmarks/history/settings, or inspect hidden page state.
+    CRITICAL tool-call rules — follow these or the dispatcher will treat your tool call as plain chat text and the action will silently fail:
+    1. EXACTLY ONE tool call per response. Never emit two JSON objects in the same response. If you need read_tabs THEN create_artifact, emit only the read_tabs call now and wait for the result before emitting create_artifact in your next turn.
+    2. ZERO prose in a tool-call response. No leading sentence, no trailing summary, no explanation, no markdown headings. The entire response must be the bare JSON object.
+    3. The response MUST start with `{` and END with `}`. Anything else is treated as a normal chat answer.
+    4. When you need to describe what a tool does to the user, use plain English. Do not paste JSON examples into chat answers.
+
+    Use a tool only when it helps the user's request. If the user asks you to open or navigate to a site, use the open tool instead of saying you will do it. If no tool is needed, answer normally. Never say a browser action happened unless a native tool result in this conversation says it succeeded. Do not claim you can click buttons, fill forms, manage bookmarks/history/settings, or inspect hidden page state.
 
     create_artifact design language — every artifact MUST follow this style:
     - Background #0a0a0a, text in pure white and warm grays only. NO other colors. No blue links, no green success badges, no red warnings.

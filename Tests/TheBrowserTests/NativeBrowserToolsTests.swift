@@ -172,6 +172,54 @@ struct NativeBrowserToolsTests {
         #expect(result.invocation.artifactURL == savedURL)
     }
 
+    @Test("Detects a leading tool call when followed by another tool call and prose")
+    func leadingToolCallWithChainedFollowup() throws {
+        // Reproduces the bug from the screenshot: model emits read_tabs JSON,
+        // then create_artifact JSON, then a prose summary — all in one
+        // response. Without leading-JSON detection the whole reply was shown
+        // as chat text and no tool ran.
+        let response = #"""
+        {"tool":"read_tabs","indices":[1]}
+
+        {"tool":"create_artifact","title":"Georgia Tech","html":"<!doctype html><body>hi</body>"}
+
+        Here's the artifact — a full editorial brief on Georgia Tech.
+        """#
+
+        let call = try #require(NativeBrowserToolCall.parse(from: response))
+        // Must pick the FIRST tool (read_tabs), not the second, so the model
+        // gets the tab content before being asked to generate the artifact.
+        #expect(call.name == .readTabs)
+        #expect(call.indices == [1])
+    }
+
+    @Test("Detects a leading tool call when followed by trailing prose")
+    func leadingToolCallWithTrailingProse() throws {
+        let response = #"""
+        {"tool":"open","url":"https://example.com"}
+
+        Opening that for you now.
+        """#
+
+        let call = try #require(NativeBrowserToolCall.parse(from: response))
+        #expect(call.name == .open)
+        #expect(call.url == "https://example.com")
+    }
+
+    @Test("Picks the leading tool call when two tool calls sit back-to-back")
+    func leadingToolCallBeatsTrailingToolCall() throws {
+        // No prose at all — just two tool calls. We want the FIRST one to run
+        // first (read_tabs feeds the model the data it needs before the next
+        // turn's create_artifact).
+        let response = #"""
+        {"tool":"read_tabs"}
+        {"tool":"create_artifact","title":"x","html":"<html></html>"}
+        """#
+
+        let call = try #require(NativeBrowserToolCall.parse(from: response))
+        #expect(call.name == .readTabs)
+    }
+
     @Test("ArtifactStore slugs titles for safe filenames")
     func artifactSlug() {
         #expect(ArtifactStore.slug(from: "Market Overview!") == "market-overview")
