@@ -11,9 +11,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var isLoading = false
     @Published var estimatedProgress = 0.0
     @Published var isHome = true
+    @Published var searchPage: BrowserSearchPage?
+    @Published var searchReloadToken = 0
 
     let webView: WKWebView
     private var observations: [NSKeyValueObservation] = []
+    private var searchBackStack: [BrowserSearchPage] = []
 
     override init() {
         let configuration = WKWebViewConfiguration()
@@ -33,6 +36,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             return "New Space"
         }
 
+        if let searchPage {
+            return searchPage.query
+        }
+
         if !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return title
         }
@@ -45,22 +52,53 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             return ""
         }
 
+        if let searchPage {
+            return searchPage.query
+        }
+
         return url?.absoluteString ?? ""
     }
 
     func navigate(to rawInput: String) {
-        guard let target = AddressResolver.url(for: rawInput) else {
+        guard let destination = AddressResolver.destination(for: rawInput) else {
             return
         }
 
-        isHome = false
-        url = target
-        title = target.host(percentEncoded: false) ?? target.absoluteString
-        webView.load(URLRequest(url: target))
+        switch destination {
+        case .url(let target):
+            if let searchPage {
+                searchBackStack.append(searchPage)
+            } else {
+                searchBackStack.removeAll()
+            }
+
+            searchPage = nil
+            isHome = false
+            url = target
+            title = target.host(percentEncoded: false) ?? target.absoluteString
+            webView.load(URLRequest(url: target))
+        case .search(let query):
+            if let searchPage {
+                searchBackStack.append(searchPage)
+            } else {
+                searchBackStack.removeAll()
+            }
+
+            webView.stopLoading()
+            searchPage = BrowserSearchPage(query: query)
+            searchReloadToken = 0
+            isHome = false
+            isLoading = false
+            estimatedProgress = 1
+            url = nil
+            title = query
+        }
     }
 
     func goHome() {
         webView.stopLoading()
+        searchBackStack.removeAll()
+        searchPage = nil
         isHome = true
         isLoading = false
         estimatedProgress = 0
@@ -71,6 +109,14 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     func goBack() {
         if webView.canGoBack {
             webView.goBack()
+        } else if let previousSearchPage = searchBackStack.popLast() {
+            webView.stopLoading()
+            searchPage = previousSearchPage
+            isHome = false
+            isLoading = false
+            estimatedProgress = 1
+            url = nil
+            title = previousSearchPage.query
         }
     }
 
@@ -82,6 +128,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     func reload() {
         if isHome {
+            return
+        }
+
+        if searchPage != nil {
+            searchReloadToken &+= 1
             return
         }
 
@@ -158,25 +209,36 @@ extension BrowserTab: WKNavigationDelegate {
 }
 
 enum AddressResolver {
-    static func url(for input: String) -> URL? {
+    static func destination(for input: String) -> AddressDestination? {
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return nil
         }
 
         if let url = URL(string: trimmed), url.scheme != nil {
-            return url
+            return .url(url)
         }
 
         if looksLikeLocalAddress(trimmed), let url = URL(string: "http://\(trimmed)") {
-            return url
+            return .url(url)
         }
 
         if looksLikeDomain(trimmed), let url = URL(string: "https://\(trimmed)") {
-            return url
+            return .url(url)
         }
 
-        return SearchEngine.selected.searchURL(for: trimmed)
+        return .search(trimmed)
+    }
+
+    static func url(for input: String) -> URL? {
+        switch destination(for: input) {
+        case .url(let url):
+            return url
+        case .search(let query):
+            return SearchEngine.selected.searchURL(for: query)
+        case nil:
+            return nil
+        }
     }
 
     private static func looksLikeDomain(_ value: String) -> Bool {
@@ -191,6 +253,16 @@ enum AddressResolver {
     private static func containsWhitespace(_ value: String) -> Bool {
         value.rangeOfCharacter(from: .whitespacesAndNewlines) != nil
     }
+}
+
+enum AddressDestination {
+    case url(URL)
+    case search(String)
+}
+
+struct BrowserSearchPage: Equatable, Identifiable {
+    let id = UUID()
+    var query: String
 }
 
 struct BrowserPageContext: Sendable {

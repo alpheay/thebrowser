@@ -74,9 +74,12 @@ struct KeyboardShortcutHost: NSViewRepresentable {
                 return true
             }
 
+            // Only suppress for native text inputs (address bar, chat composer).
+            // Web views are intentionally NOT treated as typing targets so
+            // browser-level shortcuts like ⌘B / ⌘J / ⌘L override page content.
             var responderMirror: NSResponder? = responder
             while let current = responderMirror {
-                if current is NSTextField || current is WKWebView {
+                if current is NSTextField {
                     return true
                 }
                 responderMirror = current.nextResponder

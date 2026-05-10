@@ -1,12 +1,12 @@
 import Foundation
 
 enum SearchEngine: String, CaseIterable, Identifiable {
-    case duckDuckGo = "duckduckgo"
     case brave = "brave"
+    case duckDuckGo = "duckduckgo"
     case bing = "bing"
     case google = "google"
 
-    static let defaultValue: SearchEngine = .duckDuckGo
+    static let defaultValue: SearchEngine = .brave
 
     var id: String { rawValue }
 

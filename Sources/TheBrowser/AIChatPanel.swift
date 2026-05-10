@@ -62,7 +62,6 @@ struct AIChatPanel: View {
         .frame(width: Metrics.chatWidth)
         .frame(maxHeight: .infinity)
         .frostedRail()
-        .hairline(.leading)
     }
 
     // MARK: - Header

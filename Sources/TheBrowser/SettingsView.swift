@@ -25,7 +25,7 @@ struct SettingsView: View {
                 }
 
                 section("Browser") {
-                    settingRow("Search engine") {
+                    settingRow("Web fallback") {
                         Picker("", selection: $searchEngine) {
                             ForEach(SearchEngine.allCases) { engine in
                                 Text(engine.displayName).tag(engine.rawValue)

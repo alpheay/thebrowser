@@ -155,13 +155,9 @@ extension View {
     }
 
     func frostedRail() -> some View {
-        background {
-            ZStack {
-                Rectangle().fill(.regularMaterial)
-                Rectangle().fill(Color.black.opacity(0.42))
-            }
-            .environment(\.colorScheme, .dark)
-        }
+        // Side panels share the same plate as the window chrome so they melt
+        // seamlessly into the toolbar — no tonal step, no edge.
+        background(Palette.bg)
     }
 
     func hairline(_ edge: Edge) -> some View {

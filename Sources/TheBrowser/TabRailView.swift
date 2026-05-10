@@ -35,7 +35,6 @@ struct TabRailView: View {
         .frame(width: Metrics.railWidth)
         .frame(maxHeight: .infinity)
         .frostedRail()
-        .hairline(.trailing)
     }
 
     private var header: some View {
@@ -70,9 +69,6 @@ struct TabRailView: View {
 
     private var footer: some View {
         VStack(spacing: 0) {
-            Rectangle()
-                .fill(Palette.stroke)
-                .frame(height: 1)
             HStack(spacing: 8) {
                 KeycapHint(text: "⌘B")
                 Text("hide")

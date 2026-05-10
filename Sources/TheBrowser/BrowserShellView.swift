@@ -120,6 +120,15 @@ struct BrowserShellView: View {
                         model.addressDraft = destination
                         model.navigateSelected(to: destination)
                     }
+                } else if let searchPage = model.selectedTab.searchPage {
+                    SearchResultsView(
+                        searchPage: searchPage,
+                        reloadToken: model.selectedTab.searchReloadToken,
+                        onOpen: { url in
+                            model.addressDraft = url.absoluteString
+                            model.navigateSelected(to: url.absoluteString)
+                        }
+                    )
                 } else {
                     BrowserWebView(tab: model.selectedTab)
                         .id(model.selectedTab.id)
