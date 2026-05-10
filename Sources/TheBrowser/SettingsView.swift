@@ -2,7 +2,6 @@ import SwiftUI
 
 struct SettingsView: View {
     @AppStorage(PreferenceKey.aiProvider) private var aiProvider = AIProviderKind.codex.rawValue
-    @AppStorage(PreferenceKey.aiWorkspacePath) private var aiWorkspacePath = AppDefaults.defaultWorkspacePath()
     @AppStorage(PreferenceKey.aiModel) private var aiModel = ""
     @AppStorage(PreferenceKey.aiSystemPrompt) private var aiSystemPrompt = AppDefaults.defaultAISystemPrompt
     @AppStorage(PreferenceKey.aiTools) private var aiTools = ""
@@ -21,6 +20,7 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
 
     @State private var selectedTab: SettingsTab = .general
+    @State private var showClearAllConfirm = false
 
     var body: some View {
         HStack(spacing: 0) {
@@ -103,6 +103,33 @@ struct SettingsView: View {
                     SegmentPicker(selection: $searchEngine, options: SearchEngine.allCases.map { ($0.rawValue, $0.displayName) })
                 }
             }
+
+            section("Data") {
+                row(label: "Chat history", help: "Removes every stored conversation from disk.") {
+                    HStack {
+                        Spacer()
+                        DestructiveButton(title: "Clear all") {
+                            showClearAllConfirm = true
+                        }
+                    }
+                }
+            }
+        }
+        .alert("Clear all chat history?", isPresented: $showClearAllConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear all", role: .destructive) { clearAllChatSessions() }
+        } message: {
+            Text("This permanently deletes every saved conversation under ~/.thebrowser/sessions. Open chats stay until you start a new conversation.")
+        }
+    }
+
+    private func clearAllChatSessions() {
+        let fileManager = FileManager.default
+        let root = ChatSessionStore.rootURL
+        guard fileManager.fileExists(atPath: root.path) else { return }
+        guard let contents = try? fileManager.contentsOfDirectory(at: root, includingPropertiesForKeys: nil) else { return }
+        for url in contents {
+            try? fileManager.removeItem(at: url)
         }
     }
 
@@ -119,10 +146,6 @@ struct SettingsView: View {
 
                 row(label: "CLI path") {
                     MonoTextField(text: currentCLIPathBinding, placeholder: "Provider CLI path")
-                }
-
-                row(label: "Workspace") {
-                    MonoTextField(text: $aiWorkspacePath, placeholder: "Workspace path")
                 }
             }
 
@@ -390,6 +413,39 @@ private struct SegmentChip: View {
         if selected { return Color.white }
         if isHovering { return Color.white.opacity(0.06) }
         return Color.clear
+    }
+}
+
+private struct DestructiveButton: View {
+    let title: String
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Text(title)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color(red: 1.0, green: 0.45, blue: 0.45))
+                .padding(.horizontal, 14)
+                .frame(height: 28)
+                .background {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(backgroundFill)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .stroke(Color(red: 0.85, green: 0.3, blue: 0.3).opacity(isHovering ? 0.55 : 0.35), lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .animation(Motion.hoverFade, value: isHovering)
+    }
+
+    private var backgroundFill: Color {
+        if isHovering { return Color(red: 0.7, green: 0.2, blue: 0.2).opacity(0.18) }
+        return Color(red: 0.7, green: 0.2, blue: 0.2).opacity(0.10)
     }
 }
 

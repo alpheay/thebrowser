@@ -35,19 +35,20 @@ struct ModelPickerPopover: View {
         VStack(spacing: 4) {
             railButton(
                 isSelected: filter == .favorites,
-                systemName: filter == .favorites ? "star.fill" : "star",
-                accessibilityLabel: "Favorites"
+                accessibilityLabel: "Favorites",
+                action: { filter = .favorites }
             ) {
-                filter = .favorites
+                Image(systemName: filter == .favorites ? "star.fill" : "star")
+                    .font(.system(size: 13, weight: .semibold))
             }
 
             ForEach(AIProviderKind.allCases) { provider in
                 railButton(
                     isSelected: filter == .provider(provider),
-                    systemName: provider.symbolName,
-                    accessibilityLabel: provider.displayName
+                    accessibilityLabel: provider.displayName,
+                    action: { filter = .provider(provider) }
                 ) {
-                    filter = .provider(provider)
+                    ProviderMark(provider: provider, size: 14)
                 }
             }
 
@@ -66,15 +67,14 @@ struct ModelPickerPopover: View {
     }
 
     @ViewBuilder
-    private func railButton(
+    private func railButton<Content: View>(
         isSelected: Bool,
-        systemName: String,
         accessibilityLabel: String,
-        action: @escaping () -> Void
+        action: @escaping () -> Void,
+        @ViewBuilder content: () -> Content
     ) -> some View {
         Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 13, weight: .semibold))
+            content()
                 .foregroundStyle(isSelected ? Palette.text : Palette.textSecondary)
                 .frame(width: 38, height: 36)
                 .background {
@@ -261,8 +261,7 @@ private struct ModelPickerRow: View {
                     .lineLimit(1)
 
                 HStack(spacing: 4) {
-                    Image(systemName: model.provider.symbolName)
-                        .font(.system(size: 9, weight: .semibold))
+                    ProviderMark(provider: model.provider, size: 9)
                     Text(model.provider.displayName)
                         .font(.system(size: 10.5, weight: .medium))
                 }

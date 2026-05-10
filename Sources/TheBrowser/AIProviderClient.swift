@@ -24,15 +24,6 @@ enum AIProviderKind: String, CaseIterable, Identifiable, Sendable {
         }
     }
 
-    var symbolName: String {
-        switch self {
-        case .codex:
-            return "chevron.left.forwardslash.chevron.right"
-        case .claude:
-            return "asterisk"
-        }
-    }
-
     var availableModels: [AIModelOption] {
         switch self {
         case .codex:
@@ -143,24 +134,52 @@ struct AIHarnessConfiguration: Sendable {
 }
 
 struct AIProviderClient {
-    func ask(_ message: String, context: BrowserPageContext) async throws -> String {
-        let configuration = AIHarnessConfiguration.current()
-        let prompt = Self.prompt(for: message, context: context)
+    func ask(
+        _ message: String,
+        context: BrowserPageContext,
+        sessionDirectory: URL,
+        history: [ChatMessage] = []
+    ) async throws -> String {
+        var configuration = AIHarnessConfiguration.current()
+        // Force the CLI to run inside the session directory so each chat is
+        // isolated and persistent under ~/.thebrowser/sessions/<id>.
+        configuration.workspacePath = sessionDirectory.path
+        let prompt = Self.prompt(for: message, context: context, history: history)
 
+        let resolvedConfig = configuration
         return try await Task.detached(priority: .userInitiated) {
-            try runProvider(configuration: configuration, prompt: prompt)
+            try runProvider(configuration: resolvedConfig, prompt: prompt)
         }.value
     }
 
-    static func prompt(for message: String, context: BrowserPageContext) -> String {
+    static func prompt(
+        for message: String,
+        context: BrowserPageContext,
+        history: [ChatMessage] = []
+    ) -> String {
         let pageURL = context.url.isEmpty ? "Home page" : context.url
+
+        // Conversation history excludes the user message just appended (it
+        // becomes the explicit "User request" below) and any system rows
+        // (those are local error notices, not part of the dialogue).
+        let priorTurns = history.dropLast().filter { $0.role != .system }
+
+        var transcript = ""
+        if !priorTurns.isEmpty {
+            transcript = "Conversation so far:\n"
+            for msg in priorTurns {
+                let label = msg.role == .user ? "User" : "Assistant"
+                transcript += "\(label): \(msg.text)\n"
+            }
+            transcript += "\n"
+        }
 
         return """
         Current tab:
         Title: \(context.title)
         URL: \(pageURL)
 
-        User request:
+        \(transcript)User request:
         \(message)
         """
     }

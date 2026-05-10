@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 struct ChatMessage: Identifiable, Equatable {
@@ -17,8 +18,20 @@ final class ChatViewModel: ObservableObject {
     @Published var messages: [ChatMessage] = []
     @Published var draft = ""
     @Published var isSending = false
+    @Published private(set) var sessionID: String
 
     private let client = AIProviderClient()
+    private let store = ChatSessionStore.shared
+
+    init() {
+        self.sessionID = ChatSessionStore.shared.newSessionID()
+    }
+
+    /// The directory that backs the current session. Persisted at
+    /// ``~/.thebrowser/sessions/<sessionID>``.
+    var sessionDirectory: URL {
+        store.directory(for: sessionID)
+    }
 
     func send(context: BrowserPageContext) {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -29,10 +42,19 @@ final class ChatViewModel: ObservableObject {
         messages.append(ChatMessage(role: .user, text: trimmed))
         draft = ""
         isSending = true
+        persist(context: context)
+
+        let directory = sessionDirectory
+        let history = messages
 
         Task {
             do {
-                let response = try await client.ask(trimmed, context: context)
+                let response = try await client.ask(
+                    trimmed,
+                    context: context,
+                    sessionDirectory: directory,
+                    history: history
+                )
                 messages.append(ChatMessage(role: .assistant, text: response))
             } catch {
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
@@ -40,7 +62,18 @@ final class ChatViewModel: ObservableObject {
             }
 
             isSending = false
+            persist(context: context)
         }
+    }
+
+    func clear() {
+        messages.removeAll()
+        draft = ""
+        sessionID = store.newSessionID()
+    }
+
+    private func persist(context: BrowserPageContext) {
+        store.save(messages: messages, sessionID: sessionID, pageContext: context)
     }
 }
 
@@ -53,11 +86,12 @@ struct AIChatPanel: View {
     @AppStorage(PreferenceKey.aiModel) private var aiModel = ""
     @FocusState private var composerFocused: Bool
     @State private var showingModelPicker = false
+    @State private var modelChipHovering = false
 
     var body: some View {
         VStack(spacing: 0) {
             header
-            messageList
+            content
             composer
         }
         .frame(width: Metrics.chatWidth)
@@ -69,39 +103,80 @@ struct AIChatPanel: View {
 
     private var header: some View {
         HStack(spacing: 10) {
-            Image(systemName: "sparkles")
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Palette.textPrimary)
-            Text(provider.displayName)
-                .font(Typography.title)
-                .foregroundStyle(Palette.textPrimary)
+            ZStack {
+                Circle()
+                    .fill(Palette.surface)
+                Circle()
+                    .stroke(Palette.stroke, lineWidth: 1)
+                ProviderMark(provider: provider, size: 13)
+                    .foregroundStyle(Palette.textPrimary)
+            }
+            .frame(width: 26, height: 26)
 
-            if !context.title.isEmpty || !context.url.isEmpty {
-                Text("·")
-                    .font(Typography.caption)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text("Chat")
+                        .font(.system(size: 13.5, weight: .semibold))
+                        .foregroundStyle(Palette.textPrimary)
+                    if viewModel.isSending {
+                        Circle()
+                            .fill(Palette.accent)
+                            .frame(width: 5, height: 5)
+                            .modifier(BreathingPulse())
+                            .transition(.opacity.combined(with: .scale))
+                    }
+                }
+                Text(provider.displayName.uppercased())
+                    .font(.system(size: 9, weight: .semibold))
+                    .tracking(1.2)
                     .foregroundStyle(Palette.textFaint)
-                Text(context.title.isEmpty ? "Home" : context.title)
-                    .font(Typography.body)
-                    .foregroundStyle(Palette.textSecondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
             }
 
             Spacer(minLength: 8)
 
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 11, weight: .semibold))
+            HeaderIconButton(systemName: "square.and.pencil", help: "New conversation") {
+                withAnimation(Motion.springSoft) {
+                    viewModel.clear()
+                }
             }
-            .buttonStyle(IconButtonStyle(size: 26))
-            .help("Hide chat")
+            .opacity(viewModel.messages.isEmpty ? 0.35 : 1.0)
+            .disabled(viewModel.messages.isEmpty)
+            .animation(.easeOut(duration: 0.15), value: viewModel.messages.isEmpty)
+
+            HeaderIconButton(systemName: "xmark", help: "Hide chat", action: onClose)
         }
-        .padding(.horizontal, 14)
-        .frame(height: 48)
-        .hairline(.bottom)
+        .padding(.horizontal, 12)
+        .frame(height: 50)
+        .overlay(alignment: .bottom) {
+            LinearGradient(
+                colors: [Color.clear, Palette.stroke, Palette.stroke, Color.clear],
+                startPoint: .leading,
+                endPoint: .trailing
+            )
+            .frame(height: 1)
+        }
+        .animation(Motion.springSnap, value: viewModel.isSending)
     }
 
-    // MARK: - Messages
+    // MARK: - Content (messages or empty state)
+
+    @ViewBuilder
+    private var content: some View {
+        if viewModel.messages.isEmpty && !viewModel.isSending {
+            EmptyChatState(
+                providerName: provider.displayName,
+                context: context,
+                onSuggestion: { text in
+                    viewModel.draft = text
+                    composerFocused = true
+                }
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .transition(.opacity)
+        } else {
+            messageList
+        }
+    }
 
     private var messageList: some View {
         ScrollViewReader { proxy in
@@ -110,16 +185,25 @@ struct AIChatPanel: View {
                     ForEach(viewModel.messages) { message in
                         MessageView(message: message)
                             .id(message.id)
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .offset(y: 8)),
+                                removal: .opacity
+                            ))
                     }
 
                     if viewModel.isSending {
-                        ThinkingPulse()
+                        ThinkingShimmer()
                             .id("thinking")
+                            .transition(.opacity)
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.vertical, 16)
+                .padding(.vertical, 18)
+                .animation(Motion.springSoft, value: viewModel.messages.count)
+                .animation(Motion.springSoft, value: viewModel.isSending)
             }
+            .scrollIndicators(.hidden)
+            .mask(scrollFadeMask)
             .onChange(of: viewModel.messages.count) { _, _ in
                 if let lastID = viewModel.messages.last?.id {
                     withAnimation(Motion.springSoft) {
@@ -137,11 +221,29 @@ struct AIChatPanel: View {
         }
     }
 
+    private var scrollFadeMask: some View {
+        VStack(spacing: 0) {
+            LinearGradient(
+                colors: [Color.black.opacity(0), Color.black],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 18)
+            Color.black
+            LinearGradient(
+                colors: [Color.black, Color.black.opacity(0)],
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .frame(height: 8)
+        }
+    }
+
     // MARK: - Composer
 
     private var composer: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 if !context.title.isEmpty || !context.url.isEmpty {
                     contextPill
                 }
@@ -149,49 +251,21 @@ struct AIChatPanel: View {
                 modelPickerChip
             }
 
-            HStack(alignment: .bottom, spacing: 10) {
-                ZStack(alignment: .topLeading) {
-                    if viewModel.draft.isEmpty {
-                        Text("Ask \(provider.displayName) anything")
-                            .font(.system(size: 13.5))
-                            .foregroundStyle(Palette.textMuted)
-                            .padding(.horizontal, 14)
-                            .padding(.vertical, 12)
-                            .allowsHitTesting(false)
-                    }
-                    TextEditor(text: $viewModel.draft)
-                        .focused($composerFocused)
-                        .scrollContentBackground(.hidden)
-                        .font(.system(size: 13.5))
-                        .foregroundStyle(Palette.textPrimary)
-                        .padding(.horizontal, 10)
-                        .padding(.vertical, 7)
-                        .frame(minHeight: 38, maxHeight: 160)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .onSubmit {
-                            viewModel.send(context: context)
-                        }
-                }
-                .background {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(Palette.surface)
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .stroke(composerFocused ? Color.white.opacity(0.16) : Palette.stroke, lineWidth: 1)
-                        .animation(.easeOut(duration: 0.12), value: composerFocused)
-                }
-
+            ComposerField(
+                draft: $viewModel.draft,
+                focused: $composerFocused,
+                placeholder: "Ask \(provider.displayName)…",
+                onSubmit: { viewModel.send(context: context) }
+            ) {
                 SendButton(
                     enabled: !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                     sending: viewModel.isSending,
                     action: { viewModel.send(context: context) }
                 )
-                .padding(.bottom, 4)
             }
         }
         .padding(14)
-        .hairline(.top)
+        .padding(.bottom, 4)
     }
 
     private var provider: AIProviderKind {
@@ -202,20 +276,16 @@ struct AIChatPanel: View {
         HStack(spacing: 6) {
             Image(systemName: "link")
                 .font(.system(size: 9, weight: .semibold))
-            Text("Context: \(context.title.isEmpty ? "Home" : context.title)")
+            Text(context.title.isEmpty ? "Home" : context.title)
                 .font(.system(size: 10.5, weight: .medium))
                 .lineLimit(1)
                 .truncationMode(.middle)
         }
-        .foregroundStyle(Palette.textMuted)
-        .padding(.horizontal, 8)
+        .foregroundStyle(Palette.textSecondary)
+        .padding(.horizontal, 9)
         .padding(.vertical, 4)
-        .background {
-            Capsule().fill(Palette.surface)
-        }
-        .overlay {
-            Capsule().stroke(Palette.stroke, lineWidth: 1)
-        }
+        .background(Capsule().fill(Palette.surface))
+        .overlay(Capsule().stroke(Palette.stroke, lineWidth: 1))
     }
 
     private var modelPickerChip: some View {
@@ -223,8 +293,7 @@ struct AIChatPanel: View {
             showingModelPicker.toggle()
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: provider.symbolName)
-                    .font(.system(size: 9, weight: .semibold))
+                ProviderMark(provider: provider, size: 10)
                 Text(modelChipLabel)
                     .font(.system(size: 10.5, weight: .medium))
                     .lineLimit(1)
@@ -233,16 +302,15 @@ struct AIChatPanel: View {
                     .foregroundStyle(Palette.textMuted)
             }
             .foregroundStyle(Palette.textSecondary)
-            .padding(.horizontal, 8)
+            .padding(.horizontal, 9)
             .padding(.vertical, 4)
-            .background {
-                Capsule().fill(Palette.surface)
-            }
-            .overlay {
-                Capsule().stroke(Palette.stroke, lineWidth: 1)
-            }
+            .background(Capsule().fill(modelChipHovering ? Palette.surfaceHover : Palette.surface))
+            .overlay(Capsule().stroke(modelChipHovering ? Palette.strokeStrong : Palette.stroke, lineWidth: 1))
         }
         .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(Motion.hoverFade) { modelChipHovering = hovering }
+        }
         .help("Choose model")
         .popover(isPresented: $showingModelPicker, arrowEdge: .bottom) {
             ModelPickerPopover {
@@ -259,6 +327,217 @@ struct AIChatPanel: View {
             return aiModel
         }
         return "Default"
+    }
+}
+
+// MARK: - Header icon button
+
+private struct HeaderIconButton: View {
+    let systemName: String
+    let help: String
+    var action: () -> Void = {}
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: systemName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(isHovering ? Palette.text : Palette.textSecondary)
+                .frame(width: 26, height: 26)
+                .background {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(isHovering ? Palette.surfaceHover : Color.clear)
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(Motion.hoverFade) { isHovering = hovering }
+        }
+        .help(help)
+    }
+}
+
+// MARK: - Composer field
+
+private struct ComposerField<Trailing: View>: View {
+    @Binding var draft: String
+    var focused: FocusState<Bool>.Binding
+    var placeholder: String
+    var onSubmit: () -> Void
+    @ViewBuilder var trailingButton: () -> Trailing
+
+    var body: some View {
+        HStack(alignment: .bottom, spacing: 8) {
+            ZStack(alignment: .topLeading) {
+                if draft.isEmpty {
+                    Text(placeholder)
+                        .font(.system(size: 13.5))
+                        .foregroundStyle(Palette.textMuted)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                        .allowsHitTesting(false)
+                }
+                TextEditor(text: $draft)
+                    .focused(focused)
+                    .scrollContentBackground(.hidden)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(Palette.textPrimary)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 6)
+                    .frame(minHeight: 40, maxHeight: 160)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .onSubmit(onSubmit)
+            }
+            .background {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(focused.wrappedValue ? Palette.surfaceHover : Palette.surface)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(focused.wrappedValue ? Color.white.opacity(0.22) : Palette.stroke, lineWidth: 1)
+            }
+            .shadow(color: focused.wrappedValue ? Color.white.opacity(0.06) : Color.clear, radius: 12, x: 0, y: 0)
+            .animation(.easeOut(duration: 0.16), value: focused.wrappedValue)
+
+            trailingButton()
+                .padding(.bottom, 4)
+        }
+    }
+}
+
+// MARK: - Empty state
+
+private struct EmptyChatState: View {
+    let providerName: String
+    let context: BrowserPageContext
+    let onSuggestion: (String) -> Void
+
+    @State private var appeared = false
+
+    var body: some View {
+        VStack(spacing: 16) {
+            Spacer(minLength: 0)
+
+            ZStack {
+                Circle()
+                    .fill(Palette.surface)
+                Circle()
+                    .stroke(Palette.stroke, lineWidth: 1)
+                Image(systemName: "sparkles")
+                    .font(.system(size: 22, weight: .light))
+                    .foregroundStyle(Palette.textPrimary)
+            }
+            .frame(width: 56, height: 56)
+            .scaleEffect(appeared ? 1 : 0.85)
+            .opacity(appeared ? 1 : 0)
+
+            VStack(spacing: 4) {
+                Text("How can I help?")
+                    .font(.system(size: 19, weight: .light, design: .rounded))
+                    .foregroundStyle(Palette.textPrimary)
+                Text("Ask \(providerName) about this page or anything else.")
+                    .font(.system(size: 12, weight: .regular))
+                    .foregroundStyle(Palette.textMuted)
+                    .multilineTextAlignment(.center)
+                    .padding(.horizontal, 24)
+            }
+            .opacity(appeared ? 1 : 0)
+            .offset(y: appeared ? 0 : 6)
+
+            VStack(spacing: 6) {
+                ForEach(Array(suggestions.enumerated()), id: \.offset) { index, suggestion in
+                    SuggestionChip(
+                        icon: suggestion.icon,
+                        text: suggestion.text,
+                        delay: 0.10 + Double(index) * 0.06,
+                        appeared: appeared,
+                        action: { onSuggestion(suggestion.text) }
+                    )
+                }
+            }
+            .padding(.horizontal, 18)
+            .padding(.top, 6)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 24)
+        .onAppear {
+            withAnimation(.spring(response: 0.55, dampingFraction: 0.86).delay(0.04)) {
+                appeared = true
+            }
+        }
+    }
+
+    private var suggestions: [Suggestion] {
+        if !context.url.isEmpty {
+            return [
+                Suggestion(icon: "text.alignleft", text: "Summarize this page"),
+                Suggestion(icon: "lightbulb", text: "Explain the key ideas"),
+                Suggestion(icon: "questionmark.bubble", text: "What should I ask about this?")
+            ]
+        }
+        return [
+            Suggestion(icon: "globe", text: "Find me a great article on…"),
+            Suggestion(icon: "lightbulb", text: "Explain a concept simply"),
+            Suggestion(icon: "text.bubble", text: "Help me write something")
+        ]
+    }
+
+    private struct Suggestion {
+        let icon: String
+        let text: String
+    }
+}
+
+private struct SuggestionChip: View {
+    let icon: String
+    let text: String
+    let delay: Double
+    let appeared: Bool
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: icon)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Palette.textSecondary)
+                    .frame(width: 16)
+                Text(text)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(Palette.textPrimary)
+                    .lineLimit(1)
+                Spacer(minLength: 0)
+                Image(systemName: "arrow.up.left")
+                    .font(.system(size: 9, weight: .bold))
+                    .foregroundStyle(Palette.textMuted)
+                    .opacity(isHovering ? 1 : 0)
+                    .offset(x: isHovering ? 0 : -4)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .fill(isHovering ? Palette.surfaceHover : Palette.surface)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 10, style: .continuous)
+                    .stroke(isHovering ? Palette.strokeStrong : Palette.stroke, lineWidth: 1)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(Motion.hoverFade) { isHovering = hovering }
+        }
+        .opacity(appeared ? 1 : 0)
+        .offset(y: appeared ? 0 : 8)
+        .animation(.spring(response: 0.55, dampingFraction: 0.9).delay(delay), value: appeared)
     }
 }
 
@@ -281,57 +560,139 @@ private struct MessageView: View {
 
 private struct UserBubble: View {
     var text: String
+    @State private var isHovering = false
 
     var body: some View {
-        HStack {
+        HStack(spacing: 0) {
             Spacer(minLength: 32)
-            Text(text)
-                .font(.system(size: 13.5))
-                .foregroundStyle(Palette.textPrimary)
-                .textSelection(.enabled)
-                .padding(.horizontal, 14)
-                .padding(.vertical, 10)
-                .background {
-                    UnevenRoundedRectangle(
-                        topLeadingRadius: 14,
-                        bottomLeadingRadius: 14,
-                        bottomTrailingRadius: 4,
-                        topTrailingRadius: 14,
-                        style: .continuous
-                    )
-                    .fill(Palette.surfaceActive)
+            VStack(alignment: .trailing, spacing: 6) {
+                Text(text)
+                    .font(.system(size: 13.5))
+                    .foregroundStyle(Palette.textPrimary)
+                    .textSelection(.enabled)
+                    .lineSpacing(2)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 10)
+                    .background {
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: 14,
+                            bottomLeadingRadius: 14,
+                            bottomTrailingRadius: 4,
+                            topTrailingRadius: 14,
+                            style: .continuous
+                        )
+                        .fill(
+                            LinearGradient(
+                                colors: [
+                                    Color.white.opacity(0.13),
+                                    Color.white.opacity(0.085)
+                                ],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            )
+                        )
+                    }
+                    .overlay {
+                        UnevenRoundedRectangle(
+                            topLeadingRadius: 14,
+                            bottomLeadingRadius: 14,
+                            bottomTrailingRadius: 4,
+                            topTrailingRadius: 14,
+                            style: .continuous
+                        )
+                        .stroke(Color.white.opacity(0.05), lineWidth: 1)
+                    }
+                    .frame(maxWidth: 270, alignment: .trailing)
+
+                if isHovering {
+                    CopyButton(text: text)
+                        .transition(.opacity.combined(with: .offset(y: -3)))
                 }
-                .frame(maxWidth: 260, alignment: .trailing)
+            }
+        }
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.14)) { isHovering = hovering }
         }
     }
 }
 
 private struct AssistantMessage: View {
     var text: String
+    @State private var isHovering = false
 
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
-            // Leading white bar
             RoundedRectangle(cornerRadius: 1, style: .continuous)
-                .fill(Palette.accent)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.55), Color.white],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
                 .frame(width: 2)
                 .frame(maxHeight: .infinity)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("BROWSER")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .tracking(1.4)
-                    .foregroundStyle(Palette.textFaint)
-
+            VStack(alignment: .leading, spacing: 6) {
                 Text(text)
                     .font(.system(size: 13.5))
                     .foregroundStyle(Palette.textPrimary)
                     .textSelection(.enabled)
-                    .lineSpacing(2)
+                    .lineSpacing(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
+
+                if isHovering {
+                    CopyButton(text: text)
+                        .transition(.opacity.combined(with: .offset(y: -3)))
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .onHover { hovering in
+            withAnimation(.easeOut(duration: 0.16)) { isHovering = hovering }
+        }
+    }
+}
+
+private struct CopyButton: View {
+    let text: String
+    @State private var copied = false
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: copy) {
+            HStack(spacing: 5) {
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                    .font(.system(size: 9, weight: .semibold))
+                    .contentTransition(.symbolEffect(.replace))
+                Text(copied ? "Copied" : "Copy")
+                    .font(.system(size: 10, weight: .medium))
+            }
+            .foregroundStyle(isHovering ? Palette.textPrimary : Palette.textMuted)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background {
+                Capsule().fill(isHovering ? Palette.surfaceHover : Color.clear)
+            }
+            .overlay {
+                Capsule().stroke(Palette.stroke, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(Motion.hoverFade) { isHovering = hovering }
+        }
+    }
+
+    private func copy() {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+        withAnimation(Motion.springSnap) { copied = true }
+        Task {
+            try? await Task.sleep(nanoseconds: 1_400_000_000)
+            withAnimation(.easeOut(duration: 0.2)) { copied = false }
+        }
     }
 }
 
@@ -341,69 +702,98 @@ private struct SystemPill: View {
     var body: some View {
         HStack {
             Spacer()
-            Text(text)
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(Palette.textMuted)
-                .multilineTextAlignment(.center)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
-                .background {
-                    Capsule().fill(Palette.surface)
-                }
-                .overlay {
-                    Capsule().stroke(Palette.strokeStrong, lineWidth: 1)
-                }
+            HStack(spacing: 6) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(.system(size: 9, weight: .semibold))
+                Text(text)
+                    .font(.system(size: 11, weight: .medium))
+                    .multilineTextAlignment(.center)
+            }
+            .foregroundStyle(Palette.textMuted)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Capsule().fill(Palette.surface))
+            .overlay(Capsule().stroke(Palette.strokeStrong, lineWidth: 1))
             Spacer()
         }
     }
 }
 
-private struct ThinkingPulse: View {
-    @State private var phase = 0
+// MARK: - Thinking indicator
 
+private struct ThinkingShimmer: View {
     var body: some View {
         HStack(alignment: .top, spacing: 10) {
             RoundedRectangle(cornerRadius: 1, style: .continuous)
-                .fill(Palette.accent)
-                .frame(width: 2, height: 14)
+                .fill(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.55), Color.white],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                )
+                .frame(width: 2, height: 16)
 
-            VStack(alignment: .leading, spacing: 4) {
-                Text("BROWSER")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .tracking(1.4)
-                    .foregroundStyle(Palette.textFaint)
-
-                HStack(spacing: 4) {
-                    ForEach(0..<3, id: \.self) { index in
-                        Circle()
-                            .fill(Palette.textSecondary)
-                            .frame(width: 4, height: 4)
-                            .scaleEffect(phase == index ? 1.0 : 0.6)
-                            .opacity(phase == index ? 1.0 : 0.4)
-                    }
-                }
-                .frame(height: 14)
-            }
+            ShimmerText("Thinking…")
+                .frame(height: 16)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .onAppear {
-            startPulse()
-        }
-    }
-
-    private func startPulse() {
-        Task { @MainActor in
-            while !Task.isCancelled {
-                for index in 0..<3 {
-                    withAnimation(.easeInOut(duration: 0.24)) {
-                        phase = index
-                    }
-                    try? await Task.sleep(nanoseconds: 240_000_000)
-                }
-            }
-        }
     }
 }
+
+private struct ShimmerText: View {
+    let text: String
+    @State private var phase: CGFloat = -0.4
+
+    init(_ text: String) { self.text = text }
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 13, weight: .medium))
+            .foregroundStyle(Palette.textFaint)
+            .overlay {
+                Text(text)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(
+                        LinearGradient(
+                            stops: [
+                                .init(color: .clear, location: max(0, phase - 0.25)),
+                                .init(color: Palette.textPrimary, location: max(0, min(1, phase))),
+                                .init(color: .clear, location: min(1, phase + 0.25))
+                            ],
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        )
+                    )
+                    .mask {
+                        Text(text)
+                            .font(.system(size: 13, weight: .medium))
+                    }
+            }
+            .onAppear {
+                withAnimation(.linear(duration: 1.6).repeatForever(autoreverses: false)) {
+                    phase = 1.4
+                }
+            }
+    }
+}
+
+private struct BreathingPulse: ViewModifier {
+    @State private var on = false
+
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(on ? 1.25 : 0.85)
+            .opacity(on ? 1.0 : 0.55)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
+                    on = true
+                }
+            }
+    }
+}
+
+// MARK: - Send button
 
 private struct SendButton: View {
     var enabled: Bool
@@ -414,21 +804,28 @@ private struct SendButton: View {
 
     var body: some View {
         Button(action: action) {
-            Image(systemName: "arrow.up")
-                .font(.system(size: 12, weight: .bold))
-                .foregroundStyle(enabled ? Palette.bg : Palette.textMuted)
-                .frame(width: 30, height: 30)
-                .background {
-                    Circle()
-                        .fill(buttonFill)
+            ZStack {
+                Circle()
+                    .fill(buttonFill)
+                    .frame(width: 32, height: 32)
+                Circle()
+                    .stroke(enabled ? Color.clear : Palette.stroke, lineWidth: 1)
+                    .frame(width: 32, height: 32)
+
+                if sending {
+                    SpinnerArc()
+                } else {
+                    Image(systemName: "arrow.up")
+                        .font(.system(size: 12, weight: .bold))
+                        .foregroundStyle(enabled ? Palette.bg : Palette.textMuted)
+                        .transition(.opacity.combined(with: .scale(scale: 0.6)))
                 }
-                .overlay {
-                    Circle()
-                        .stroke(enabled ? Color.clear : Palette.stroke, lineWidth: 1)
-                }
-                .scaleEffect(isHovering && enabled ? 1.04 : 1.0)
-                .animation(Motion.springSnap, value: isHovering)
-                .animation(Motion.springSnap, value: enabled)
+            }
+            .scaleEffect(scaleValue)
+            .shadow(color: enabled && !sending && isHovering ? Color.white.opacity(0.20) : Color.clear, radius: 10, x: 0, y: 0)
+            .animation(Motion.springSnap, value: isHovering)
+            .animation(Motion.springSnap, value: enabled)
+            .animation(.easeOut(duration: 0.18), value: sending)
         }
         .buttonStyle(.plain)
         .disabled(!enabled || sending)
@@ -436,8 +833,31 @@ private struct SendButton: View {
         .help("Send")
     }
 
+    private var scaleValue: CGFloat {
+        if !enabled { return 1 }
+        return isHovering ? 1.06 : 1
+    }
+
     private var buttonFill: Color {
         if !enabled { return Palette.surface }
+        if sending { return Palette.surfaceActive }
         return Palette.accent
+    }
+}
+
+private struct SpinnerArc: View {
+    @State private var angle: Double = 0
+
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.72)
+            .stroke(Palette.textPrimary, style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+            .frame(width: 14, height: 14)
+            .rotationEffect(.degrees(angle))
+            .onAppear {
+                withAnimation(.linear(duration: 0.85).repeatForever(autoreverses: false)) {
+                    angle = 360
+                }
+            }
     }
 }
