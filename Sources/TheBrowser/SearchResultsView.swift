@@ -162,17 +162,23 @@ private struct SearchResultRow: View {
                     .padding(.top, 1)
 
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(result.title)
-                        .font(.system(size: 14, weight: .semibold))
-                        .foregroundStyle(Palette.textPrimary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 8) {
+                        Text(result.title)
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundStyle(Palette.textPrimary)
+                            .lineLimit(1)
+                            .layoutPriority(1)
 
-                    Text(result.displayURL)
-                        .font(.system(size: 14, weight: .regular))
-                        .foregroundStyle(Palette.textPrimary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+                        Text("·")
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(Palette.textPrimary.opacity(0.5))
+
+                        Text(result.displayURL)
+                            .font(.system(size: 14, weight: .regular))
+                            .foregroundStyle(Palette.textPrimary)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
 
                     if !result.snippet.isEmpty {
                         Text(result.snippet)
