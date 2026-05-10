@@ -1,9 +1,14 @@
+import AppKit
 import SwiftUI
 
 @main
 struct TheBrowserApp: App {
     init() {
         AppDefaults.register()
+        NSApplication.shared.setActivationPolicy(.regular)
+        DispatchQueue.main.async {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+        }
     }
 
     var body: some Scene {

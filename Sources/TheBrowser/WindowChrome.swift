@@ -26,24 +26,30 @@ struct WindowFullScreenZoomConfigurator: NSViewRepresentable {
         weak var attachedWindow: NSWindow?
 
         func attach(to window: NSWindow) {
-            guard attachedWindow !== window else { return }
+            guard attachedWindow !== window else {
+                configureZoomButton(in: window)
+                return
+            }
             attachedWindow = window
 
             window.collectionBehavior.insert(.fullScreenPrimary)
+            window.styleMask.insert(.resizable)
+            configureZoomButton(in: window)
 
-            if let zoomButton = window.standardWindowButton(.zoomButton) {
-                zoomButton.target = self
-                zoomButton.action = #selector(handleZoomClick(_:))
+            DispatchQueue.main.async { [weak self, weak window] in
+                guard let self, let window else { return }
+                self.configureZoomButton(in: window)
             }
         }
 
-        @objc func handleZoomClick(_ sender: NSButton) {
-            // Option-click preserves traditional zoom-to-fit behavior
-            if NSEvent.modifierFlags.contains(.option) {
-                sender.window?.performZoom(nil)
-            } else {
-                sender.window?.toggleFullScreen(nil)
+        private func configureZoomButton(in window: NSWindow) {
+            guard let zoomButton = window.standardWindowButton(.zoomButton) else {
+                return
             }
+
+            zoomButton.isEnabled = true
+            zoomButton.target = window
+            zoomButton.action = #selector(NSWindow.toggleFullScreen(_:))
         }
     }
 }

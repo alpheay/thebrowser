@@ -64,38 +64,37 @@ struct BrowserShellView: View {
 
             // Layer 3: invisible hover strip for peek detection (only when rail hidden)
             if !model.isTabRailVisible {
-                HStack(spacing: 0) {
-                    Color.clear
-                        .frame(width: 6)
-                        .frame(maxHeight: .infinity)
-                        .contentShape(Rectangle())
-                        .onContinuousHover { phase in
-                            switch phase {
-                            case .active:
-                                cancelPeekDismiss()
-                                if !isPeekingRail {
-                                    withAnimation(Motion.springSnap) {
-                                        isPeekingRail = true
-                                    }
+                Color.clear
+                    .frame(width: 6)
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case .active:
+                            cancelPeekDismiss()
+                            if !isPeekingRail {
+                                withAnimation(Motion.springSnap) {
+                                    isPeekingRail = true
                                 }
-                            case .ended:
-                                schedulePeekDismiss()
                             }
+                        case .ended:
+                            schedulePeekDismiss()
                         }
-                    Spacer()
-                }
-                .ignoresSafeArea()
+                    }
+                    .ignoresSafeArea()
             }
 
             // Hidden keyboard shortcut host
             KeyboardShortcutHost(bindings: shortcutBindings)
                 .frame(width: 0, height: 0)
                 .opacity(0)
+                .allowsHitTesting(false)
 
             // Hidden window chrome configurator (full-screen on green button)
             WindowFullScreenZoomConfigurator()
                 .frame(width: 0, height: 0)
                 .opacity(0)
+                .allowsHitTesting(false)
         }
         .background(Palette.bg)
         .onChange(of: model.selectedTabID) { _, _ in

@@ -16,11 +16,15 @@ struct HomePageView: View {
     var body: some View {
         ZStack {
             Palette.bg
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    pillFocused = false
+                }
 
             VStack(spacing: 36) {
                 Spacer()
 
-                Text("the browser")
+                Text("your browser")
                     .font(.system(size: 30, weight: .light, design: .rounded))
                     .tracking(8)
                     .foregroundStyle(Palette.textPrimary.opacity(0.92))
@@ -34,10 +38,6 @@ struct HomePageView: View {
                 Spacer()
                 Spacer()
             }
-        }
-        .contentShape(Rectangle())
-        .onTapGesture {
-            pillFocused = false
         }
     }
 

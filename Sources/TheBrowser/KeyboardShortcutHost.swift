@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+@preconcurrency import WebKit
 
 struct KeyboardShortcutHost: NSViewRepresentable {
     var bindings: [String: () -> Void]
@@ -37,6 +38,15 @@ struct KeyboardShortcutHost: NSViewRepresentable {
             }
 
             monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+                let commandModifiers = event.modifierFlags.intersection([.command, .control, .option])
+                guard !commandModifiers.isEmpty else {
+                    return event
+                }
+
+                guard !Self.isTypingTargetActive(for: event) else {
+                    return event
+                }
+
                 let shortcut = AppShortcut.storageValue(from: event)
                 var handled = false
 
@@ -53,6 +63,26 @@ struct KeyboardShortcutHost: NSViewRepresentable {
 
                 return handled ? nil : event
             }
+        }
+
+        private static func isTypingTargetActive(for event: NSEvent) -> Bool {
+            guard let responder = event.window?.firstResponder else {
+                return false
+            }
+
+            if responder is NSTextView {
+                return true
+            }
+
+            var responderMirror: NSResponder? = responder
+            while let current = responderMirror {
+                if current is NSTextField || current is WKWebView {
+                    return true
+                }
+                responderMirror = current.nextResponder
+            }
+
+            return false
         }
 
         func removeMonitor() {

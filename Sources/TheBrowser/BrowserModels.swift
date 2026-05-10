@@ -168,16 +168,28 @@ enum AddressResolver {
             return url
         }
 
+        if looksLikeLocalAddress(trimmed), let url = URL(string: "http://\(trimmed)") {
+            return url
+        }
+
         if looksLikeDomain(trimmed), let url = URL(string: "https://\(trimmed)") {
             return url
         }
 
-        let encodedQuery = trimmed.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? trimmed
-        return URL(string: "https://www.google.com/search?q=\(encodedQuery)")
+        return SearchEngine.selected.searchURL(for: trimmed)
     }
 
     private static func looksLikeDomain(_ value: String) -> Bool {
-        value.contains(".") && !value.contains(" ") && !value.contains("\n")
+        value.contains(".") && !containsWhitespace(value)
+    }
+
+    private static func looksLikeLocalAddress(_ value: String) -> Bool {
+        let lowercasedValue = value.lowercased()
+        return (lowercasedValue == "localhost" || lowercasedValue.hasPrefix("localhost:") || lowercasedValue.hasPrefix("localhost/")) && !containsWhitespace(value)
+    }
+
+    private static func containsWhitespace(_ value: String) -> Bool {
+        value.rangeOfCharacter(from: .whitespacesAndNewlines) != nil
     }
 }
 

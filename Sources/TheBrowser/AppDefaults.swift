@@ -5,6 +5,7 @@ enum PreferenceKey {
     static let codexWorkspacePath = "codex.workspacePath"
     static let codexModel = "codex.model"
     static let codexSandbox = "codex.sandbox"
+    static let searchEngine = "browser.searchEngine"
     static let toggleChatShortcut = "shortcut.toggleChat"
     static let toggleTabsShortcut = "shortcut.toggleTabs"
     static let newTabShortcut = "shortcut.newTab"
@@ -19,6 +20,7 @@ enum AppDefaults {
             PreferenceKey.codexWorkspacePath: defaultCodexWorkspacePath(),
             PreferenceKey.codexModel: "",
             PreferenceKey.codexSandbox: "read-only",
+            PreferenceKey.searchEngine: SearchEngine.defaultValue.rawValue,
             PreferenceKey.toggleChatShortcut: "command+j",
             PreferenceKey.toggleTabsShortcut: "command+b",
             PreferenceKey.newTabShortcut: "command+t",

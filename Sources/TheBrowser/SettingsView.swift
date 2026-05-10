@@ -5,6 +5,7 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.codexWorkspacePath) private var codexWorkspacePath = AppDefaults.defaultCodexWorkspacePath()
     @AppStorage(PreferenceKey.codexModel) private var codexModel = ""
     @AppStorage(PreferenceKey.codexSandbox) private var codexSandbox = "read-only"
+    @AppStorage(PreferenceKey.searchEngine) private var searchEngine = SearchEngine.defaultValue.rawValue
     @AppStorage(PreferenceKey.toggleChatShortcut) private var toggleChatShortcut = "command+j"
     @AppStorage(PreferenceKey.toggleTabsShortcut) private var toggleTabsShortcut = "command+b"
     @AppStorage(PreferenceKey.newTabShortcut) private var newTabShortcut = "command+t"
@@ -21,6 +22,18 @@ struct SettingsView: View {
                     Text("Codex, shortcuts, and browser surfaces.")
                         .font(.system(size: 12.5, weight: .medium))
                         .foregroundStyle(Palette.textMuted)
+                }
+
+                section("Browser") {
+                    settingRow("Search engine") {
+                        Picker("", selection: $searchEngine) {
+                            ForEach(SearchEngine.allCases) { engine in
+                                Text(engine.displayName).tag(engine.rawValue)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                    }
                 }
 
                 section("Codex CLI") {
