@@ -61,7 +61,8 @@ enum Motion {
 
 enum Metrics {
     static let trafficLightGutter: CGFloat = 78
-    static let toolbarHeight: CGFloat = 56
+    static let toolbarHeight: CGFloat = 44
+    static let railTopPadding: CGFloat = 36
     static let railWidth: CGFloat = 240
     static let chatWidth: CGFloat = 360
     static let webviewInset: CGFloat = 8

@@ -6,9 +6,12 @@ struct TabRailView: View {
 
     var body: some View {
         VStack(spacing: 0) {
+            // Reserve space for traffic lights at the top
+            Color.clear
+                .frame(height: Metrics.railTopPadding)
+
             header
                 .padding(.horizontal, 12)
-                .padding(.top, 12)
                 .padding(.bottom, 8)
 
             ScrollView {

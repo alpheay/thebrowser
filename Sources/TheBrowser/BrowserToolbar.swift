@@ -3,6 +3,7 @@ import SwiftUI
 struct BrowserToolbar: View {
     @ObservedObject var model: BrowserModel
     @ObservedObject var selectedTab: BrowserTab
+    var reservesTrafficLightGutter: Bool
 
     @FocusState private var addressFocused: Bool
     @State private var submitPulse = false
@@ -10,14 +11,15 @@ struct BrowserToolbar: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                // Traffic-light gutter (system controls live here)
-                Color.clear
-                    .frame(width: Metrics.trafficLightGutter, height: 30)
+                if reservesTrafficLightGutter {
+                    Color.clear
+                        .frame(width: Metrics.trafficLightGutter, height: 28)
+                }
 
                 navCluster
 
                 addressBar
-                    .padding(.horizontal, 12)
+                    .padding(.horizontal, 10)
 
                 rightCluster
             }
@@ -50,13 +52,13 @@ struct BrowserToolbar: View {
             Button { selectedTab.goBack() } label: {
                 Image(systemName: "chevron.left")
             }
-            .buttonStyle(IconButtonStyle())
+            .buttonStyle(IconButtonStyle(size: 28))
             .help("Back")
 
             Button { selectedTab.goForward() } label: {
                 Image(systemName: "chevron.right")
             }
-            .buttonStyle(IconButtonStyle())
+            .buttonStyle(IconButtonStyle(size: 28))
             .help("Forward")
 
             Button {
@@ -69,7 +71,7 @@ struct BrowserToolbar: View {
                 Image(systemName: selectedTab.isLoading ? "xmark" : "arrow.clockwise")
                     .contentTransition(.symbolEffect(.replace))
             }
-            .buttonStyle(IconButtonStyle())
+            .buttonStyle(IconButtonStyle(size: 28))
             .help(selectedTab.isLoading ? "Stop" : "Reload")
         }
     }
@@ -80,7 +82,7 @@ struct BrowserToolbar: View {
 
             TextField("Search or enter address", text: $model.addressDraft)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13.5, weight: .medium))
+                .font(.system(size: 13, weight: .medium))
                 .foregroundStyle(Palette.textPrimary)
                 .focused($addressFocused)
                 .onSubmit {
@@ -95,19 +97,18 @@ struct BrowserToolbar: View {
             }
         }
         .padding(.horizontal, 12)
-        .frame(height: 36)
+        .frame(height: 30)
         .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(Palette.surface)
         }
         .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(addressFocused ? Color.white.opacity(0.18) : Color.clear, lineWidth: 1)
                 .animation(.easeOut(duration: 0.12), value: addressFocused)
         }
         .background {
-            // Soft glow when focused
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(addressFocused ? Color.white.opacity(0.06) : Color.clear)
                 .blur(radius: 12)
                 .animation(.easeOut(duration: 0.18), value: addressFocused)
@@ -149,20 +150,20 @@ struct BrowserToolbar: View {
     private var rightCluster: some View {
         HStack(spacing: 6) {
             Button {
-                withAnimation(Motion.springSnap) { model.toggleChat() }
-            } label: {
-                Image(systemName: "sparkles")
-            }
-            .buttonStyle(IconButtonStyle(selected: model.isChatVisible))
-            .help("Toggle AI chat")
-
-            Button {
                 withAnimation(Motion.springSnap) { model.toggleTabs() }
             } label: {
                 Image(systemName: "sidebar.left")
             }
-            .buttonStyle(IconButtonStyle(selected: model.isTabRailVisible))
+            .buttonStyle(IconButtonStyle(selected: model.isTabRailVisible, size: 28))
             .help("Toggle side tabs")
+
+            Button {
+                withAnimation(Motion.springSnap) { model.toggleChat() }
+            } label: {
+                Image(systemName: "sparkles")
+            }
+            .buttonStyle(IconButtonStyle(selected: model.isChatVisible, size: 28))
+            .help("Toggle AI chat")
         }
     }
 }

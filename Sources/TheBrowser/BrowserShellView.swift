@@ -19,40 +19,50 @@ struct BrowserShellView: View {
     }
 
     var body: some View {
-        ZStack(alignment: .top) {
+        ZStack(alignment: .topLeading) {
             // Layer 0: window plate
             Palette.bg
                 .ignoresSafeArea()
 
-            // Layer 1: main content area (toolbar + body)
-            VStack(spacing: 0) {
-                BrowserToolbar(model: model, selectedTab: model.selectedTab)
-
-                bodyContent
-            }
-            .ignoresSafeArea(edges: .bottom)
-
-            // Layer 2: rail (overlay anchored leading) — sits on top of content body
+            // Layer 1: main HStack — rail | center | chat, all full height
             HStack(spacing: 0) {
-                if railOverlayVisible {
+                if model.isTabRailVisible {
                     TabRailView(model: model)
-                        .padding(.top, Metrics.toolbarHeight)
+                }
+
+                centerColumn
+
+                if model.isChatVisible {
+                    AIChatPanel(
+                        viewModel: chatModel,
+                        context: model.selectedContext,
+                        onClose: {
+                            withAnimation(Motion.springSnap) { model.toggleChat() }
+                        }
+                    )
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                }
+            }
+            .ignoresSafeArea()
+
+            // Layer 2: hover-peek rail overlay (only when rail is hidden)
+            if !model.isTabRailVisible && isPeekingRail {
+                HStack(spacing: 0) {
+                    TabRailView(model: model)
                         .transition(.move(edge: .leading).combined(with: .opacity))
                         .onHover { hovering in
-                            if !model.isTabRailVisible {
-                                if hovering {
-                                    cancelPeekDismiss()
-                                } else {
-                                    schedulePeekDismiss()
-                                }
+                            if hovering {
+                                cancelPeekDismiss()
+                            } else {
+                                schedulePeekDismiss()
                             }
                         }
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
+                .ignoresSafeArea()
             }
-            .ignoresSafeArea(edges: .bottom)
 
-            // Layer 3: invisible hover strip on leading edge — only when rail is hidden
+            // Layer 3: invisible hover strip for peek detection (only when rail hidden)
             if !model.isTabRailVisible {
                 HStack(spacing: 0) {
                     Color.clear
@@ -74,12 +84,16 @@ struct BrowserShellView: View {
                         }
                     Spacer()
                 }
-                .padding(.top, Metrics.toolbarHeight)
-                .ignoresSafeArea(edges: .bottom)
+                .ignoresSafeArea()
             }
 
             // Hidden keyboard shortcut host
             KeyboardShortcutHost(bindings: shortcutBindings)
+                .frame(width: 0, height: 0)
+                .opacity(0)
+
+            // Hidden window chrome configurator (full-screen on green button)
+            WindowFullScreenZoomConfigurator()
                 .frame(width: 0, height: 0)
                 .opacity(0)
         }
@@ -89,51 +103,37 @@ struct BrowserShellView: View {
         }
         .animation(Motion.springSnap, value: model.isChatVisible)
         .animation(Motion.springSnap, value: model.isTabRailVisible)
-        .animation(Motion.springSnap, value: isPeekingRail)
     }
 
-    // MARK: - Body
+    // MARK: - Center column (toolbar + content)
 
-    private var bodyContent: some View {
-        ZStack {
-            HStack(spacing: 0) {
-                // Reserve rail width when rail is toggled visible (NOT for peek)
-                if model.isTabRailVisible {
-                    Color.clear.frame(width: Metrics.railWidth)
-                }
+    private var centerColumn: some View {
+        VStack(spacing: 0) {
+            BrowserToolbar(
+                model: model,
+                selectedTab: model.selectedTab,
+                reservesTrafficLightGutter: !model.isTabRailVisible
+            )
 
-                // Content surface
-                ZStack {
-                    if model.selectedTab.isHome {
-                        HomePageView { destination in
-                            model.addressDraft = destination
-                            model.navigateSelected(to: destination)
-                        }
-                    } else {
-                        BrowserWebView(tab: model.selectedTab)
-                            .id(model.selectedTab.id)
-                            .clipShape(RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous))
-                            .overlay {
-                                RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous)
-                                    .stroke(Palette.stroke, lineWidth: 1)
-                            }
-                            .padding(.horizontal, Metrics.webviewInset)
-                            .padding(.bottom, Metrics.webviewInset)
+            ZStack {
+                if model.selectedTab.isHome {
+                    HomePageView { destination in
+                        model.addressDraft = destination
+                        model.navigateSelected(to: destination)
                     }
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-
-                if model.isChatVisible {
-                    AIChatPanel(
-                        viewModel: chatModel,
-                        context: model.selectedContext,
-                        onClose: {
-                            withAnimation(Motion.springSnap) { model.toggleChat() }
+                } else {
+                    BrowserWebView(tab: model.selectedTab)
+                        .id(model.selectedTab.id)
+                        .clipShape(RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous)
+                                .stroke(Palette.stroke, lineWidth: 1)
                         }
-                    )
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
+                        .padding(.horizontal, Metrics.webviewInset)
+                        .padding(.bottom, Metrics.webviewInset)
                 }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
