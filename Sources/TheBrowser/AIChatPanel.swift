@@ -86,7 +86,6 @@ struct AIChatPanel: View {
     @AppStorage(PreferenceKey.aiModel) private var aiModel = ""
     @FocusState private var composerFocused: Bool
     @State private var showingModelPicker = false
-    @State private var modelChipHovering = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -243,12 +242,11 @@ struct AIChatPanel: View {
 
     private var composer: some View {
         VStack(spacing: 8) {
-            HStack(spacing: 6) {
-                if !context.title.isEmpty || !context.url.isEmpty {
+            if !context.title.isEmpty || !context.url.isEmpty {
+                HStack(spacing: 6) {
                     contextPill
+                    Spacer(minLength: 0)
                 }
-                Spacer(minLength: 0)
-                modelPickerChip
             }
 
             ComposerField(
@@ -257,11 +255,17 @@ struct AIChatPanel: View {
                 placeholder: "Ask \(provider.displayName)…",
                 onSubmit: { viewModel.send(context: context) }
             ) {
-                SendButton(
-                    enabled: !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                    sending: viewModel.isSending,
-                    action: { viewModel.send(context: context) }
-                )
+                HStack(spacing: 6) {
+                    ModelPickerButton(
+                        provider: provider,
+                        showingPicker: $showingModelPicker
+                    )
+                    SendButton(
+                        enabled: !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                        sending: viewModel.isSending,
+                        action: { viewModel.send(context: context) }
+                    )
+                }
             }
         }
         .padding(14)
@@ -288,46 +292,6 @@ struct AIChatPanel: View {
         .overlay(Capsule().stroke(Palette.stroke, lineWidth: 1))
     }
 
-    private var modelPickerChip: some View {
-        Button {
-            showingModelPicker.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                ProviderMark(provider: provider, size: 10)
-                Text(modelChipLabel)
-                    .font(.system(size: 10.5, weight: .medium))
-                    .lineLimit(1)
-                Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 8, weight: .bold))
-                    .foregroundStyle(Palette.textMuted)
-            }
-            .foregroundStyle(Palette.textSecondary)
-            .padding(.horizontal, 9)
-            .padding(.vertical, 4)
-            .background(Capsule().fill(modelChipHovering ? Palette.surfaceHover : Palette.surface))
-            .overlay(Capsule().stroke(modelChipHovering ? Palette.strokeStrong : Palette.stroke, lineWidth: 1))
-        }
-        .buttonStyle(.plain)
-        .onHover { hovering in
-            withAnimation(Motion.hoverFade) { modelChipHovering = hovering }
-        }
-        .help("Choose model")
-        .popover(isPresented: $showingModelPicker, arrowEdge: .bottom) {
-            ModelPickerPopover {
-                showingModelPicker = false
-            }
-        }
-    }
-
-    private var modelChipLabel: String {
-        if let match = AIModelOption.find(provider: provider, modelID: aiModel) {
-            return match.displayName
-        }
-        if !aiModel.isEmpty {
-            return aiModel
-        }
-        return "Default"
-    }
 }
 
 // MARK: - Header icon button
@@ -790,6 +754,43 @@ private struct BreathingPulse: ViewModifier {
                     on = true
                 }
             }
+    }
+}
+
+// MARK: - Model picker button
+
+private struct ModelPickerButton: View {
+    let provider: AIProviderKind
+    @Binding var showingPicker: Bool
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button {
+            showingPicker.toggle()
+        } label: {
+            ZStack {
+                Circle()
+                    .fill(isHovering || showingPicker ? Palette.surfaceHover : Palette.surface)
+                    .frame(width: 32, height: 32)
+                Circle()
+                    .stroke(isHovering || showingPicker ? Palette.strokeStrong : Palette.stroke, lineWidth: 1)
+                    .frame(width: 32, height: 32)
+                ProviderMark(provider: provider, size: 14)
+                    .foregroundStyle(Palette.textPrimary)
+            }
+            .scaleEffect(isHovering ? 1.04 : 1.0)
+            .animation(Motion.springSnap, value: isHovering)
+            .animation(Motion.hoverFade, value: showingPicker)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help("Choose model")
+        .popover(isPresented: $showingPicker, arrowEdge: .bottom) {
+            ModelPickerPopover {
+                showingPicker = false
+            }
+        }
     }
 }
 
