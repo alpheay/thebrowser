@@ -585,30 +585,12 @@ private struct AssistantMessage: View {
     @State private var isHovering = false
 
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            RoundedRectangle(cornerRadius: 1, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color.white.opacity(0.55), Color.white],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .frame(width: 2)
-                .frame(maxHeight: .infinity)
+        VStack(alignment: .leading, spacing: 8) {
+            MarkdownView(text: text)
 
-            VStack(alignment: .leading, spacing: 6) {
-                Text(text)
-                    .font(.system(size: 13.5))
-                    .foregroundStyle(Palette.textPrimary)
-                    .textSelection(.enabled)
-                    .lineSpacing(3)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-
-                if isHovering {
-                    CopyButton(text: text)
-                        .transition(.opacity.combined(with: .offset(y: -3)))
-                }
+            if isHovering {
+                CopyButton(text: text)
+                    .transition(.opacity.combined(with: .offset(y: -3)))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -687,21 +669,9 @@ private struct SystemPill: View {
 
 private struct ThinkingShimmer: View {
     var body: some View {
-        HStack(alignment: .top, spacing: 10) {
-            RoundedRectangle(cornerRadius: 1, style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [Color.white.opacity(0.55), Color.white],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                )
-                .frame(width: 2, height: 16)
-
-            ShimmerText("Thinking…")
-                .frame(height: 16)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        ShimmerText("Thinking…")
+            .frame(height: 16)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
