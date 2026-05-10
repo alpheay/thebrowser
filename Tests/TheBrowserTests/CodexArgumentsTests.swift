@@ -188,6 +188,7 @@ struct CodexArgumentsTests {
             "--input-format",
             "--output-format",
             "--no-session-persistence",
+            "--bare",
             "--append-system-prompt",
             "--system-prompt",
             "--tools",

@@ -4,7 +4,7 @@ import Testing
 
 @Suite("Claude CLI arguments")
 struct ClaudeArgumentsTests {
-    @Test("Baseline arguments replace the prompt, run bare, disable slash commands, disable default tools, and leave user input for stdin")
+    @Test("Baseline arguments replace the prompt, keep normal auth, disable slash commands, disable default tools, and leave user input for stdin")
     func baselineArguments() {
         let args = CLIArguments.claudeArguments(
             for: TestSupport.makeConfiguration(provider: .claude),
@@ -16,7 +16,6 @@ struct ClaudeArgumentsTests {
             "--input-format", "text",
             "--output-format", "json",
             "--no-session-persistence",
-            "--bare",
             "--disable-slash-commands",
             "--strict-mcp-config",
             "--no-chrome",
@@ -126,14 +125,14 @@ struct ClaudeArgumentsTests {
         #expect(!args.contains("--mcp-config"))
     }
 
-    @Test("Bare replacement flags are always present")
-    func bareReplacementFlagsPresent() {
+    @Test("Replacement flags are present without bare mode so Claude can use normal login auth")
+    func replacementFlagsPresentWithoutBareMode() {
         let args = CLIArguments.claudeArguments(
             for: TestSupport.makeConfiguration(provider: .claude),
             prompt: "p"
         )
 
-        #expect(args.contains("--bare"))
+        #expect(!args.contains("--bare"))
         #expect(args.contains("--disable-slash-commands"))
         #expect(args.contains("--strict-mcp-config"))
         #expect(args.contains("--no-chrome"))

@@ -261,8 +261,16 @@ private func runProvider(configuration: AIHarnessConfiguration, prompt: String) 
     let stderrText = (try? String(contentsOf: stderrURL, encoding: .utf8)) ?? ""
 
     guard process.terminationStatus == 0 else {
-        let combined = [stderrText, stdoutText].filter { !$0.isEmpty }.joined(separator: "\n")
-        throw AIProviderError.processFailed(provider: configuration.provider, status: process.terminationStatus, output: combined)
+        let providerOutput: String
+        if configuration.provider == .claude,
+           let result = ClaudeJSONResponse.result(from: stdoutText) {
+            providerOutput = [stderrText.trimmingCharacters(in: .whitespacesAndNewlines), result]
+                .filter { !$0.isEmpty }
+                .joined(separator: "\n")
+        } else {
+            providerOutput = [stderrText, stdoutText].filter { !$0.isEmpty }.joined(separator: "\n")
+        }
+        throw AIProviderError.processFailed(provider: configuration.provider, status: process.terminationStatus, output: providerOutput)
     }
 
     if configuration.provider == .codex, let finalMessage, !finalMessage.isEmpty {
@@ -373,7 +381,6 @@ enum CLIArguments {
             "--input-format", "text",
             "--output-format", "json",
             "--no-session-persistence",
-            "--bare",
             "--disable-slash-commands",
             "--strict-mcp-config",
             "--no-chrome"
