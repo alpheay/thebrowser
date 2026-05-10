@@ -26,6 +26,7 @@ enum PreferenceKey {
     static let newTabShortcut = "shortcut.newTab"
     static let closeTabShortcut = "shortcut.closeTab"
     static let focusAddressShortcut = "shortcut.focusAddress"
+    static let googleOAuthClientID = "google.oauth.clientID"
 }
 
 enum AppDefaults {
@@ -52,7 +53,8 @@ enum AppDefaults {
             PreferenceKey.toggleTabsShortcut: "command+b",
             PreferenceKey.newTabShortcut: "command+t",
             PreferenceKey.closeTabShortcut: "command+w",
-            PreferenceKey.focusAddressShortcut: "command+l"
+            PreferenceKey.focusAddressShortcut: "command+l",
+            PreferenceKey.googleOAuthClientID: ""
         ])
     }
 
