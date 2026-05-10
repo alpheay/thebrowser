@@ -25,7 +25,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         configuration.websiteDataStore = .default()
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.allowsBackForwardNavigationGestures = true
-        webView.appearance = NSAppearance(named: .darkAqua)
+        webView.appearance = NSAppearance(named: .aqua)
 
         super.init()
 
