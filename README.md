@@ -4,6 +4,16 @@ A native macOS web browser with a built-in AI side panel. Built in Swift 6 / Swi
 
 > Status: pre-release. Expect rough edges, breaking changes, and missing platform features.
 
+## Why
+
+I built TheBrowser because I wasn't happy with any of the AI browsers out there, and I wanted to move off the mainstream ones too. The alternatives all felt either bloated, gimmicky, or built around somebody else's subscription.
+
+So I made my own.
+
+The idea is to stay minimal and clean, and to lean on tools you already use. There's no new subscription to sign up for — TheBrowser plugs straight into your existing Codex or Claude CLI and everything just works. You own your data, you own your config, and if a piece doesn't fit how you work, swap it out. The whole project is open source.
+
+Honestly, I made it for me. I just figured enough other people would want the same thing that it was worth opening up.
+
 ## Install
 
 Grab the latest `.dmg` from the [Releases page](https://github.com/alpheay/thebrowser/releases/latest), open it, and drag **TheBrowser** to **Applications**.
