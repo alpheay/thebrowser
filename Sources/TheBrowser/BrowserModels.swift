@@ -80,7 +80,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             isHome = false
             url = target
             title = target.host(percentEncoded: false) ?? target.absoluteString
-            webView.load(URLRequest(url: target))
+            load(target)
         case .search(let query):
             if let searchPage {
                 searchBackStack.append(searchPage)
@@ -148,6 +148,20 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         isLoading = false
     }
 
+    private func load(_ target: URL) {
+        guard Self.isYouTubeURL(target),
+              let cookie = Self.youtubeDarkModeCookie else {
+            webView.load(URLRequest(url: target))
+            return
+        }
+
+        webView.configuration.websiteDataStore.httpCookieStore.setCookie(cookie) { [weak webView] in
+            Task { @MainActor in
+                webView?.load(URLRequest(url: target))
+            }
+        }
+    }
+
     private func observeWebView() {
         observations = [
             webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
@@ -182,6 +196,27 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private static let darkModeUserScript = WKUserScript(
         source: """
         (() => {
+            const forceYouTubeDarkMode = () => {
+                if (!location.hostname.endsWith("youtube.com")) {
+                    return;
+                }
+
+                const cookieParts = document.cookie.split(";").map((part) => part.trim());
+                const prefCookie = cookieParts.find((part) => part.startsWith("PREF="));
+                const prefValue = prefCookie ? decodeURIComponent(prefCookie.substring(5)) : "";
+                const hadDarkPreference = /(?:^|&)f6=400(?:&|$)/.test(prefValue);
+                const prefSettings = new URLSearchParams(prefValue);
+                prefSettings.set("f6", "400");
+
+                document.cookie = `PREF=${prefSettings.toString()}; path=/; domain=.youtube.com; max-age=31536000; SameSite=Lax`;
+                document.documentElement?.setAttribute("dark", "");
+
+                if (!hadDarkPreference && !sessionStorage.getItem("thebrowser-youtube-dark-reload")) {
+                    sessionStorage.setItem("thebrowser-youtube-dark-reload", "1");
+                    location.reload();
+                }
+            };
+
             const applyDarkColorScheme = () => {
                 if (!document.documentElement || document.getElementById("thebrowser-dark-color-scheme")) {
                     return;
@@ -193,13 +228,32 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 document.documentElement.appendChild(style);
             };
 
+            forceYouTubeDarkMode();
             applyDarkColorScheme();
-            document.addEventListener("DOMContentLoaded", applyDarkColorScheme, { once: true });
+            document.addEventListener("DOMContentLoaded", () => {
+                forceYouTubeDarkMode();
+                applyDarkColorScheme();
+            }, { once: true });
         })();
         """,
         injectionTime: .atDocumentStart,
         forMainFrameOnly: false
     )
+
+    private static var youtubeDarkModeCookie: HTTPCookie? {
+        HTTPCookie(properties: [
+            .domain: ".youtube.com",
+            .path: "/",
+            .name: "PREF",
+            .value: "f6=400",
+            .secure: "TRUE",
+            .expires: Date(timeIntervalSinceNow: 60 * 60 * 24 * 365)
+        ])
+    }
+
+    private static func isYouTubeURL(_ url: URL) -> Bool {
+        url.host(percentEncoded: false)?.hasSuffix("youtube.com") == true
+    }
 }
 
 extension BrowserTab: WKNavigationDelegate {
