@@ -50,7 +50,9 @@ struct AIChatPanel: View {
     var onClose: () -> Void
 
     @AppStorage(PreferenceKey.aiProvider) private var aiProvider = AIProviderKind.codex.rawValue
+    @AppStorage(PreferenceKey.aiModel) private var aiModel = ""
     @FocusState private var composerFocused: Bool
+    @State private var showingModelPicker = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -139,26 +141,12 @@ struct AIChatPanel: View {
 
     private var composer: some View {
         VStack(spacing: 8) {
-            // Context pill
-            if !context.title.isEmpty || !context.url.isEmpty {
-                HStack(spacing: 6) {
-                    Image(systemName: "link")
-                        .font(.system(size: 9, weight: .semibold))
-                    Text("Context: \(context.title.isEmpty ? "Home" : context.title)")
-                        .font(.system(size: 10.5, weight: .medium))
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+            HStack(spacing: 8) {
+                if !context.title.isEmpty || !context.url.isEmpty {
+                    contextPill
                 }
-                .foregroundStyle(Palette.textMuted)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .background {
-                    Capsule().fill(Palette.surface)
-                }
-                .overlay {
-                    Capsule().stroke(Palette.stroke, lineWidth: 1)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                Spacer(minLength: 0)
+                modelPickerChip
             }
 
             HStack(alignment: .bottom, spacing: 10) {
@@ -208,6 +196,69 @@ struct AIChatPanel: View {
 
     private var provider: AIProviderKind {
         AIProviderKind(rawValue: aiProvider) ?? .codex
+    }
+
+    private var contextPill: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "link")
+                .font(.system(size: 9, weight: .semibold))
+            Text("Context: \(context.title.isEmpty ? "Home" : context.title)")
+                .font(.system(size: 10.5, weight: .medium))
+                .lineLimit(1)
+                .truncationMode(.middle)
+        }
+        .foregroundStyle(Palette.textMuted)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 4)
+        .background {
+            Capsule().fill(Palette.surface)
+        }
+        .overlay {
+            Capsule().stroke(Palette.stroke, lineWidth: 1)
+        }
+    }
+
+    private var modelPickerChip: some View {
+        Button {
+            showingModelPicker.toggle()
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: provider.symbolName)
+                    .font(.system(size: 9, weight: .semibold))
+                Text(modelChipLabel)
+                    .font(.system(size: 10.5, weight: .medium))
+                    .lineLimit(1)
+                Image(systemName: "chevron.up.chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Palette.textMuted)
+            }
+            .foregroundStyle(Palette.textSecondary)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background {
+                Capsule().fill(Palette.surface)
+            }
+            .overlay {
+                Capsule().stroke(Palette.stroke, lineWidth: 1)
+            }
+        }
+        .buttonStyle(.plain)
+        .help("Choose model")
+        .popover(isPresented: $showingModelPicker, arrowEdge: .bottom) {
+            ModelPickerPopover {
+                showingModelPicker = false
+            }
+        }
+    }
+
+    private var modelChipLabel: String {
+        if let match = AIModelOption.find(provider: provider, modelID: aiModel) {
+            return match.displayName
+        }
+        if !aiModel.isEmpty {
+            return aiModel
+        }
+        return "Default"
     }
 }
 
@@ -267,7 +318,7 @@ private struct AssistantMessage: View {
                 .frame(maxHeight: .infinity)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("CODEX")
+                Text("BROWSER")
                     .font(.system(size: 9.5, weight: .semibold))
                     .tracking(1.4)
                     .foregroundStyle(Palette.textFaint)
@@ -317,7 +368,7 @@ private struct ThinkingPulse: View {
                 .frame(width: 2, height: 14)
 
             VStack(alignment: .leading, spacing: 4) {
-                Text("CODEX")
+                Text("BROWSER")
                     .font(.system(size: 9.5, weight: .semibold))
                     .tracking(1.4)
                     .foregroundStyle(Palette.textFaint)
