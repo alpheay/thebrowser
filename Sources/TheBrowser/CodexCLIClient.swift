@@ -97,7 +97,6 @@ private func runCodex(configuration: CodexRunConfiguration, prompt: String) thro
     var arguments = [
         "exec",
         "--color", "never",
-        "--ask-for-approval", "never",
         "--skip-git-repo-check",
         "--sandbox", configuration.sandbox
     ]

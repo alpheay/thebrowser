@@ -68,7 +68,7 @@ struct SearchResultsView: View {
     private var content: some View {
         switch state {
         case .idle, .loading:
-            VStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 4) {
                 ForEach(0..<6, id: \.self) { index in
                     SearchResultSkeleton(index: index)
                 }
@@ -77,10 +77,9 @@ struct SearchResultsView: View {
             if response.results.isEmpty && response.instantAnswer == nil {
                 emptyState
             } else {
-                VStack(alignment: .leading, spacing: 12) {
+                VStack(alignment: .leading, spacing: 4) {
                     if let answer = response.instantAnswer {
                         InstantAnswerView(answer: answer, onOpen: onOpen)
-                            .padding(.bottom, 4)
                     }
 
                     ForEach(response.results) { result in
@@ -160,24 +159,24 @@ private struct SearchResultRow: View {
         Button(action: action) {
             HStack(alignment: .top, spacing: 12) {
                 resultGlyph
-                    .padding(.top, 2)
+                    .padding(.top, 1)
 
-                VStack(alignment: .leading, spacing: 6) {
+                VStack(alignment: .leading, spacing: 4) {
                     Text(result.title)
-                        .font(.system(size: 17, weight: .semibold))
-                        .foregroundStyle(Palette.textPrimary)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundStyle(isHovering ? Palette.textPrimary : Palette.textPrimary)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
 
                     Text(result.displayURL)
-                        .font(Typography.caption)
+                        .font(.system(size: 14, weight: .regular))
                         .foregroundStyle(Palette.textMuted)
                         .lineLimit(1)
                         .truncationMode(.middle)
 
                     if !result.snippet.isEmpty {
                         Text(result.snippet)
-                            .font(.system(size: 13.5, weight: .regular))
+                            .font(.system(size: 14, weight: .regular))
                             .foregroundStyle(Palette.textSecondary)
                             .lineLimit(3)
                             .fixedSize(horizontal: false, vertical: true)
@@ -185,22 +184,10 @@ private struct SearchResultRow: View {
                 }
 
                 Spacer(minLength: 12)
-
-                Image(systemName: "arrow.up.right")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(isHovering ? Palette.textSecondary : Palette.textFaint)
-                    .padding(.top, 3)
             }
-            .padding(14)
+            .padding(.vertical, 10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isHovering ? Palette.surfaceHover : Palette.surface)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .stroke(isHovering ? Palette.strokeStrong : Palette.stroke, lineWidth: 1)
-            }
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
@@ -229,7 +216,7 @@ private struct InstantAnswerView: View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 8) {
                 Text(answer.source)
-                    .font(Typography.caption)
+                    .font(.system(size: 14, weight: .regular))
                     .foregroundStyle(Palette.textMuted)
 
                 Spacer()
@@ -246,18 +233,17 @@ private struct InstantAnswerView: View {
             }
 
             Text(answer.title)
-                .font(.system(size: 18, weight: .semibold))
+                .font(.system(size: 14, weight: .semibold))
                 .foregroundStyle(Palette.textPrimary)
 
             Text(answer.text)
-                .font(.system(size: 13.5, weight: .regular))
+                .font(.system(size: 14, weight: .regular))
                 .foregroundStyle(Palette.textSecondary)
                 .lineLimit(6)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(16)
+        .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .surfaceCard(radius: 8)
     }
 }
 
@@ -279,9 +265,8 @@ private struct SearchResultSkeleton: View {
                 .frame(maxWidth: .infinity)
                 .frame(height: 12)
         }
-        .padding(14)
+        .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .surfaceCard(radius: 8)
         .redacted(reason: .placeholder)
     }
 }

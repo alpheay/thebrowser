@@ -1,6 +1,5 @@
 import AppKit
 import SwiftUI
-@preconcurrency import WebKit
 
 struct KeyboardShortcutHost: NSViewRepresentable {
     var bindings: [String: () -> Void]
@@ -43,10 +42,6 @@ struct KeyboardShortcutHost: NSViewRepresentable {
                     return event
                 }
 
-                guard !Self.isTypingTargetActive(for: event) else {
-                    return event
-                }
-
                 let shortcut = AppShortcut.storageValue(from: event)
                 var handled = false
 
@@ -63,29 +58,6 @@ struct KeyboardShortcutHost: NSViewRepresentable {
 
                 return handled ? nil : event
             }
-        }
-
-        private static func isTypingTargetActive(for event: NSEvent) -> Bool {
-            guard let responder = event.window?.firstResponder else {
-                return false
-            }
-
-            if responder is NSTextView {
-                return true
-            }
-
-            // Only suppress for native text inputs (address bar, chat composer).
-            // Web views are intentionally NOT treated as typing targets so
-            // browser-level shortcuts like ⌘B / ⌘J / ⌘L override page content.
-            var responderMirror: NSResponder? = responder
-            while let current = responderMirror {
-                if current is NSTextField {
-                    return true
-                }
-                responderMirror = current.nextResponder
-            }
-
-            return false
         }
 
         func removeMonitor() {
