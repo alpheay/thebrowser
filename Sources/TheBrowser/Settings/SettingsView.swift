@@ -21,6 +21,11 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
     @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "command+shift+r"
     @AppStorage(PreferenceKey.readerModeShortcut) private var readerModeShortcut = "command+r"
+    @AppStorage(PreferenceKey.hoverPreviewEnabled) private var hoverPreviewEnabled = true
+    @AppStorage(PreferenceKey.hoverPreviewModifier) private var hoverPreviewModifier = HoverPreviewModifier.command.rawValue
+    @AppStorage(PreferenceKey.hoverPreviewDelayMs) private var hoverPreviewDelayMs = 200
+    @AppStorage(PreferenceKey.hoverPreviewPrefetchDelayMs) private var hoverPreviewPrefetchDelayMs = 800
+    @AppStorage(PreferenceKey.hoverPreviewPrefetchBlocklist) private var hoverPreviewBlocklist = ""
 
     @State private var selectedTab: SettingsTab = .general
     @State private var showClearAllConfirm = false
@@ -116,6 +121,30 @@ struct SettingsView: View {
             section("Web search") {
                 row(label: "Fallback engine", help: "Used when an entry isn't a URL.") {
                     SegmentPicker(selection: $searchEngine, options: SearchEngine.allCases.map { ($0.rawValue, $0.displayName) })
+                }
+            }
+
+            section("Hover preview") {
+                row(label: "Enable", help: "Show a preview panel when you hold the modifier over any link.") {
+                    HStack {
+                        Spacer()
+                        ToggleSwitch(isOn: $hoverPreviewEnabled)
+                    }
+                }
+                row(label: "Modifier", help: "Held while hovering a link to summon the preview.") {
+                    SegmentPicker(
+                        selection: $hoverPreviewModifier,
+                        options: HoverPreviewModifier.allCases.map { ($0.rawValue, $0.displayName) }
+                    )
+                }
+                row(label: "Hover delay", help: "Milliseconds the modifier must be held over a link before the panel appears.") {
+                    NumericStepperField(value: $hoverPreviewDelayMs, range: 50...1500, step: 50, suffix: "ms")
+                }
+                row(label: "Prefetch delay", help: "Milliseconds of plain hover before we quietly cache a preview.") {
+                    NumericStepperField(value: $hoverPreviewPrefetchDelayMs, range: 200...3000, step: 100, suffix: "ms")
+                }
+                row(label: "Prefetch blocklist", help: "One domain per line. Prefix with *. to match subdomains.") {
+                    MultilineField(text: $hoverPreviewBlocklist, height: 84)
                 }
             }
 
@@ -548,6 +577,79 @@ private struct MonoTextField: View {
                     .stroke(focused ? Palette.strokeStrong : Palette.stroke, lineWidth: 1)
             }
             .animation(Motion.hoverFade, value: focused)
+    }
+}
+
+/// Compact `Int` stepper for short numeric values (delays, counts). Renders
+/// the value next to ± chips so a single row fits a number, its unit, and
+/// the controls without a SwiftUI Stepper's full Cocoa chrome.
+private struct NumericStepperField: View {
+    @Binding var value: Int
+    var range: ClosedRange<Int>
+    var step: Int
+    var suffix: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 4) {
+                Text("\(value)")
+                    .font(.system(size: 12.5, weight: .semibold, design: .monospaced))
+                    .foregroundStyle(Palette.textPrimary)
+                    .frame(minWidth: 40, alignment: .trailing)
+                Text(suffix)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Palette.textMuted)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .background {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Palette.bgRaised)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(Palette.stroke, lineWidth: 1)
+            }
+
+            HStack(spacing: 4) {
+                NumericStepChip(symbol: "minus") {
+                    let next = value - step
+                    value = max(range.lowerBound, next)
+                }
+                NumericStepChip(symbol: "plus") {
+                    let next = value + step
+                    value = min(range.upperBound, next)
+                }
+            }
+        }
+    }
+}
+
+private struct NumericStepChip: View {
+    let symbol: String
+    var action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 10.5, weight: .bold))
+                .foregroundStyle(Palette.textPrimary)
+                .frame(width: 28, height: 28)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isHovering ? Palette.surfaceHover : Palette.surface)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(Palette.stroke, lineWidth: 1)
+                }
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .animation(Motion.hoverFade, value: isHovering)
     }
 }
 
