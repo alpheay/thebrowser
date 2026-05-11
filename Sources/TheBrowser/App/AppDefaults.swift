@@ -30,6 +30,8 @@ enum PreferenceKey {
     static let smartReadShortcut = "shortcut.smartRead"
     static let readerModeShortcut = "shortcut.readerMode"
     static let googleOAuthClientID = "google.oauth.clientID"
+    static let notificationCorner = "notifications.corner"
+    static let notificationsWelcomeShown = "notifications.welcomeShown"
     static let hoverPreviewEnabled = "hoverPreview.enabled"
     static let hoverPreviewModifier = "hoverPreview.modifier"
     static let hoverPreviewDelayMs = "hoverPreview.hoverDelayMs"
@@ -114,6 +116,8 @@ enum AppDefaults {
             PreferenceKey.smartReadShortcut: "command+shift+r",
             PreferenceKey.readerModeShortcut: "command+r",
             PreferenceKey.googleOAuthClientID: "",
+            PreferenceKey.notificationCorner: NotificationCorner.topRight.rawValue,
+            PreferenceKey.notificationsWelcomeShown: false,
             PreferenceKey.hoverPreviewEnabled: true,
             PreferenceKey.hoverPreviewModifier: HoverPreviewModifier.command.rawValue,
             PreferenceKey.hoverPreviewDelayMs: 200,
