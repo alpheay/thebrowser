@@ -11,10 +11,60 @@ struct BrowserTabContent: View {
     @ObservedObject var tab: BrowserTab
 
     var body: some View {
-        if let document = tab.pdfDocument {
+        if let error = tab.loadError {
+            BrowserLoadErrorView(error: error) {
+                tab.reload()
+            }
+        } else if let document = tab.pdfDocument {
             BrowserPDFView(tab: tab, document: document)
         } else {
             BrowserWebView(tab: tab)
+        }
+    }
+}
+
+private struct BrowserLoadErrorView: View {
+    var error: BrowserLoadError
+    var onRetry: () -> Void
+
+    var body: some View {
+        ZStack {
+            Color(red: 0.94, green: 0.94, blue: 0.93)
+
+            VStack(spacing: 14) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 28, weight: .semibold))
+                    .foregroundStyle(Color(red: 0.63, green: 0.15, blue: 0.12))
+
+                VStack(spacing: 6) {
+                    Text("Page Failed to Load")
+                        .font(.system(size: 18, weight: .semibold))
+                        .foregroundStyle(Color.black.opacity(0.86))
+
+                    Text(error.message)
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Color.black.opacity(0.58))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(3)
+
+                    if let url = error.url?.absoluteString {
+                        Text(url)
+                            .font(.system(size: 11, weight: .regular, design: .monospaced))
+                            .foregroundStyle(Color.black.opacity(0.44))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .padding(.top, 2)
+                    }
+                }
+                .frame(maxWidth: 440)
+
+                Button(action: onRetry) {
+                    Label("Retry", systemImage: "arrow.clockwise")
+                }
+                .buttonStyle(PillButtonStyle())
+                .padding(.top, 2)
+            }
+            .padding(32)
         }
     }
 }
