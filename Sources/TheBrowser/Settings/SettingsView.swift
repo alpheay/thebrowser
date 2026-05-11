@@ -14,6 +14,7 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.codexSandbox) private var codexSandbox = "read-only"
     @AppStorage(PreferenceKey.claudeCLIPath) private var claudeCLIPath = AppDefaults.defaultClaudeCLIPath()
     @AppStorage(PreferenceKey.searchEngine) private var searchEngine = SearchEngine.defaultValue.rawValue
+    @AppStorage(PreferenceKey.notificationCorner) private var notificationCorner = NotificationCorner.topRight.rawValue
     @AppStorage(PreferenceKey.toggleChatShortcut) private var toggleChatShortcut = "command+j"
     @AppStorage(PreferenceKey.toggleTabsShortcut) private var toggleTabsShortcut = "command+b"
     @AppStorage(PreferenceKey.newTabShortcut) private var newTabShortcut = "command+t"
@@ -120,6 +121,29 @@ struct SettingsView: View {
             section("Web search") {
                 row(label: "Fallback engine", help: "Used when an entry isn't a URL.") {
                     SegmentPicker(selection: $searchEngine, options: SearchEngine.allCases.map { ($0.rawValue, $0.displayName) })
+                }
+            }
+
+            section("Notifications") {
+                row(label: "Position", help: "Where toast notifications appear in the window.") {
+                    SegmentPicker(
+                        selection: $notificationCorner,
+                        options: NotificationCorner.allCases.map { ($0.rawValue, $0.displayName) }
+                    )
+                }
+
+                row(label: "Preview", help: "Send a sample notification to the selected corner.") {
+                    HStack {
+                        Spacer()
+                        Button("Send test") {
+                            AppNotificationCenter.shared.post(
+                                title: "Test notification",
+                                message: "This is what your notifications will look like.",
+                                kind: .info
+                            )
+                        }
+                        .buttonStyle(PillButtonStyle())
+                    }
                 }
             }
 
