@@ -28,6 +28,14 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.hoverPreviewDelayMs) private var hoverPreviewDelayMs = 200
     @AppStorage(PreferenceKey.hoverPreviewPrefetchDelayMs) private var hoverPreviewPrefetchDelayMs = 800
     @AppStorage(PreferenceKey.hoverPreviewPrefetchBlocklist) private var hoverPreviewBlocklist = ""
+    @AppStorage(PreferenceKey.toolbarShowBack) private var toolbarShowBack = true
+    @AppStorage(PreferenceKey.toolbarShowForward) private var toolbarShowForward = true
+    @AppStorage(PreferenceKey.toolbarShowReload) private var toolbarShowReload = true
+    @AppStorage(PreferenceKey.toolbarShowReaderMode) private var toolbarShowReaderMode = true
+    @AppStorage(PreferenceKey.toolbarShowSmartRead) private var toolbarShowSmartRead = true
+    @AppStorage(PreferenceKey.toolbarShowClipboard) private var toolbarShowClipboard = true
+    @AppStorage(PreferenceKey.toolbarShowTabRailToggle) private var toolbarShowTabRailToggle = true
+    @AppStorage(PreferenceKey.toolbarShowChatToggle) private var toolbarShowChatToggle = true
 
     @State private var selectedTab: SettingsTab = .general
     @State private var showClearAllConfirm = false
@@ -96,6 +104,8 @@ struct SettingsView: View {
             generalSettings
         case .account:
             accountSettings
+        case .toolbar:
+            toolbarSettings
         case .ai:
             aiSettings
         case .clipboard:
@@ -113,6 +123,79 @@ struct SettingsView: View {
         VStack(alignment: .leading, spacing: 28) {
             pageHeader(title: "Account", subtitle: "Sign in with Google to personalize The Browser.")
             GoogleAccountView(store: googleAccountStore)
+        }
+    }
+
+    // MARK: - Toolbar
+
+    private var toolbarSettings: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            pageHeader(title: "Toolbar", subtitle: "Choose which buttons appear in the browser toolbar.")
+
+            ToolbarPreviewBar(
+                showBack: toolbarShowBack,
+                showForward: toolbarShowForward,
+                showReload: toolbarShowReload,
+                showReaderMode: toolbarShowReaderMode,
+                showSmartRead: toolbarShowSmartRead,
+                showClipboard: toolbarShowClipboard,
+                showTabRailToggle: toolbarShowTabRailToggle,
+                showChatToggle: toolbarShowChatToggle
+            )
+
+            section("Navigation") {
+                ToolbarToggleRow(
+                    symbol: "chevron.left",
+                    label: "Back",
+                    help: "Step back through this tab's history.",
+                    isOn: $toolbarShowBack
+                )
+                ToolbarToggleRow(
+                    symbol: "chevron.right",
+                    label: "Forward",
+                    help: "Step forward through this tab's history.",
+                    isOn: $toolbarShowForward
+                )
+                ToolbarToggleRow(
+                    symbol: "arrow.clockwise",
+                    label: "Reload",
+                    help: "Reload the current page (becomes Stop while a page is loading).",
+                    isOn: $toolbarShowReload
+                )
+            }
+
+            section("Tools") {
+                ToolbarToggleRow(
+                    symbol: "book.fill",
+                    label: "Reader Mode",
+                    help: "Strip an article down to a clean reading view. Only appears on article pages.",
+                    isOn: $toolbarShowReaderMode
+                )
+                ToolbarToggleRow(
+                    symbol: "text.magnifyingglass",
+                    label: "Smart Read",
+                    help: "Summarize the current page near your cursor. Only appears on article pages.",
+                    isOn: $toolbarShowSmartRead
+                )
+                ToolbarToggleRow(
+                    symbol: "doc.on.clipboard",
+                    label: "Paste with citation",
+                    help: "Open the clipboard history popover.",
+                    isOn: $toolbarShowClipboard
+                )
+                ToolbarToggleRow(
+                    symbol: "sidebar.left",
+                    label: "Side tabs",
+                    help: "Toggle the vertical tab rail.",
+                    isOn: $toolbarShowTabRailToggle
+                )
+                ToolbarToggleRow(
+                    symbol: "sparkles",
+                    label: "AI chat",
+                    help: "Toggle the AI chat panel.",
+                    isOn: $toolbarShowChatToggle
+                )
+            }
         }
     }
 
@@ -368,6 +451,7 @@ struct SettingsView: View {
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case account
+    case toolbar
     case ai
     case clipboard
     case keybindings
@@ -379,6 +463,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: "General"
         case .account: "Account"
+        case .toolbar: "Toolbar"
         case .ai: "AI Engine"
         case .clipboard: "Clipboard"
         case .keybindings: "Keybindings"
@@ -390,6 +475,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: "slider.horizontal.3"
         case .account: "person.crop.circle"
+        case .toolbar: "square.topthird.inset.filled"
         case .ai: "sparkles"
         case .clipboard: "doc.on.clipboard"
         case .keybindings: "keyboard"
@@ -560,6 +646,169 @@ private struct ToggleSwitch: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
+    }
+}
+
+/// One row in the Toolbar settings list. Combines a tinted icon chip, the
+/// button's name and help text, and a `ToggleSwitch` — the row dims when off
+/// so the toolbar preview above stays the primary readout of current state.
+private struct ToolbarToggleRow: View {
+    let symbol: String
+    let label: String
+    let help: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isOn ? Palette.surface : Palette.bgRaised.opacity(0.6))
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(isOn ? Palette.stroke : Palette.strokeFaint, lineWidth: 1)
+                Image(systemName: symbol)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isOn ? Palette.textPrimary : Palette.textMuted)
+            }
+            .frame(width: 32, height: 32)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(label)
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(isOn ? Palette.textPrimary : Palette.textSecondary)
+                Text(help)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Palette.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
+            ToggleSwitch(isOn: $isOn)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+        .onTapGesture { isOn.toggle() }
+        .animation(Motion.springSnap, value: isOn)
+    }
+}
+
+/// Live mini-rendering of the toolbar that reflects the current toggle state.
+/// Mimics the actual `BrowserToolbar` layout (nav cluster, address bar, right
+/// cluster) at reduced scale so users can see the effect of their choices
+/// without leaving the settings page.
+private struct ToolbarPreviewBar: View {
+    let showBack: Bool
+    let showForward: Bool
+    let showReload: Bool
+    let showReaderMode: Bool
+    let showSmartRead: Bool
+    let showClipboard: Bool
+    let showTabRailToggle: Bool
+    let showChatToggle: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("PREVIEW")
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(1.8)
+                .foregroundStyle(Palette.textFaint)
+
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    HStack(spacing: 4) {
+                        if showBack { previewChip("chevron.left") }
+                        if showForward { previewChip("chevron.right") }
+                        if showReload { previewChip("arrow.clockwise") }
+                    }
+
+                    previewAddressBar
+
+                    HStack(spacing: 4) {
+                        if showReaderMode { previewChip("book.fill") }
+                        if showSmartRead { previewChip("text.magnifyingglass") }
+                        if showClipboard { previewChip("doc.on.clipboard") }
+                        if showTabRailToggle { previewChip("sidebar.left") }
+                        if showChatToggle { previewChip("sparkles") }
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 12)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+                Rectangle()
+                    .fill(Palette.stroke)
+                    .frame(height: 1)
+            }
+            .background {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .fill(Palette.bg)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 12, style: .continuous)
+                    .stroke(Palette.stroke, lineWidth: 1)
+            }
+            .animation(Motion.springSnap, value: stateID)
+        }
+    }
+
+    private var previewAddressBar: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 9, weight: .semibold))
+                .foregroundStyle(Palette.textMuted)
+            Capsule()
+                .fill(Palette.textFaint)
+                .frame(height: 4)
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 24)
+        .frame(maxWidth: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(Palette.surface)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .stroke(Palette.stroke, lineWidth: 1)
+        }
+    }
+
+    @ViewBuilder
+    private func previewChip(_ symbol: String) -> some View {
+        Image(systemName: symbol)
+            .font(.system(size: 11, weight: .semibold))
+            .foregroundStyle(Palette.textPrimary)
+            .frame(width: 24, height: 24)
+            .background {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(Palette.surface)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .stroke(Palette.stroke, lineWidth: 1)
+            }
+            .transition(.asymmetric(
+                insertion: .scale(scale: 0.6).combined(with: .opacity),
+                removal: .scale(scale: 0.6).combined(with: .opacity)
+            ))
+    }
+
+    /// Packs all toggles into a single bitmask so the parent `.animation`
+    /// fires once per state change, giving inserted/removed icons a coherent
+    /// spring instead of competing per-icon animations.
+    private var stateID: Int {
+        var bits = 0
+        if showBack { bits |= 1 << 0 }
+        if showForward { bits |= 1 << 1 }
+        if showReload { bits |= 1 << 2 }
+        if showReaderMode { bits |= 1 << 3 }
+        if showSmartRead { bits |= 1 << 4 }
+        if showClipboard { bits |= 1 << 5 }
+        if showTabRailToggle { bits |= 1 << 6 }
+        if showChatToggle { bits |= 1 << 7 }
+        return bits
     }
 }
 

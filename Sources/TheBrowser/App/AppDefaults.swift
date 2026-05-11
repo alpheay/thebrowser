@@ -44,6 +44,14 @@ enum PreferenceKey {
     static let hoverPreviewDelayMs = "hoverPreview.hoverDelayMs"
     static let hoverPreviewPrefetchDelayMs = "hoverPreview.prefetchDelayMs"
     static let hoverPreviewPrefetchBlocklist = "hoverPreview.prefetchBlocklist"
+    static let toolbarShowBack = "toolbar.showBack"
+    static let toolbarShowForward = "toolbar.showForward"
+    static let toolbarShowReload = "toolbar.showReload"
+    static let toolbarShowReaderMode = "toolbar.showReaderMode"
+    static let toolbarShowSmartRead = "toolbar.showSmartRead"
+    static let toolbarShowClipboard = "toolbar.showClipboard"
+    static let toolbarShowTabRailToggle = "toolbar.showTabRailToggle"
+    static let toolbarShowChatToggle = "toolbar.showChatToggle"
 }
 
 /// Modifier choices for Hover Preview. Raw values are stored in
@@ -141,7 +149,15 @@ enum AppDefaults {
             PreferenceKey.hoverPreviewModifier: HoverPreviewModifier.command.rawValue,
             PreferenceKey.hoverPreviewDelayMs: 200,
             PreferenceKey.hoverPreviewPrefetchDelayMs: 800,
-            PreferenceKey.hoverPreviewPrefetchBlocklist: ""
+            PreferenceKey.hoverPreviewPrefetchBlocklist: "",
+            PreferenceKey.toolbarShowBack: true,
+            PreferenceKey.toolbarShowForward: true,
+            PreferenceKey.toolbarShowReload: true,
+            PreferenceKey.toolbarShowReaderMode: true,
+            PreferenceKey.toolbarShowSmartRead: true,
+            PreferenceKey.toolbarShowClipboard: true,
+            PreferenceKey.toolbarShowTabRailToggle: true,
+            PreferenceKey.toolbarShowChatToggle: true
         ])
     }
 
