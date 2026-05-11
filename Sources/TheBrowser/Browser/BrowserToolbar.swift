@@ -12,9 +12,9 @@ struct BrowserToolbar: View {
     @AppStorage(PreferenceKey.toolbarShowBack) private var showBack = true
     @AppStorage(PreferenceKey.toolbarShowForward) private var showForward = true
     @AppStorage(PreferenceKey.toolbarShowReload) private var showReload = true
-    @AppStorage(PreferenceKey.toolbarShowReaderMode) private var showReaderMode = true
-    @AppStorage(PreferenceKey.toolbarShowSmartRead) private var showSmartRead = true
-    @AppStorage(PreferenceKey.toolbarShowClipboard) private var showClipboard = true
+    @AppStorage(PreferenceKey.toolbarShowReaderMode) private var showReaderMode = false
+    @AppStorage(PreferenceKey.toolbarShowSmartRead) private var showSmartRead = false
+    @AppStorage(PreferenceKey.toolbarShowClipboard) private var showClipboard = false
     @AppStorage(PreferenceKey.toolbarShowTabRailToggle) private var showTabRailToggle = true
     @AppStorage(PreferenceKey.toolbarShowChatToggle) private var showChatToggle = true
 

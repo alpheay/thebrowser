@@ -31,9 +31,9 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.toolbarShowBack) private var toolbarShowBack = true
     @AppStorage(PreferenceKey.toolbarShowForward) private var toolbarShowForward = true
     @AppStorage(PreferenceKey.toolbarShowReload) private var toolbarShowReload = true
-    @AppStorage(PreferenceKey.toolbarShowReaderMode) private var toolbarShowReaderMode = true
-    @AppStorage(PreferenceKey.toolbarShowSmartRead) private var toolbarShowSmartRead = true
-    @AppStorage(PreferenceKey.toolbarShowClipboard) private var toolbarShowClipboard = true
+    @AppStorage(PreferenceKey.toolbarShowReaderMode) private var toolbarShowReaderMode = false
+    @AppStorage(PreferenceKey.toolbarShowSmartRead) private var toolbarShowSmartRead = false
+    @AppStorage(PreferenceKey.toolbarShowClipboard) private var toolbarShowClipboard = false
     @AppStorage(PreferenceKey.toolbarShowTabRailToggle) private var toolbarShowTabRailToggle = true
     @AppStorage(PreferenceKey.toolbarShowChatToggle) private var toolbarShowChatToggle = true
 

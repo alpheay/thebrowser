@@ -153,9 +153,9 @@ enum AppDefaults {
             PreferenceKey.toolbarShowBack: true,
             PreferenceKey.toolbarShowForward: true,
             PreferenceKey.toolbarShowReload: true,
-            PreferenceKey.toolbarShowReaderMode: true,
-            PreferenceKey.toolbarShowSmartRead: true,
-            PreferenceKey.toolbarShowClipboard: true,
+            PreferenceKey.toolbarShowReaderMode: false,
+            PreferenceKey.toolbarShowSmartRead: false,
+            PreferenceKey.toolbarShowClipboard: false,
             PreferenceKey.toolbarShowTabRailToggle: true,
             PreferenceKey.toolbarShowChatToggle: true
         ])
