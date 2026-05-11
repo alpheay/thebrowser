@@ -9,12 +9,23 @@ enum KeychainError: Error {
 enum KeychainStore {
     static let serviceName = "com.thebrowser.googleAccount"
 
-    static func save(_ data: Data, account: String) throws {
-        let query: [String: Any] = [
+    /// All queries opt into the modern "data protection" keychain. On macOS
+    /// the legacy file-backed keychain gates each item by the calling
+    /// binary's code signature, so every unsigned/ad-hoc-signed build
+    /// triggers a login-password prompt. The data protection keychain uses
+    /// iOS-style access-group semantics derived from the app's signing
+    /// identity instead, which does not prompt.
+    private static func baseQuery(account: String) -> [String: Any] {
+        [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: serviceName,
-            kSecAttrAccount as String: account
+            kSecAttrAccount as String: account,
+            kSecUseDataProtectionKeychain as String: true
         ]
+    }
+
+    static func save(_ data: Data, account: String) throws {
+        let query = baseQuery(account: account)
 
         let attributes: [String: Any] = [
             kSecValueData as String: data,
@@ -46,13 +57,9 @@ enum KeychainStore {
     }
 
     static func load(account: String) -> Data? {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
-            kSecAttrAccount as String: account,
-            kSecReturnData as String: true,
-            kSecMatchLimit as String: kSecMatchLimitOne
-        ]
+        var query = baseQuery(account: account)
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
 
         var item: AnyObject?
         let status = SecItemCopyMatching(query as CFDictionary, &item)
@@ -69,12 +76,7 @@ enum KeychainStore {
 
     @discardableResult
     static func delete(account: String) -> Bool {
-        let query: [String: Any] = [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
-            kSecAttrAccount as String: account
-        ]
-        let status = SecItemDelete(query as CFDictionary)
+        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
         return status == errSecSuccess || status == errSecItemNotFound
     }
 }
