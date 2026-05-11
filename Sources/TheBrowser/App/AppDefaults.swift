@@ -29,6 +29,11 @@ enum PreferenceKey {
     static let focusAddressShortcut = "shortcut.focusAddress"
     static let smartReadShortcut = "shortcut.smartRead"
     static let googleOAuthClientID = "google.oauth.clientID"
+    static let inlineCompletionsEnabled = "inlineCompletions.enabled"
+    static let inlineCompletionsTriggerDelayMs = "inlineCompletions.triggerDelayMs"
+    static let inlineCompletionsRenderMode = "inlineCompletions.renderMode"
+    static let inlineCompletionsAllowList = "inlineCompletions.allowList"
+    static let inlineCompletionsBlockList = "inlineCompletions.blockList"
 }
 
 enum AppDefaults {
@@ -58,7 +63,12 @@ enum AppDefaults {
             PreferenceKey.closeTabShortcut: "command+w",
             PreferenceKey.focusAddressShortcut: "command+l",
             PreferenceKey.smartReadShortcut: "command+shift+r",
-            PreferenceKey.googleOAuthClientID: ""
+            PreferenceKey.googleOAuthClientID: "",
+            PreferenceKey.inlineCompletionsEnabled: true,
+            PreferenceKey.inlineCompletionsTriggerDelayMs: 600,
+            PreferenceKey.inlineCompletionsRenderMode: "ghost",
+            PreferenceKey.inlineCompletionsAllowList: InlineCompletionsSettings.defaultAllowListString,
+            PreferenceKey.inlineCompletionsBlockList: ""
         ])
     }
 

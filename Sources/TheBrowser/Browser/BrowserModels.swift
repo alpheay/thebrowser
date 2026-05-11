@@ -20,6 +20,14 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private var observations: [NSKeyValueObservation] = []
     private var searchBackStack: [BrowserSearchPage] = []
     private let selectionBridge: TextSelectionBridge
+    private let inlineCompletionsBridge: InlineCompletionsBridge
+
+    /// Tabs created with this flag set skip the inline-completions
+    /// injection entirely — wired through to the JS gate via the bridge's
+    /// `isIncognito` reply. The browser doesn't expose private tabs yet,
+    /// so this stays false in production; the plumbing is here so
+    /// turning on private mode later is a one-line change.
+    let isIncognito: Bool
 
     /// User agent used for both browsing tabs and the in-app Google sign-in
     /// sheet. WKWebView's default UA omits the `Version/X Safari/Y` suffix,
@@ -34,6 +42,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     override init() {
         let bridge = TextSelectionBridge()
         selectionBridge = bridge
+        let inlineBridge = InlineCompletionsBridge()
+        inlineCompletionsBridge = inlineBridge
+        isIncognito = false
 
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
@@ -42,6 +53,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         configuration.userContentController.addUserScript(Self.unsupportedBrowserBannerKillerScript)
         configuration.userContentController.addUserScript(Self.textSelectionUserScript)
         configuration.userContentController.add(bridge, name: TextSelectionBridge.messageName)
+        if !isIncognito {
+            configuration.userContentController.addUserScript(InlineCompletionsUserScript.make())
+            configuration.userContentController.add(inlineBridge, name: InlineCompletionsBridge.messageName)
+        }
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.customUserAgent = Self.userAgent
         webView.allowsBackForwardNavigationGestures = true
@@ -51,6 +66,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         super.init()
 
         bridge.tab = self
+        if !isIncognito {
+            inlineBridge.attach(to: webView)
+        }
         webView.navigationDelegate = self
         observeWebView()
     }

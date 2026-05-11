@@ -20,6 +20,11 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.closeTabShortcut) private var closeTabShortcut = "command+w"
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
     @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "command+shift+r"
+    @AppStorage(PreferenceKey.inlineCompletionsEnabled) private var inlineCompletionsEnabled = true
+    @AppStorage(PreferenceKey.inlineCompletionsTriggerDelayMs) private var inlineCompletionsTriggerDelayMs = 600
+    @AppStorage(PreferenceKey.inlineCompletionsRenderMode) private var inlineCompletionsRenderMode = "ghost"
+    @AppStorage(PreferenceKey.inlineCompletionsAllowList) private var inlineCompletionsAllowList = InlineCompletionsSettings.defaultAllowListString
+    @AppStorage(PreferenceKey.inlineCompletionsBlockList) private var inlineCompletionsBlockList = ""
 
     @State private var selectedTab: SettingsTab = .general
     @State private var showClearAllConfirm = false
@@ -90,6 +95,8 @@ struct SettingsView: View {
             accountSettings
         case .ai:
             aiSettings
+        case .inlineCompletions:
+            inlineCompletionsSettings
         case .keybindings:
             keybindingsSettings
         case .migration:
@@ -206,6 +213,73 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Inline Completions
+
+    private var inlineCompletionsSettings: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            pageHeader(
+                title: "Inline Completions",
+                subtitle: "Ghost-text autocomplete inside web text fields, powered by the fast model."
+            )
+
+            section("Behavior") {
+                row(label: "Enabled", help: "Turn the feature off globally.") {
+                    HStack {
+                        Spacer()
+                        ToggleSwitch(isOn: $inlineCompletionsEnabled)
+                    }
+                }
+
+                row(label: "Trigger delay", help: "Milliseconds to wait after the last keystroke. Clamped to 200–2000.") {
+                    HStack(spacing: 8) {
+                        PlainTextField(text: triggerDelayBinding, placeholder: "600")
+                            .frame(maxWidth: 96)
+                        Text("ms")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Palette.textMuted)
+                        Spacer()
+                    }
+                }
+
+                row(label: "Show as", help: "Ghost text overlays the field; popover floats a small chip beneath the caret.") {
+                    SegmentPicker(selection: $inlineCompletionsRenderMode, options: [
+                        ("ghost", "Ghost text"),
+                        ("popover", "Popover")
+                    ])
+                }
+            }
+
+            section("Sites") {
+                row(label: "Allowed sites", help: "One host suffix per line. Blank = every site (except blocked below).") {
+                    MultilineField(text: $inlineCompletionsAllowList, height: 132)
+                }
+
+                row(label: "Blocked sites", help: "Takes precedence over the allow list. Password, OTP, and obvious search fields are always skipped, regardless of these lists.") {
+                    MultilineField(text: $inlineCompletionsBlockList, height: 84)
+                }
+            }
+        }
+        .onChange(of: inlineCompletionsEnabled) { _, _ in postInlineCompletionsChanged() }
+        .onChange(of: inlineCompletionsTriggerDelayMs) { _, _ in postInlineCompletionsChanged() }
+        .onChange(of: inlineCompletionsRenderMode) { _, _ in postInlineCompletionsChanged() }
+        .onChange(of: inlineCompletionsAllowList) { _, _ in postInlineCompletionsChanged() }
+        .onChange(of: inlineCompletionsBlockList) { _, _ in postInlineCompletionsChanged() }
+    }
+
+    private var triggerDelayBinding: Binding<String> {
+        Binding(
+            get: { String(inlineCompletionsTriggerDelayMs) },
+            set: { newValue in
+                let parsed = Int(newValue.trimmingCharacters(in: .whitespaces)) ?? inlineCompletionsTriggerDelayMs
+                inlineCompletionsTriggerDelayMs = max(200, min(2000, parsed))
+            }
+        )
+    }
+
+    private func postInlineCompletionsChanged() {
+        NotificationCenter.default.post(name: .inlineCompletionsSettingsChanged, object: nil)
+    }
+
     // MARK: - Keybindings
 
     private var keybindingsSettings: some View {
@@ -306,6 +380,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case account
     case ai
+    case inlineCompletions
     case keybindings
     case migration
 
@@ -316,6 +391,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "General"
         case .account: "Account"
         case .ai: "AI Engine"
+        case .inlineCompletions: "Inline Completions"
         case .keybindings: "Keybindings"
         case .migration: "Migration"
         }
@@ -326,6 +402,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "slider.horizontal.3"
         case .account: "person.crop.circle"
         case .ai: "sparkles"
+        case .inlineCompletions: "text.cursor"
         case .keybindings: "keyboard"
         case .migration: "arrow.triangle.2.circlepath"
         }
