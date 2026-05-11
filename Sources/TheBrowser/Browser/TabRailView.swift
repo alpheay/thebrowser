@@ -1,4 +1,6 @@
+import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct TabRailView: View {
     @ObservedObject var model: BrowserModel
@@ -184,6 +186,57 @@ struct TabRailView: View {
             .offset(y: -16)
             .allowsHitTesting(false)
         }
+    }
+}
+
+// MARK: - Drag payload helper
+
+/// Wraps NSItemProvider plumbing for tab drags. We bypass SwiftUI's
+/// `Transferable` because this app ships as an SPM executable without an
+/// Info.plist, which makes `UTType(exportedAs:)` registration unreliable —
+/// `.draggable` would silently fail to initiate the drag. NSItemProvider
+/// with a plain string UTI works in-process regardless of the bundle's
+/// type declarations.
+private enum TabDragPayload {
+    @MainActor
+    static func itemProvider(for tab: BrowserTab) -> NSItemProvider {
+        let provider = NSItemProvider()
+        provider.suggestedName = tab.displayTitle
+        let payload = tab.id.uuidString.data(using: .utf8) ?? Data()
+        provider.registerDataRepresentation(
+            forTypeIdentifier: TabDragType.identifier,
+            visibility: .ownProcess
+        ) { completion in
+            completion(payload, nil)
+            return nil
+        }
+        return provider
+    }
+
+    /// Decodes the dragged tab id from the first item provider that carries
+    /// our type. Hops back onto the main actor before invoking `handler` so
+    /// callers can safely touch `BrowserModel` from there.
+    @discardableResult
+    static func loadTabID(
+        from providers: [NSItemProvider],
+        handler: @escaping @MainActor (UUID) -> Void
+    ) -> Bool {
+        guard let provider = providers.first(where: {
+            $0.hasItemConformingToTypeIdentifier(TabDragType.identifier)
+        }) else {
+            return false
+        }
+        provider.loadDataRepresentation(forTypeIdentifier: TabDragType.identifier) { data, _ in
+            guard let data,
+                  let idString = String(data: data, encoding: .utf8),
+                  let uuid = UUID(uuidString: idString) else {
+                return
+            }
+            Task { @MainActor in
+                handler(uuid)
+            }
+        }
+        return true
     }
 }
 
@@ -381,30 +434,36 @@ private struct TabRow: View {
                 withAnimation(Motion.springSoft) { model.close(tab) }
             }
         }
-        .draggable(DraggedTabPayload(id: tab.id)) {
+        .onDrag({
+            TabDragPayload.itemProvider(for: tab)
+        }, preview: {
             DragPreview(tab: tab)
-        }
-        .dropDestination(for: DraggedTabPayload.self) { payloads, _ in
-            handleDrop(payloads: payloads)
-        } isTargeted: { targeting in
-            withAnimation(Motion.hoverFade) {
-                isDropTargeted = targeting
-            }
+        })
+        .onDrop(
+            of: [TabDragType.identifier],
+            isTargeted: Binding(
+                get: { isDropTargeted },
+                set: { newValue in
+                    withAnimation(Motion.hoverFade) { isDropTargeted = newValue }
+                }
+            )
+        ) { providers in
+            handleDrop(providers: providers)
         }
         .animation(Motion.springSoft, value: selected)
         .animation(Motion.hoverFade, value: isHovering)
         .animation(Motion.springSnap, value: isDropTargeted)
     }
 
-    private func handleDrop(payloads: [DraggedTabPayload]) -> Bool {
-        guard let payload = payloads.first,
-              payload.id != tab.id,
-              let source = model.tabs.first(where: { $0.id == payload.id })
-        else { return false }
-        withAnimation(Motion.springBloom) {
-            _ = model.mergeTabs(source: source, into: tab, magneticEnabled: magneticEnabled)
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        TabDragPayload.loadTabID(from: providers) { sourceID in
+            guard sourceID != tab.id,
+                  let source = model.tabs.first(where: { $0.id == sourceID })
+            else { return }
+            withAnimation(Motion.springBloom) {
+                _ = model.mergeTabs(source: source, into: tab, magneticEnabled: magneticEnabled)
+            }
         }
-        return true
     }
 
     private func closeTab() {
@@ -536,27 +595,30 @@ private struct ClusterHeaderRow: View {
                 }
             }
         }
-        .dropDestination(for: DraggedTabPayload.self) { payloads, _ in
-            handleDrop(payloads: payloads)
-        } isTargeted: { targeting in
-            withAnimation(Motion.hoverFade) {
-                isDropTargeted = targeting
-            }
+        .onDrop(
+            of: [TabDragType.identifier],
+            isTargeted: Binding(
+                get: { isDropTargeted },
+                set: { newValue in
+                    withAnimation(Motion.hoverFade) { isDropTargeted = newValue }
+                }
+            )
+        ) { providers in
+            handleDrop(providers: providers)
         }
         .animation(Motion.springSnap, value: isDropTargeted)
         .animation(Motion.hoverFade, value: isHovering)
     }
 
-    private func handleDrop(payloads: [DraggedTabPayload]) -> Bool {
-        guard let payload = payloads.first,
-              let source = model.tabs.first(where: { $0.id == payload.id })
-        else { return false }
-        // Dropping a tab that's already in this cluster is a no-op.
-        guard source.clusterID != cluster.id else { return false }
-        withAnimation(Motion.springBloom) {
-            model.attach(source, to: cluster.id)
+    private func handleDrop(providers: [NSItemProvider]) -> Bool {
+        TabDragPayload.loadTabID(from: providers) { sourceID in
+            guard let source = model.tabs.first(where: { $0.id == sourceID }),
+                  source.clusterID != cluster.id
+            else { return }
+            withAnimation(Motion.springBloom) {
+                model.attach(source, to: cluster.id)
+            }
         }
-        return true
     }
 
     private var rowFill: Color {

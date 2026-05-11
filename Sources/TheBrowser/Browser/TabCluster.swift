@@ -1,6 +1,4 @@
-import CoreTransferable
 import Foundation
-import UniformTypeIdentifiers
 
 /// A named group of tabs in the side rail. Clusters are identified by their
 /// normalized host so the "Magnetic" feature can decide whether a sibling
@@ -44,18 +42,13 @@ extension TabCluster {
     }
 }
 
-/// Drag payload — just the source tab's UUID, encoded so SwiftUI's
-/// `.draggable` / `.dropDestination` can shuttle it between rows.
-struct DraggedTabPayload: Codable, Transferable {
-    let id: UUID
-
-    static var transferRepresentation: some TransferRepresentation {
-        CodableRepresentation(contentType: .tabRailItem)
-    }
-}
-
-extension UTType {
-    /// Private content type for the tab-rail drag — keeps the payload from
-    /// being interpreted by other drop targets in the app.
-    static let tabRailItem = UTType(exportedAs: "com.thebrowser.tab-rail-item")
+/// Pasteboard type identifier for tab-row drags. We don't promote this to a
+/// real `UTType` declaration because the app ships as an SPM executable
+/// without an Info.plist — without the plist entry, `UTType(exportedAs:)`
+/// is unreliable for `.draggable` / `.dropDestination`. NSItemProvider is
+/// happy to ferry arbitrary UTI strings between views in the same process,
+/// so we keep the identifier as a plain `String` and use the `.onDrag` /
+/// `.onDrop` SwiftUI APIs directly.
+enum TabDragType {
+    static let identifier = "com.thebrowser.tab-rail-item"
 }
