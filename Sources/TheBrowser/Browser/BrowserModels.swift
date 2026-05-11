@@ -17,6 +17,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var searchReloadToken = 0
     @Published var selectionInfo: TextSelectionInfo?
     @Published var isPinned = false
+    /// Identifies the rail-side cluster this tab belongs to, or `nil` for a
+    /// loose tab. Mutated by ``BrowserModel`` — never by the tab itself —
+    /// so cluster membership and ordering stay in sync.
+    @Published var clusterID: UUID?
     /// Non-nil when the tab is currently displaying a PDF instead of an
     /// HTML page. Set by ``decidePolicyFor:navigationResponse:`` after we
     /// intercept a PDF response and load it into PDFKit. Cleared on every
@@ -174,6 +178,15 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         guard let url, url.isFileURL else { return false }
         let artifactRoot = ArtifactStore.rootURL.standardizedFileURL.path
         return url.standardizedFileURL.path.hasPrefix(artifactRoot)
+    }
+
+    /// Cluster-grouping identity. Returns the host stripped of a `www.`
+    /// prefix and lowercased — `nil` for home tabs, search tabs, and any
+    /// URL without a host so they never accidentally cluster together.
+    var clusterHost: String? {
+        guard !isHome, searchPage == nil else { return nil }
+        guard let host = url?.host(percentEncoded: false), !host.isEmpty else { return nil }
+        return TabCluster.normalizedHost(host)
     }
 
     var isSmartReadEligible: Bool {
