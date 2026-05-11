@@ -14,8 +14,9 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.newTabShortcut) private var newTabShortcut = "command+t"
     @AppStorage(PreferenceKey.closeTabShortcut) private var closeTabShortcut = "command+w"
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
-    @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "command+shift+r"
+    @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "shift+command+r"
     @AppStorage(PreferenceKey.readerModeShortcut) private var readerModeShortcut = "command+r"
+    @AppStorage(PreferenceKey.pasteWithCitationShortcut) private var pasteWithCitationShortcut = "shift+command+v"
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
     @AppStorage(PreferenceKey.hoverPreviewEnabled) private var hoverPreviewEnabled = true
     @AppStorage(PreferenceKey.hoverPreviewPrefetchBlocklist) private var hoverPreviewBlocklist = ""
@@ -23,6 +24,7 @@ struct BrowserShellView: View {
     @State private var isPeekingRail = false
     @State private var peekDismissTask: Task<Void, Never>? = nil
     @State private var isShowingMigrationPrompt = false
+    @State private var isClipboardPopoverPresented = false
 
     private var railOverlayVisible: Bool {
         model.isTabRailVisible || isPeekingRail
@@ -194,7 +196,8 @@ struct BrowserShellView: View {
                 reservesTrafficLightGutter: !model.isTabRailVisible,
                 readerActive: readerModel.isPresented,
                 onSmartRead: triggerSmartRead,
-                onReaderMode: triggerReaderMode
+                onReaderMode: triggerReaderMode,
+                isClipboardPopoverPresented: $isClipboardPopoverPresented
             )
 
             ZStack {
@@ -415,7 +418,10 @@ struct BrowserShellView: View {
                 model.focusAddress()
             },
             smartReadShortcut: triggerSmartRead,
-            readerModeShortcut: triggerReaderMode
+            readerModeShortcut: triggerReaderMode,
+            pasteWithCitationShortcut: {
+                isClipboardPopoverPresented.toggle()
+            }
         ]
     }
 }

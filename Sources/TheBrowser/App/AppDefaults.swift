@@ -29,7 +29,14 @@ enum PreferenceKey {
     static let focusAddressShortcut = "shortcut.focusAddress"
     static let smartReadShortcut = "shortcut.smartRead"
     static let readerModeShortcut = "shortcut.readerMode"
+    static let pasteWithCitationShortcut = "shortcut.pasteWithCitation"
     static let googleOAuthClientID = "google.oauth.clientID"
+    static let clipboardEnabled = "clipboard.enabled"
+    static let clipboardSmartPasteEnabled = "clipboard.smartPasteEnabled"
+    static let clipboardMarkdownStyle = "clipboard.markdownStyle"
+    static let clipboardCitationStyle = "clipboard.citationStyle"
+    static let clipboardBlocklist = "clipboard.blocklist"
+    static let clipboardAppOverrides = "clipboard.appOverrides"
     static let notificationCorner = "notifications.corner"
     static let notificationsWelcomeShown = "notifications.welcomeShown"
     static let hoverPreviewEnabled = "hoverPreview.enabled"
@@ -113,9 +120,21 @@ enum AppDefaults {
             PreferenceKey.newTabShortcut: "command+t",
             PreferenceKey.closeTabShortcut: "command+w",
             PreferenceKey.focusAddressShortcut: "command+l",
-            PreferenceKey.smartReadShortcut: "command+shift+r",
+            // Multi-modifier defaults are written in canonical order
+            // (control + option + shift + command + key) so they match
+            // ``AppShortcut.storageValue(from:)``. The keyboard host
+            // normalizes incoming bindings as a safety net for any older
+            // string that survived in `@AppStorage`.
+            PreferenceKey.smartReadShortcut: "shift+command+r",
             PreferenceKey.readerModeShortcut: "command+r",
+            PreferenceKey.pasteWithCitationShortcut: "shift+command+v",
             PreferenceKey.googleOAuthClientID: "",
+            PreferenceKey.clipboardEnabled: true,
+            PreferenceKey.clipboardSmartPasteEnabled: true,
+            PreferenceKey.clipboardMarkdownStyle: CitedMarkdownStyle.blockquote.rawValue,
+            PreferenceKey.clipboardCitationStyle: CitedCitationStyle.bracketed.rawValue,
+            PreferenceKey.clipboardBlocklist: CitedClipboardPolicy.defaultBlocklistString,
+            PreferenceKey.clipboardAppOverrides: "",
             PreferenceKey.notificationCorner: NotificationCorner.topRight.rawValue,
             PreferenceKey.notificationsWelcomeShown: false,
             PreferenceKey.hoverPreviewEnabled: true,
