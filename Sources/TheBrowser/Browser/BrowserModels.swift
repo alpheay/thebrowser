@@ -1,6 +1,7 @@
 import AppKit
 import Combine
 import Foundation
+import PDFKit
 @preconcurrency import WebKit
 
 @MainActor
@@ -16,6 +17,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var searchReloadToken = 0
     @Published var selectionInfo: TextSelectionInfo?
     @Published var isPinned = false
+    /// Non-nil when the tab is currently displaying a PDF instead of an
+    /// HTML page. Set by ``decidePolicyFor:navigationResponse:`` after we
+    /// intercept a PDF response and load it into PDFKit. Cleared on every
+    /// new navigation so HTML pages render through the WKWebView path.
+    @Published var pdfDocument: PDFDocument?
 
     let webView: WKWebView
     private var observations: [NSKeyValueObservation] = []
@@ -23,6 +29,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private let selectionBridge: TextSelectionBridge
     private let citedClipboardBridge: CitedClipboardBridge
     private let linkHoverBridge: LinkHoverBridge
+    private var pdfLoadTask: Task<Void, Never>?
+    /// True between the moment we cancel a PDF response and the moment our
+    /// own URLSession fetch resolves. Lets ``didFailProvisionalNavigation``
+    /// distinguish "we cancelled this on purpose to take over" from a real
+    /// load failure, so the spinner doesn't blink off mid-fetch.
+    private var pdfLoadInProgress = false
 
     /// Cited Clipboard capture gate. Returns false for tabs that should
     /// never feed the clipboard log — currently only the placeholder for
@@ -240,6 +252,17 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         title = "New Space"
         url = nil
         selectionInfo = nil
+        clearPDFState()
+    }
+
+    /// Tears down any in-flight PDF fetch and unmounts the displayed
+    /// document. Called from every entry point that starts a new
+    /// navigation so we never leak a PDFView over a fresh HTML page.
+    func clearPDFState() {
+        pdfLoadTask?.cancel()
+        pdfLoadTask = nil
+        pdfLoadInProgress = false
+        pdfDocument = nil
     }
 
     /// Loads a local file (typically a generated artifact) into this tab. Uses
@@ -1024,6 +1047,10 @@ extension BrowserTab: WKNavigationDelegate {
             self.isHome = false
             self.isLoading = true
             self.selectionInfo = nil
+            // Drop any displayed PDF — we're about to render either a fresh
+            // HTML page or a fresh PDF (the latter loops back through
+            // `loadPDF(from:)` after we cancel the WK response).
+            self.clearPDFState()
         }
     }
 
@@ -1046,8 +1073,90 @@ extension BrowserTab: WKNavigationDelegate {
 
     nonisolated func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor in
-            self.isLoading = false
+            // Don't drop the spinner if we deliberately cancelled the WK
+            // load to hand the response off to PDFKit — `loadPDF(from:)`
+            // owns the spinner from here.
+            if !self.pdfLoadInProgress {
+                self.isLoading = false
+            }
         }
+    }
+
+    /// Hands off PDF responses to PDFKit. WKWebView's built-in PDF viewer
+    /// renders fine but its selection is invisible to JS, which kills the
+    /// floating Ask/Summarize pill — so we cancel and load the bytes
+    /// ourselves into a `PDFDocument` that ``BrowserPDFView`` can show.
+    /// `WKNavigationResponse.response` is main-actor isolated under Swift
+    /// 6 strict concurrency, hence the hop before we read MIME/URL.
+    nonisolated func webView(_ webView: WKWebView,
+                             decidePolicyFor navigationResponse: WKNavigationResponse,
+                             decisionHandler: @escaping @MainActor @Sendable (WKNavigationResponsePolicy) -> Void) {
+        Task { @MainActor [weak self] in
+            let mime = navigationResponse.response.mimeType?.lowercased() ?? ""
+            let url = navigationResponse.response.url
+            let pathLooksPDF = url?.pathExtension.lowercased() == "pdf"
+            let isPDF = mime == "application/pdf" || (mime.isEmpty && pathLooksPDF)
+
+            guard isPDF, let pdfURL = url else {
+                decisionHandler(.allow)
+                return
+            }
+            decisionHandler(.cancel)
+            await self?.loadPDF(from: pdfURL)
+        }
+    }
+}
+
+@MainActor
+extension BrowserTab {
+    /// Downloads a PDF off the web and hands it to ``BrowserPDFView`` for
+    /// display. The WKWebView path stays put — its `url` and history
+    /// entries are still tied to whatever HTML triggered this load — so
+    /// back/forward keeps working from the user's perspective. A new
+    /// fetch cancels any prior in-flight one.
+    func loadPDF(from pdfURL: URL) async {
+        pdfLoadTask?.cancel()
+        pdfLoadInProgress = true
+        isLoading = true
+        estimatedProgress = 0.05
+
+        let task = Task { @MainActor [weak self] in
+            defer {
+                self?.pdfLoadInProgress = false
+            }
+            do {
+                var request = URLRequest(url: pdfURL)
+                request.setValue(BrowserTab.userAgent, forHTTPHeaderField: "User-Agent")
+                let (data, _) = try await URLSession.shared.data(for: request)
+                guard !Task.isCancelled, let self else { return }
+                guard let document = PDFDocument(data: data) else {
+                    self.isLoading = false
+                    self.estimatedProgress = 1
+                    return
+                }
+                self.pdfDocument = document
+                self.url = pdfURL
+                self.isHome = false
+                self.searchPage = nil
+                self.isLoading = false
+                self.estimatedProgress = 1
+                let trimmed = self.title.trimmingCharacters(in: .whitespacesAndNewlines)
+                let docTitle = document.documentAttributes?[PDFDocumentAttribute.titleAttribute] as? String
+                if let docTitle, !docTitle.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    self.title = docTitle
+                } else if trimmed.isEmpty || trimmed == "New Space" {
+                    self.title = pdfURL.lastPathComponent
+                }
+            } catch is CancellationError {
+                return
+            } catch {
+                guard let self else { return }
+                self.isLoading = false
+                self.estimatedProgress = 1
+            }
+        }
+        pdfLoadTask = task
+        await task.value
     }
 }
 
