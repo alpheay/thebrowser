@@ -101,8 +101,12 @@ final class SmartReadModel: ObservableObject {
     /// hibernation and tab switches — and only updates the model's
     /// surface if that tab is still the bound (currently selected) one.
     private func apply(_ newPhase: Phase, to tab: BrowserTab) {
+        guard case .loading = tab.smartReadPhase else { return }
         tab.smartReadPhase = newPhase
         tab.smartReadIsPresented = true
+        if tab === loadingTab {
+            loadingTab = nil
+        }
         if tab === boundTab {
             phase = newPhase
             isPresented = true
