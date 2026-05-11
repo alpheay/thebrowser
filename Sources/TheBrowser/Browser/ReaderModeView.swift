@@ -514,13 +514,13 @@ private struct ReaderShimmerBar: View {
             let width = geometry.size.width * widthFraction
             ZStack {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(Color.black.opacity(0.06))
+                    .fill(Color.white.opacity(0.07))
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .fill(
                         LinearGradient(
                             stops: [
                                 .init(color: .clear, location: max(0, phase - 0.3)),
-                                .init(color: Color.black.opacity(0.14), location: max(0, min(1, phase))),
+                                .init(color: Color.white.opacity(0.22), location: max(0, min(1, phase))),
                                 .init(color: .clear, location: min(1, phase + 0.3))
                             ],
                             startPoint: .leading,
@@ -545,13 +545,12 @@ private struct ReaderShimmerBar: View {
 private struct ReaderFailedView: View {
     let message: String
     var onClose: () -> Void
-    @State private var isHoveringDone = false
 
     var body: some View {
         VStack(spacing: 18) {
             ZStack {
                 Circle()
-                    .fill(Color.black.opacity(0.04))
+                    .fill(Palette.surface)
                 Circle()
                     .stroke(ReaderTheme.hairline, lineWidth: 1)
                 Image(systemName: "text.magnifyingglass")
@@ -573,23 +572,8 @@ private struct ReaderFailedView: View {
 
             Button(action: onClose) {
                 Text("Done")
-                    .font(.system(size: 12.5, weight: .semibold))
-                    .foregroundStyle(ReaderTheme.textPrimary)
-                    .padding(.horizontal, 18)
-                    .frame(height: 30)
-                    .background {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .fill(isHoveringDone ? Color.black.opacity(0.08) : Color.black.opacity(0.04))
-                    }
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 8, style: .continuous)
-                            .stroke(ReaderTheme.hairline, lineWidth: 1)
-                    }
             }
-            .buttonStyle(.plain)
-            .onHover { hovering in
-                withAnimation(Motion.hoverFade) { isHoveringDone = hovering }
-            }
+            .buttonStyle(PillButtonStyle())
             .padding(.top, 4)
         }
         .padding(40)
@@ -635,13 +619,13 @@ private struct ReaderControls: View {
         .frame(height: 34)
         .background {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(Palette.surface.opacity(0.94))
+                .fill(Palette.surfaceHover)
         }
         .overlay {
             RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(Palette.stroke, lineWidth: 1)
+                .stroke(Palette.strokeStrong, lineWidth: 1)
         }
-        .shadow(color: Color.black.opacity(0.45), radius: 22, x: 0, y: 8)
+        .shadow(color: Color.black.opacity(0.55), radius: 22, x: 0, y: 8)
     }
 }
 
@@ -663,7 +647,7 @@ private struct ReaderControlButton: View {
                 .frame(width: 26, height: 26)
                 .background {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(isHovering && isEnabled ? Palette.surfaceHover : Color.clear)
+                        .fill(isHovering && isEnabled ? Palette.surfaceActive : Color.clear)
                 }
                 .contentShape(Rectangle())
         }
@@ -735,17 +719,22 @@ private struct EscapeKeyCatcher: NSViewRepresentable {
 }
 
 // MARK: - Theme
+//
+// Pure black-and-white reader on the app's dark plate. The card sits one
+// step above the chrome (`Palette.bgRaised`) so it reads as a lifted
+// reading surface, and all body type, hairlines, and accents come from
+// the shared `Palette` so Reader Mode never looks like a foreign panel.
 
 private enum ReaderTheme {
-    static let surface = Color(red: 0xFA / 255, green: 0xFA / 255, blue: 0xF7 / 255)
-    static let textPrimary = Color(red: 0x14 / 255, green: 0x14 / 255, blue: 0x14 / 255)
-    static let textSecondary = Color(red: 0x3A / 255, green: 0x3A / 255, blue: 0x3A / 255)
-    static let textMuted = Color(red: 0x6E / 255, green: 0x6E / 255, blue: 0x6E / 255)
-    static let hairline = Color.black.opacity(0.10)
-    static let quoteBar = Color.black.opacity(0.55)
-    static let codeInline = Color.black.opacity(0.06)
-    static let codeBlock = Color.black.opacity(0.04)
-    static let imagePlaceholder = Color.black.opacity(0.05)
+    static let surface = Palette.bgRaised
+    static let textPrimary = Palette.textPrimary
+    static let textSecondary = Palette.textSecondary
+    static let textMuted = Palette.textMuted
+    static let hairline = Palette.stroke
+    static let quoteBar = Palette.strokeStrong
+    static let codeInline = Color.white.opacity(0.08)
+    static let codeBlock = Palette.bgSunken
+    static let imagePlaceholder = Color.white.opacity(0.05)
 
     static let cardMaxWidth: CGFloat = 720
     static let cardHorizontalPadding: CGFloat = 72
