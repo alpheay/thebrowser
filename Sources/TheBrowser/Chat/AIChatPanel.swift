@@ -1084,6 +1084,7 @@ private struct ToolChainChip: View {
         case "read_tabs": return "rectangle.on.rectangle"
         case "read_highlights": return "quote.opening"
         case "create_artifact": return "doc.richtext"
+        case "web_control": return "cursorarrow.click"
         default: return "wrench"
         }
     }
@@ -1096,6 +1097,7 @@ private struct ToolChainChip: View {
         case "read_tabs": return "read tabs"
         case "read_highlights": return "read highlights"
         case "create_artifact": return "artifact"
+        case "web_control": return "web control"
         default: return invocation.tool
         }
     }

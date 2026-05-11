@@ -8,6 +8,7 @@ final class BrowserModel: ObservableObject {
     @Published var isChatVisible = true
     @Published var addressDraft = ""
     @Published var addressFocusToken = 0
+    @Published var webControlStatus: WebControlStatus?
 
     init() {
         let firstTab = BrowserTab()
@@ -186,5 +187,32 @@ final class BrowserModel: ObservableObject {
             return
         }
         openArtifact(at: fileURL)
+    }
+
+    /// Runs the separate web-control agent against the tab that was selected
+    /// when the tool started. The status is observed by the shell to draw the
+    /// vignette and block user input while the harness is driving the page.
+    func runWebControl(task: String, sessionDirectory: URL) async -> WebControlAgentOutcome {
+        let trimmedTask = task.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedTask.isEmpty else {
+            return WebControlAgentOutcome(
+                succeeded: false,
+                summary: "No web-control task was provided.",
+                stepCount: 0
+            )
+        }
+
+        let controlledTab = selectedTab
+        webControlStatus = WebControlStatus(task: trimmedTask, detail: "Starting web agent", step: 0)
+        defer { webControlStatus = nil }
+
+        let runner = WebControlAgentRunner()
+        return await runner.run(
+            task: trimmedTask,
+            tab: controlledTab,
+            sessionDirectory: sessionDirectory
+        ) { [weak self] status in
+            self?.webControlStatus = status
+        }
     }
 }

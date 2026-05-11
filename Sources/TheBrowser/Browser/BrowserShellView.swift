@@ -68,6 +68,9 @@ struct BrowserShellView: View {
                                 let url = try ArtifactStore.shared.save(title: title, html: html)
                                 model.openArtifact(at: url)
                                 return url
+                            },
+                            runWebControl: { task in
+                                await model.runWebControl(task: task, sessionDirectory: chatModel.sessionDirectory)
                             }
                         ),
                         onOpenArtifact: { url in
@@ -256,9 +259,15 @@ struct BrowserShellView: View {
                         ))
                     }
                 }
+
+                if let status = model.webControlStatus {
+                    WebControlWorkingOverlay(status: status)
+                        .transition(.opacity)
+                }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .animation(Motion.springSnap, value: readerModel.isPresented)
+            .animation(Motion.springSnap, value: model.webControlStatus)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -423,5 +432,109 @@ struct BrowserShellView: View {
                 CitedClipboardCursorPanelController.shared.toggle()
             }
         ]
+    }
+}
+
+private struct WebControlWorkingOverlay: View {
+    var status: WebControlStatus
+    @State private var pulse = false
+
+    var body: some View {
+        ZStack {
+            edgeVignette
+
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    ZStack {
+                        Circle()
+                            .stroke(Palette.accent.opacity(0.28), lineWidth: 1)
+                        Circle()
+                            .fill(Palette.accent.opacity(pulse ? 0.28 : 0.12))
+                            .frame(width: 9, height: 9)
+                    }
+                    .frame(width: 18, height: 18)
+
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Agent is Working")
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Palette.textPrimary)
+                        Text(status.detail)
+                            .font(.system(size: 10.5, weight: .medium))
+                            .foregroundStyle(Palette.textMuted)
+                            .lineLimit(1)
+                    }
+
+                    if status.step > 0 {
+                        Text("Step \(status.step)")
+                            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                            .foregroundStyle(Palette.textSecondary)
+                    }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 10)
+                .background {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .fill(Palette.bg.opacity(0.86))
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                        .stroke(Palette.strokeStrong, lineWidth: 1)
+                }
+                .shadow(color: Color.black.opacity(0.28), radius: 18, x: 0, y: 12)
+                .padding(.top, 24)
+
+                Spacer(minLength: 0)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous))
+        .padding(.horizontal, Metrics.webviewInset)
+        .padding(.bottom, Metrics.webviewInset)
+        .allowsHitTesting(true)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                pulse = true
+            }
+        }
+    }
+
+    private var edgeVignette: some View {
+        ZStack {
+            Color.black.opacity(0.12)
+
+            HStack(spacing: 0) {
+                LinearGradient(
+                    colors: [Color.black.opacity(0.62), Color.black.opacity(0)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: 96)
+                Spacer(minLength: 0)
+                LinearGradient(
+                    colors: [Color.black.opacity(0), Color.black.opacity(0.62)],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: 96)
+            }
+
+            VStack(spacing: 0) {
+                LinearGradient(
+                    colors: [Color.black.opacity(0.58), Color.black.opacity(0)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 82)
+                Spacer(minLength: 0)
+                LinearGradient(
+                    colors: [Color.black.opacity(0), Color.black.opacity(0.58)],
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .frame(height: 82)
+            }
+
+            RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous)
+                .stroke(Palette.accent.opacity(pulse ? 0.34 : 0.18), lineWidth: 1.5)
+        }
     }
 }

@@ -107,6 +107,7 @@ struct AIHarnessConfiguration: Sendable {
     var disallowedTools: String
     var mcpConfigPath: String
     var extraArguments: String
+    var reasoningEffort: String
 
     static func current(defaults: UserDefaults = .standard) -> AIHarnessConfiguration {
         let provider = AIProviderKind(rawValue: defaults.string(forKey: PreferenceKey.aiProvider) ?? "") ?? .codex
@@ -138,7 +139,8 @@ struct AIHarnessConfiguration: Sendable {
             allowedTools: defaults.string(forKey: PreferenceKey.aiAllowedTools) ?? "",
             disallowedTools: defaults.string(forKey: PreferenceKey.aiDisallowedTools) ?? "",
             mcpConfigPath: defaults.string(forKey: PreferenceKey.aiMCPConfigPath) ?? "",
-            extraArguments: defaults.string(forKey: PreferenceKey.aiExtraArguments) ?? ""
+            extraArguments: defaults.string(forKey: PreferenceKey.aiExtraArguments) ?? "",
+            reasoningEffort: ""
         )
     }
 }
@@ -195,7 +197,8 @@ struct AIProviderClient {
         prompt: String,
         sessionDirectory: URL? = nil,
         systemPromptOverride: String? = nil,
-        modelOverride: String? = nil
+        modelOverride: String? = nil,
+        reasoningEffortOverride: String? = nil
     ) async throws -> String {
         var configuration = AIHarnessConfiguration.current()
         if let sessionDirectory {
@@ -208,6 +211,9 @@ struct AIProviderClient {
         }
         if let modelOverride {
             configuration.model = modelOverride
+        }
+        if let reasoningEffortOverride {
+            configuration.reasoningEffort = reasoningEffortOverride
         }
 
         let resolvedConfig = configuration
@@ -506,6 +512,7 @@ enum CLIArguments {
         ]
 
         appendModel(configuration.model, to: &arguments)
+        appendCodexReasoningEffort(configuration.reasoningEffort, to: &arguments)
         arguments.append(contentsOf: extraArguments(from: configuration.extraArguments))
 
         for feature in codexDisabledHarnessFeatures {
@@ -543,6 +550,7 @@ enum CLIArguments {
         ]
 
         appendModel(configuration.model, to: &arguments)
+        appendOptionalFlag("--effort", value: configuration.reasoningEffort, to: &arguments)
         arguments.append(contentsOf: extraArguments(from: configuration.extraArguments))
 
         arguments.append(contentsOf: ["--system-prompt", effectiveSystemPrompt(for: configuration)])
@@ -575,6 +583,13 @@ enum CLIArguments {
         let model = trimmed(model)
         if !model.isEmpty {
             arguments.append(contentsOf: ["--model", model])
+        }
+    }
+
+    static func appendCodexReasoningEffort(_ effort: String, to arguments: inout [String]) {
+        let effort = trimmed(effort)
+        if !effort.isEmpty {
+            appendConfigOverride("model_reasoning_effort", stringValue: effort, to: &arguments)
         }
     }
 

@@ -175,6 +175,17 @@ struct ClaudeArgumentsTests {
         #expect(CLIArguments.extraArguments(from: extras) == ["--verbose", "--foo bar", "--baz"])
     }
 
+    @Test("Reasoning effort is passed through Claude effort flag")
+    func reasoningEffortFlag() {
+        let args = CLIArguments.claudeArguments(
+            for: TestSupport.makeConfiguration(provider: .claude, reasoningEffort: " medium "),
+            prompt: "p"
+        )
+
+        let effortIndex = args.firstIndex(of: "--effort")!
+        #expect(args[effortIndex + 1] == "medium")
+    }
+
     @Test("Claude never emits Codex-only flags")
     func claudeNeverEmitsCodexFlags() {
         let config = TestSupport.makeConfiguration(

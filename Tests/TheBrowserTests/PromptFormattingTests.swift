@@ -65,6 +65,7 @@ struct PromptFormattingTests {
         #expect(prompt.contains(#"{"tool":"open","url":"https://example.com"}"#))
         #expect(prompt.contains(#"{"tool":"search","query":"weather in New York"}"#))
         #expect(prompt.contains(#"{"tool":"fetch","url":"https://example.com/article"}"#))
+        #expect(prompt.contains(#"{"tool":"web_control","task":"#))
     }
 
     @Test("Prompt includes selected provider and model identity when provided")
