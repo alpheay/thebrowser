@@ -2,6 +2,7 @@ import AppKit
 import SwiftUI
 
 struct BrowserShellView: View {
+    @Environment(\.openWindow) private var openWindow
     @StateObject private var model = BrowserModel()
     @StateObject private var chatModel = ChatViewModel()
     @StateObject private var selectionWidget = TextSelectionWidgetModel()
@@ -17,6 +18,7 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "shift+command+r"
     @AppStorage(PreferenceKey.readerModeShortcut) private var readerModeShortcut = "command+r"
     @AppStorage(PreferenceKey.pasteWithCitationShortcut) private var pasteWithCitationShortcut = "shift+command+v"
+    @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
     @AppStorage(PreferenceKey.hoverPreviewEnabled) private var hoverPreviewEnabled = true
     @AppStorage(PreferenceKey.hoverPreviewPrefetchBlocklist) private var hoverPreviewBlocklist = ""
@@ -430,6 +432,9 @@ struct BrowserShellView: View {
             readerModeShortcut: triggerReaderMode,
             pasteWithCitationShortcut: {
                 CitedClipboardCursorPanelController.shared.toggle()
+            },
+            openDiscordShortcut: {
+                openWindow(id: WindowID.discord)
             }
         ]
     }

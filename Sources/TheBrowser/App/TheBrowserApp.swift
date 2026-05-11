@@ -30,5 +30,19 @@ struct TheBrowserApp: App {
                 .preferredColorScheme(.dark)
                 .background(Palette.bg)
         }
+
+        Window("Discord", id: WindowID.discord) {
+            DiscordClientView()
+                .frame(minWidth: 720, idealWidth: 960, minHeight: 520, idealHeight: 680)
+                .preferredColorScheme(.dark)
+                .background(Palette.bg)
+        }
+        .windowStyle(.hiddenTitleBar)
+        .windowToolbarStyle(.unifiedCompact)
+        .defaultSize(width: 960, height: 680)
     }
+}
+
+enum WindowID {
+    static let discord = "discord-client"
 }
