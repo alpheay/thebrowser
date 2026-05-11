@@ -5,14 +5,17 @@ import SwiftUI
 /// it on a second monitor and let it live alongside the browser. Reads from
 /// the shared `DiscordAccountStore` so the same session powers the Settings
 /// panel and this view.
+///
+/// Three top-level states, picked by the rail:
+///   - `.home`  — native profile + searchable server grid
+///   - `.dm`    — themed `WKWebView` at `discord.com/channels/@me`
+///   - `.guild` — themed `WKWebView` at `discord.com/channels/{id}`
+/// The webview path inherits the OAuth-flow session cookies (same default
+/// `WKWebsiteDataStore`), so the user lands on Discord already signed in.
 struct DiscordClientView: View {
     @StateObject private var store = DiscordAccountStore.shared
 
-    /// `nil` selects the Home view; otherwise the matching guild renders in
-    /// the detail pane. We hold a plain `String?` rather than the guild
-    /// itself so that a list refresh which replaces the array doesn't drop
-    /// the selection.
-    @State private var selectedGuildID: String?
+    @State private var selection: DiscordSelection = .home
     @State private var didInitialLoad = false
     @State private var query = ""
 
@@ -42,8 +45,8 @@ struct DiscordClientView: View {
     private var signedInBody: some View {
         HStack(spacing: 0) {
             DiscordServerRail(
-                guilds: filteredGuilds,
-                selectedGuildID: $selectedGuildID,
+                guilds: store.guilds,
+                selection: $selection,
                 profile: store.profile,
                 onRefresh: { Task { await store.refreshGuilds() } },
                 phase: store.phase
@@ -56,16 +59,20 @@ struct DiscordClientView: View {
             }
 
             ZStack {
-                if let id = selectedGuildID, let guild = store.guilds.first(where: { $0.id == id }) {
-                    DiscordGuildDetail(guild: guild)
-                        .transition(.opacity.combined(with: .offset(y: 4)))
-                        .id(guild.id)
+                if let url = selection.webURL {
+                    DiscordMessagingPane(
+                        url: url,
+                        selection: selection,
+                        guild: currentGuild
+                    )
+                    .transition(.opacity)
                 } else {
                     DiscordHomeDetail(
                         profile: store.profile,
                         guilds: store.guilds,
                         query: $query,
-                        onSelect: { id in selectedGuildID = id },
+                        onSelectGuild: { id in selection = .guild(id) },
+                        onSelectDMs: { selection = .dm },
                         onRefresh: { Task { await store.refreshGuilds() } },
                         phase: store.phase,
                         lastError: store.lastError
@@ -74,16 +81,15 @@ struct DiscordClientView: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .animation(Motion.springSnap, value: selectedGuildID)
+            .animation(Motion.springSnap, value: selection.isHome)
         }
     }
 
-    private var filteredGuilds: [DiscordGuild] {
-        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return store.guilds }
-        return store.guilds.filter {
-            $0.name.range(of: trimmed, options: .caseInsensitive) != nil
+    private var currentGuild: DiscordGuild? {
+        if case .guild(let id) = selection {
+            return store.guilds.first(where: { $0.id == id })
         }
+        return nil
     }
 
     // MARK: - Signed out
@@ -145,11 +151,150 @@ struct DiscordClientView: View {
     }
 }
 
+// MARK: - Selection
+
+enum DiscordSelection: Hashable {
+    case home
+    case dm
+    case guild(String)
+
+    var isHome: Bool {
+        if case .home = self { return true }
+        return false
+    }
+
+    /// The Discord URL that backs this selection. `nil` for Home (no webview).
+    var webURL: URL? {
+        switch self {
+        case .home:
+            return nil
+        case .dm:
+            return URL(string: "https://discord.com/channels/@me")
+        case .guild(let id):
+            return URL(string: "https://discord.com/channels/\(id)")
+        }
+    }
+}
+
+// MARK: - Messaging pane
+
+/// Wraps the themed `WKWebView` with a thin native header strip showing the
+/// current context (DM label or guild metadata) plus an external-open button
+/// for falling through to the OS default browser.
+private struct DiscordMessagingPane: View {
+    let url: URL
+    let selection: DiscordSelection
+    let guild: DiscordGuild?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            DiscordContextHeader(
+                title: title,
+                subtitle: subtitle,
+                externalURL: url
+            )
+            DiscordWebContent(url: url)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var title: String {
+        switch selection {
+        case .home: return ""
+        case .dm: return "Direct Messages"
+        case .guild:
+            return guild?.name ?? "Server"
+        }
+    }
+
+    private var subtitle: String? {
+        switch selection {
+        case .home, .dm:
+            return nil
+        case .guild:
+            guard let guild else { return nil }
+            var parts: [String] = []
+            if guild.owner == true { parts.append("Owner") }
+            if let count = guild.approximateMemberCount {
+                parts.append("\(count) members")
+            }
+            return parts.isEmpty ? nil : parts.joined(separator: " · ")
+        }
+    }
+}
+
+private struct DiscordContextHeader: View {
+    let title: String
+    let subtitle: String?
+    let externalURL: URL
+
+    var body: some View {
+        HStack(spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title)
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Palette.textPrimary)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(Palette.textMuted)
+                }
+            }
+
+            Spacer()
+
+            DiscordHeaderIconButton(
+                symbol: "arrow.up.right.square",
+                tooltip: "Open in default browser",
+                action: {
+                    NSWorkspace.shared.open(externalURL)
+                }
+            )
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .frame(height: 44)
+        .background(Palette.bgSunken)
+        .overlay(alignment: .bottom) {
+            Rectangle().fill(Palette.stroke).frame(height: 1)
+        }
+    }
+}
+
+private struct DiscordHeaderIconButton: View {
+    let symbol: String
+    let tooltip: String
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol)
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Palette.textPrimary)
+                .frame(width: 28, height: 24)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isHovering ? Palette.surfaceHover : Color.clear)
+                }
+                .overlay {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .stroke(isHovering ? Palette.stroke : Color.clear, lineWidth: 1)
+                }
+        }
+        .buttonStyle(.plain)
+        .help(tooltip)
+        .onHover { isHovering = $0 }
+        .animation(Motion.hoverFade, value: isHovering)
+    }
+}
+
 // MARK: - Server rail
 
 private struct DiscordServerRail: View {
     let guilds: [DiscordGuild]
-    @Binding var selectedGuildID: String?
+    @Binding var selection: DiscordSelection
     let profile: DiscordProfile?
     let onRefresh: () -> Void
     let phase: DiscordAccountStore.Phase
@@ -159,8 +304,8 @@ private struct DiscordServerRail: View {
             Spacer().frame(height: 38)  // Traffic-light gutter
 
             DiscordServerRailIcon(
-                isSelected: selectedGuildID == nil,
-                action: { selectedGuildID = nil },
+                isSelected: selection == .home,
+                action: { selection = .home },
                 content: {
                     if let profile {
                         DiscordAvatar(profile: profile, size: 44)
@@ -178,12 +323,20 @@ private struct DiscordServerRail: View {
                 .frame(width: 30, height: 1)
                 .padding(.vertical, 10)
 
+            DiscordServerRailIcon(
+                isSelected: selection == .dm,
+                action: { selection = .dm },
+                content: { DMRailBadge() },
+                tooltip: "Direct Messages"
+            )
+            .padding(.bottom, 8)
+
             ScrollView {
                 VStack(spacing: 8) {
                     ForEach(guilds) { guild in
                         DiscordServerRailIcon(
-                            isSelected: selectedGuildID == guild.id,
-                            action: { selectedGuildID = guild.id },
+                            isSelected: selection == .guild(guild.id),
+                            action: { selection = .guild(guild.id) },
                             content: { GuildBadge(guild: guild) },
                             tooltip: guild.name
                         )
@@ -201,6 +354,23 @@ private struct DiscordServerRail: View {
     }
 }
 
+private struct DMRailBadge: View {
+    var body: some View {
+        ZStack {
+            Rectangle()
+                .fill(LinearGradient(
+                    colors: [Color.white.opacity(0.18), Color.white.opacity(0.06)],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                ))
+            Image(systemName: "bubble.left.fill")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundStyle(Palette.textPrimary)
+        }
+        .frame(width: 44, height: 44)
+    }
+}
+
 private struct DiscordServerRailIcon<Content: View>: View {
     let isSelected: Bool
     let action: () -> Void
@@ -212,7 +382,6 @@ private struct DiscordServerRailIcon<Content: View>: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 0) {
-                // Selection pill — Discord's signature left-edge indicator
                 Capsule()
                     .fill(Palette.textPrimary)
                     .frame(width: 3, height: indicatorHeight)
@@ -341,7 +510,8 @@ private struct DiscordHomeDetail: View {
     let profile: DiscordProfile?
     let guilds: [DiscordGuild]
     @Binding var query: String
-    let onSelect: (String) -> Void
+    let onSelectGuild: (String) -> Void
+    let onSelectDMs: () -> Void
     let onRefresh: () -> Void
     let phase: DiscordAccountStore.Phase
     let lastError: String?
@@ -352,7 +522,11 @@ private struct DiscordHomeDetail: View {
                 header
 
                 if let profile {
-                    DiscordHomeProfileCard(profile: profile, guildCount: guilds.count)
+                    DiscordHomeProfileCard(
+                        profile: profile,
+                        guildCount: guilds.count,
+                        onOpenDMs: onSelectDMs
+                    )
                 }
 
                 serversSection
@@ -371,7 +545,7 @@ private struct DiscordHomeDetail: View {
                 Text("Home")
                     .font(.system(size: 26, weight: .semibold, design: .rounded))
                     .foregroundStyle(Palette.textPrimary)
-                Text("All your Discord servers, one keystroke away.")
+                Text("Pick a server or open Direct Messages.")
                     .font(.system(size: 12.5, weight: .medium))
                     .foregroundStyle(Palette.textMuted)
             }
@@ -402,7 +576,7 @@ private struct DiscordHomeDetail: View {
             } else {
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 220, maximum: 320), spacing: 14)], spacing: 14) {
                     ForEach(filteredGuilds) { guild in
-                        DiscordGuildCard(guild: guild) { onSelect(guild.id) }
+                        DiscordGuildCard(guild: guild) { onSelectGuild(guild.id) }
                     }
                 }
             }
@@ -451,6 +625,7 @@ private struct DiscordHomeDetail: View {
 private struct DiscordHomeProfileCard: View {
     let profile: DiscordProfile
     let guildCount: Int
+    let onOpenDMs: () -> Void
 
     var body: some View {
         HStack(spacing: 18) {
@@ -473,6 +648,8 @@ private struct DiscordHomeProfileCard: View {
             }
 
             Spacer()
+
+            DiscordPrimaryButton(title: "Open DMs", busy: false, action: onOpenDMs)
 
             VStack(alignment: .trailing, spacing: 4) {
                 Text("\(guildCount)")
@@ -559,149 +736,7 @@ private struct DiscordGuildCard: View {
     }
 }
 
-// MARK: - Guild detail
-
-private struct DiscordGuildDetail: View {
-    let guild: DiscordGuild
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 28) {
-                HStack(alignment: .top, spacing: 22) {
-                    LargeGuildBadge(guild: guild)
-
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(guild.name)
-                            .font(.system(size: 28, weight: .semibold, design: .rounded))
-                            .foregroundStyle(Palette.textPrimary)
-                        if guild.owner == true {
-                            DiscordPill(text: "OWNER")
-                        }
-                        if let count = guild.approximateMemberCount {
-                            Text("\(count) members")
-                                .font(.system(size: 12.5, weight: .medium))
-                                .foregroundStyle(Palette.textSecondary)
-                        }
-                    }
-
-                    Spacer()
-                }
-
-                HStack(spacing: 10) {
-                    DiscordPrimaryButton(title: "Open in Discord", busy: false) {
-                        if let url = guild.webURL {
-                            NSWorkspace.shared.open(url)
-                        }
-                    }
-                    DiscordOutlineButton(title: "Copy server ID") {
-                        let pasteboard = NSPasteboard.general
-                        pasteboard.clearContents()
-                        pasteboard.setString(guild.id, forType: .string)
-                    }
-                }
-
-                if let features = guild.features, !features.isEmpty {
-                    featuresSection(features: features)
-                }
-            }
-            .padding(.horizontal, 40)
-            .padding(.top, 40)
-            .padding(.bottom, 48)
-            .frame(maxWidth: .infinity, alignment: .topLeading)
-        }
-        .scrollIndicators(.hidden)
-    }
-
-    @ViewBuilder
-    private func featuresSection(features: [String]) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("FEATURES")
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(1.8)
-                .foregroundStyle(Palette.textFaint)
-
-            FlowLayout(spacing: 8) {
-                ForEach(features, id: \.self) { feature in
-                    DiscordPill(text: formatFeature(feature))
-                }
-            }
-        }
-    }
-
-    private func formatFeature(_ raw: String) -> String {
-        raw
-            .replacingOccurrences(of: "_", with: " ")
-            .lowercased()
-            .capitalized
-    }
-}
-
-private struct LargeGuildBadge: View {
-    let guild: DiscordGuild
-    @State private var image: NSImage?
-
-    var body: some View {
-        ZStack {
-            Rectangle()
-                .fill(LinearGradient(
-                    colors: [Color.white.opacity(0.20), Color.white.opacity(0.05)],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ))
-
-            if let image {
-                Image(nsImage: image)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                Text(guild.initials)
-                    .font(.system(size: 32, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Palette.textPrimary)
-            }
-        }
-        .frame(width: 96, height: 96)
-        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 20, style: .continuous)
-                .stroke(Palette.stroke, lineWidth: 1)
-        }
-        .shadow(color: Color.black.opacity(0.35), radius: 18, x: 0, y: 10)
-        .task(id: guild.iconURL) { await loadImage() }
-    }
-
-    private func loadImage() async {
-        guard let url = guild.iconURL else { return }
-        do {
-            let (data, _) = try await URLSession.shared.data(from: url)
-            if let nsImage = NSImage(data: data) {
-                image = nsImage
-            }
-        } catch {
-            image = nil
-        }
-    }
-}
-
 // MARK: - Small UI
-
-private struct DiscordPill: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(.system(size: 10.5, weight: .semibold))
-            .tracking(1.2)
-            .foregroundStyle(Palette.textSecondary)
-            .padding(.horizontal, 10)
-            .frame(height: 22)
-            .background {
-                Capsule().fill(Palette.bgRaised)
-            }
-            .overlay {
-                Capsule().stroke(Palette.stroke, lineWidth: 1)
-            }
-    }
-}
 
 private struct DiscordSearchField: View {
     @Binding var query: String
@@ -802,53 +837,5 @@ private struct DiscordOutlineButton: View {
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .animation(Motion.hoverFade, value: isHovering)
-    }
-}
-
-// MARK: - Flow layout
-
-/// Minimal `Layout` that lays children out left-to-right and wraps when a row
-/// runs out of horizontal space — used here for the feature-pill cloud.
-/// SwiftUI doesn't ship one out of the box, and reaching for a `LazyVGrid`
-/// would force a fixed column count.
-private struct FlowLayout: Layout {
-    var spacing: CGFloat = 8
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        var rowWidth: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var totalHeight: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if rowWidth + size.width > maxWidth, rowWidth > 0 {
-                totalHeight += rowHeight + spacing
-                rowWidth = 0
-                rowHeight = 0
-            }
-            rowWidth += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
-        totalHeight += rowHeight
-        return CGSize(width: maxWidth == .infinity ? rowWidth : maxWidth, height: totalHeight)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var rowHeight: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
-            if x + size.width > bounds.maxX, x > bounds.minX {
-                x = bounds.minX
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
     }
 }
