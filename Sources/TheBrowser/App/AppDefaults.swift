@@ -29,6 +29,8 @@ enum PreferenceKey {
     static let focusAddressShortcut = "shortcut.focusAddress"
     static let smartReadShortcut = "shortcut.smartRead"
     static let googleOAuthClientID = "google.oauth.clientID"
+    static let notificationCorner = "notifications.corner"
+    static let notificationsWelcomeShown = "notifications.welcomeShown"
 }
 
 enum AppDefaults {
@@ -58,7 +60,9 @@ enum AppDefaults {
             PreferenceKey.closeTabShortcut: "command+w",
             PreferenceKey.focusAddressShortcut: "command+l",
             PreferenceKey.smartReadShortcut: "command+shift+r",
-            PreferenceKey.googleOAuthClientID: ""
+            PreferenceKey.googleOAuthClientID: "",
+            PreferenceKey.notificationCorner: NotificationCorner.topRight.rawValue,
+            PreferenceKey.notificationsWelcomeShown: false
         ])
     }
 

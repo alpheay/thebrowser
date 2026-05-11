@@ -122,12 +122,18 @@ struct BrowserShellView: View {
                 .frame(width: 0, height: 0)
                 .opacity(0)
                 .allowsHitTesting(false)
+
+            // Top layer: app-wide notification toasts
+            NotificationOverlay()
+                .ignoresSafeArea()
+                .allowsHitTesting(true)
         }
         .background(Palette.bg)
         .onChange(of: model.selectedTabID) { _, _ in
             model.updateAddressFromSelectedTab()
         }
         .onAppear {
+            postWelcomeNotificationIfNeeded()
             guard !migrationPromptCompleted else { return }
             isShowingMigrationPrompt = true
         }
@@ -212,6 +218,33 @@ struct BrowserShellView: View {
             chatModel.focusComposer()
         }
         model.selectedTab.clearSelectionInfo()
+    }
+
+    // MARK: - Smart Read
+
+    private func triggerSmartRead() {
+        smartReadModel.start(tab: model.selectedTab)
+    }
+
+    // MARK: - Welcome notification
+
+    /// Static guard so the welcome toast only fires once per app launch,
+    /// even if `BrowserShellView` is reconstructed.
+    private static var didPostWelcomeThisLaunch = false
+
+    private func postWelcomeNotificationIfNeeded() {
+        guard !Self.didPostWelcomeThisLaunch else { return }
+        Self.didPostWelcomeThisLaunch = true
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) {
+            AppNotificationCenter.shared.post(
+                title: "Welcome to TheBrowser",
+                message: "Press \u{2318}J to chat with AI on any page. Tweak everything in Settings.",
+                icon: "sparkles",
+                kind: .info,
+                duration: 6.5
+            )
+        }
     }
 
     // MARK: - Hover-peek timing
