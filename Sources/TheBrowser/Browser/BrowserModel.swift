@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 
 @MainActor
@@ -16,11 +17,13 @@ final class BrowserModel: ObservableObject {
     /// that the sweep itself is invisible.
     private static let hibernationSweepInterval: UInt64 = 60_000_000_000
     private var hibernationSweepTask: Task<Void, Never>?
+    private var tabChangeCancellables: [BrowserTab.ID: AnyCancellable] = [:]
 
     init() {
         let firstTab = BrowserTab()
         tabs = [firstTab]
         selectedTabID = firstTab.id
+        configure(firstTab)
         startHibernationSweep()
     }
 
@@ -59,7 +62,7 @@ final class BrowserModel: ObservableObject {
     }
 
     func addTab() {
-        let tab = BrowserTab()
+        let tab = makeTab()
         tabs.append(tab)
         select(tab)
     }
@@ -69,7 +72,7 @@ final class BrowserModel: ObservableObject {
     /// Set `background` to keep the current tab selected. Set `pinned` to
     /// mark the new tab as pinned — used by Hover Preview's "Pin" footer.
     func openInNewTab(url: URL, background: Bool = false, pinned: Bool = false) {
-        let tab = BrowserTab()
+        let tab = makeTab()
         tab.isPinned = pinned
         tabs.append(tab)
         if !background {
@@ -89,10 +92,17 @@ final class BrowserModel: ObservableObject {
         }
 
         let wasSelected = tab.id == selectedTabID
-        tabs.removeAll { $0.id == tab.id }
+        guard let closingIndex = tabs.firstIndex(where: { $0.id == tab.id }) else {
+            return
+        }
+
+        tabs.remove(at: closingIndex)
+        tab.setNewWindowHandler(nil)
+        tabChangeCancellables[tab.id] = nil
 
         if wasSelected {
-            select(tabs[max(0, tabs.count - 1)])
+            let nextIndex = min(closingIndex, tabs.count - 1)
+            select(tabs[nextIndex])
         }
     }
 
@@ -193,7 +203,7 @@ final class BrowserModel: ObservableObject {
 
     /// Saves a generated artifact and opens it in a new tab.
     func openArtifact(at url: URL) {
-        let tab = BrowserTab()
+        let tab = makeTab()
         tabs.append(tab)
         select(tab)
         tab.loadArtifact(at: url)
@@ -238,6 +248,25 @@ final class BrowserModel: ObservableObject {
             sessionDirectory: sessionDirectory
         ) { [weak self] status in
             self?.webControlStatus = status
+        }
+    }
+
+    private func makeTab() -> BrowserTab {
+        let tab = BrowserTab()
+        configure(tab)
+        return tab
+    }
+
+    private func configure(_ tab: BrowserTab) {
+        tab.setNewWindowHandler { [weak self] sourceTab, request in
+            guard let self, let url = request.url else { return }
+            self.openInNewTab(url: url, background: sourceTab.id != self.selectedTabID)
+        }
+
+        tabChangeCancellables[tab.id] = tab.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.objectWillChange.send()
+            }
         }
     }
 

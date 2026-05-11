@@ -22,6 +22,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// intercept a PDF response and load it into PDFKit. Cleared on every
     /// new navigation so HTML pages render through the WKWebView path.
     @Published var pdfDocument: PDFDocument?
+    @Published var loadError: BrowserLoadError?
 
     /// True once the tab's WKWebView has been freed to reclaim memory. The
     /// tab's metadata (title, URL, favicon) and Smart Read state survive,
@@ -65,6 +66,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// shell owns the model.
     typealias LinkHoverListener = @MainActor (BrowserTab, LinkHoverInfo) -> Void
     private var linkHoverListener: LinkHoverListener?
+    typealias NewWindowHandler = @MainActor (BrowserTab, URLRequest) -> Void
+    private var newWindowHandler: NewWindowHandler?
 
     /// User agent used for both browsing tabs and the in-app Google sign-in
     /// sheet. WKWebView's default UA omits the `Version/X Safari/Y` suffix,
@@ -115,6 +118,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         if let webView = _webView {
             webView.stopLoading()
             webView.navigationDelegate = nil
+            webView.uiDelegate = nil
             let content = webView.configuration.userContentController
             content.removeScriptMessageHandler(forName: TextSelectionBridge.messageName)
             content.removeScriptMessageHandler(forName: CitedClipboardBridge.messageName)
@@ -133,6 +137,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         estimatedProgress = 0
         selectionInfo = nil
         pdfDocument = nil
+        // Any prior load error is informational; on resurrect we'll
+        // reload the URL, which clears (or repopulates) this anyway.
+        loadError = nil
 
         // A Smart Read summary mid-fetch references the WKWebView we're
         // dropping — its task gets cancelled anyway when the model
@@ -177,6 +184,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         citedBridge.tab = self
         hoverBridge.tab = self
         view.navigationDelegate = self
+        view.uiDelegate = self
         _webView = view
         observeWebView()
         return view
@@ -188,6 +196,13 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// time, which matches the "one active preview" UX.
     func setLinkHoverListener(_ listener: LinkHoverListener?) {
         linkHoverListener = listener
+    }
+
+    /// Called by ``WKUIDelegate``/navigation-policy handling when page JS or
+    /// a `target=_blank` link asks WebKit for another window. The model wires
+    /// this to the tab strip so those requests become real browser tabs.
+    func setNewWindowHandler(_ handler: NewWindowHandler?) {
+        newWindowHandler = handler
     }
 
     func applyLinkHover(_ info: LinkHoverInfo) {
@@ -314,6 +329,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
             searchPage = nil
             isHome = false
+            loadError = nil
             url = target
             title = target.host(percentEncoded: false) ?? target.absoluteString
             load(target)
@@ -328,10 +344,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             searchPage = BrowserSearchPage(query: query)
             searchReloadToken = 0
             isHome = false
+            loadError = nil
             isLoading = false
             estimatedProgress = 1
             url = nil
             title = query
+            clearPDFState()
         }
     }
 
@@ -340,6 +358,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         searchBackStack.removeAll()
         searchPage = nil
         isHome = true
+        loadError = nil
         isLoading = false
         estimatedProgress = 0
         title = "New Space"
@@ -367,6 +386,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         searchBackStack.removeAll()
         searchPage = nil
         isHome = false
+        loadError = nil
         isLoading = true
         estimatedProgress = 0
         url = fileURL
@@ -534,12 +554,35 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             return
         }
 
+        if let failingURL = loadError?.url {
+            navigate(to: failingURL.absoluteString)
+            return
+        }
+
         webView.reload()
     }
 
     func stopLoading() {
         webView.stopLoading()
         isLoading = false
+    }
+
+    @discardableResult
+    private func handleNewWindowRequest(_ request: URLRequest) -> Bool {
+        guard let target = request.url else { return false }
+
+        if let newWindowHandler {
+            newWindowHandler(self, request)
+            return true
+        }
+
+        searchPage = nil
+        isHome = false
+        loadError = nil
+        url = target
+        title = target.host(percentEncoded: false) ?? target.absoluteString
+        webView.load(request)
+        return true
     }
 
     private func load(_ target: URL) {
@@ -600,6 +643,51 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 }
             }
         ]
+    }
+
+    private func applyNavigationFailure(_ error: Error, fallbackURL: URL?) {
+        isLoading = false
+        estimatedProgress = 1
+
+        guard !Self.isCancelledNavigation(error) else {
+            return
+        }
+
+        loadError = BrowserLoadError(
+            url: fallbackURL ?? url,
+            message: Self.navigationFailureMessage(for: error)
+        )
+    }
+
+    private static func isCancelledNavigation(_ error: Error) -> Bool {
+        let nsError = error as NSError
+        return nsError.domain == NSURLErrorDomain && nsError.code == NSURLErrorCancelled
+    }
+
+    private static func navigationFailureMessage(for error: Error) -> String {
+        let nsError = error as NSError
+        if nsError.domain == NSURLErrorDomain {
+            switch nsError.code {
+            case NSURLErrorNotConnectedToInternet:
+                return "The internet connection appears to be offline."
+            case NSURLErrorCannotFindHost:
+                return "The server could not be found."
+            case NSURLErrorCannotConnectToHost:
+                return "The server refused the connection."
+            case NSURLErrorTimedOut:
+                return "The page took too long to respond."
+            case NSURLErrorSecureConnectionFailed,
+                 NSURLErrorServerCertificateUntrusted,
+                 NSURLErrorServerCertificateHasBadDate,
+                 NSURLErrorServerCertificateNotYetValid,
+                 NSURLErrorServerCertificateHasUnknownRoot:
+                return "The page could not establish a secure connection."
+            default:
+                break
+            }
+        }
+
+        return nsError.localizedDescription
     }
 
     /// Readability-lite extractor for Reader Mode. Picks the most article-
@@ -1138,10 +1226,30 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 }
 
 extension BrowserTab: WKNavigationDelegate {
+    nonisolated func webView(_ webView: WKWebView,
+                             decidePolicyFor navigationAction: WKNavigationAction,
+                             decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void) {
+        Task { @MainActor [weak self] in
+            guard let self else {
+                decisionHandler(.cancel)
+                return
+            }
+
+            if navigationAction.targetFrame == nil,
+               self.handleNewWindowRequest(navigationAction.request) {
+                decisionHandler(.cancel)
+                return
+            }
+
+            decisionHandler(.allow)
+        }
+    }
+
     nonisolated func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
         Task { @MainActor in
             self.isHome = false
             self.isLoading = true
+            self.loadError = nil
             self.selectionInfo = nil
             // Drop any displayed PDF — we're about to render either a fresh
             // HTML page or a fresh PDF (the latter loops back through
@@ -1154,6 +1262,7 @@ extension BrowserTab: WKNavigationDelegate {
         Task { @MainActor in
             self.isLoading = false
             self.estimatedProgress = 1
+            self.loadError = nil
             self.url = webView.url
             if let title = webView.title, !title.isEmpty {
                 self.title = title
@@ -1163,7 +1272,7 @@ extension BrowserTab: WKNavigationDelegate {
 
     nonisolated func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
         Task { @MainActor in
-            self.isLoading = false
+            self.applyNavigationFailure(error, fallbackURL: webView.url)
         }
     }
 
@@ -1173,8 +1282,19 @@ extension BrowserTab: WKNavigationDelegate {
             // load to hand the response off to PDFKit — `loadPDF(from:)`
             // owns the spinner from here.
             if !self.pdfLoadInProgress {
-                self.isLoading = false
+                self.applyNavigationFailure(error, fallbackURL: webView.url ?? self.url)
             }
+        }
+    }
+
+    nonisolated func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        Task { @MainActor in
+            self.isLoading = false
+            self.estimatedProgress = 1
+            self.loadError = BrowserLoadError(
+                url: webView.url ?? self.url,
+                message: "The page stopped unexpectedly."
+            )
         }
     }
 
@@ -1203,6 +1323,19 @@ extension BrowserTab: WKNavigationDelegate {
     }
 }
 
+extension BrowserTab: WKUIDelegate {
+    nonisolated func webView(_ webView: WKWebView,
+                             createWebViewWith configuration: WKWebViewConfiguration,
+                             for navigationAction: WKNavigationAction,
+                             windowFeatures: WKWindowFeatures) -> WKWebView? {
+        Task { @MainActor [weak self] in
+            guard navigationAction.targetFrame == nil else { return }
+            _ = self?.handleNewWindowRequest(navigationAction.request)
+        }
+        return nil
+    }
+}
+
 @MainActor
 extension BrowserTab {
     /// Downloads a PDF off the web and hands it to ``BrowserPDFView`` for
@@ -1214,6 +1347,7 @@ extension BrowserTab {
         pdfLoadTask?.cancel()
         pdfLoadInProgress = true
         isLoading = true
+        loadError = nil
         estimatedProgress = 0.05
 
         let task = Task { @MainActor [weak self] in
@@ -1228,12 +1362,17 @@ extension BrowserTab {
                 guard let document = PDFDocument(data: data) else {
                     self.isLoading = false
                     self.estimatedProgress = 1
+                    self.loadError = BrowserLoadError(
+                        url: pdfURL,
+                        message: "The PDF could not be opened."
+                    )
                     return
                 }
                 self.pdfDocument = document
                 self.url = pdfURL
                 self.isHome = false
                 self.searchPage = nil
+                self.loadError = nil
                 self.isLoading = false
                 self.estimatedProgress = 1
                 let trimmed = self.title.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1249,6 +1388,10 @@ extension BrowserTab {
                 guard let self else { return }
                 self.isLoading = false
                 self.estimatedProgress = 1
+                self.loadError = BrowserLoadError(
+                    url: pdfURL,
+                    message: Self.navigationFailureMessage(for: error)
+                )
             }
         }
         pdfLoadTask = task
@@ -1259,6 +1402,11 @@ extension BrowserTab {
 struct ReadablePageExtraction: Equatable {
     var text: String
     var wordCount: Int
+}
+
+struct BrowserLoadError: Equatable {
+    var url: URL?
+    var message: String
 }
 
 private struct ReadablePagePayload: Decodable {
@@ -1331,11 +1479,21 @@ enum AddressResolver {
             return nil
         }
 
-        if let url = URL(string: trimmed), url.scheme != nil {
+        if looksLikeLocalAddress(trimmed), let url = URL(string: "http://\(trimmed)") {
             return .url(url)
         }
 
-        if looksLikeLocalAddress(trimmed), let url = URL(string: "http://\(trimmed)") {
+        if looksLikeIPAddress(trimmed), let url = URL(string: "http://\(trimmed)") {
+            return .url(url)
+        }
+
+        if looksLikeHostWithPort(trimmed), let url = URL(string: "http://\(trimmed)") {
+            return .url(url)
+        }
+
+        if let url = URL(string: trimmed),
+           let scheme = url.scheme?.lowercased(),
+           allowedExplicitSchemes.contains(scheme) {
             return .url(url)
         }
 
@@ -1366,9 +1524,63 @@ enum AddressResolver {
         return (lowercasedValue == "localhost" || lowercasedValue.hasPrefix("localhost:") || lowercasedValue.hasPrefix("localhost/")) && !containsWhitespace(value)
     }
 
+    private static func looksLikeHostWithPort(_ value: String) -> Bool {
+        guard !containsWhitespace(value),
+              let hostPort = value.split(separator: "/", maxSplits: 1).first,
+              let colonIndex = hostPort.lastIndex(of: ":") else {
+            return false
+        }
+
+        let portStart = hostPort.index(after: colonIndex)
+        guard portStart < hostPort.endIndex,
+              Int(hostPort[portStart...]) != nil else {
+            return false
+        }
+
+        return true
+    }
+
+    private static func looksLikeIPAddress(_ value: String) -> Bool {
+        guard !containsWhitespace(value) else { return false }
+        let host = hostCandidate(from: value)
+        if host == "::1" { return true }
+
+        let parts = host.split(separator: ".")
+        guard parts.count == 4 else { return false }
+        return parts.allSatisfy { part in
+            guard let octet = Int(part) else { return false }
+            return (0...255).contains(octet)
+        }
+    }
+
+    private static func hostCandidate(from value: String) -> String {
+        let hostPort = value.split(separator: "/", maxSplits: 1).first.map(String.init) ?? value
+        if hostPort.hasPrefix("["),
+           let end = hostPort.firstIndex(of: "]") {
+            return String(hostPort[hostPort.index(after: hostPort.startIndex)..<end])
+        }
+
+        if let colonIndex = hostPort.lastIndex(of: ":") {
+            let portStart = hostPort.index(after: colonIndex)
+            if portStart < hostPort.endIndex, Int(hostPort[portStart...]) != nil {
+                return String(hostPort[..<colonIndex])
+            }
+        }
+
+        return hostPort
+    }
+
     private static func containsWhitespace(_ value: String) -> Bool {
         value.rangeOfCharacter(from: .whitespacesAndNewlines) != nil
     }
+
+    private static let allowedExplicitSchemes: Set<String> = [
+        "about",
+        "data",
+        "file",
+        "http",
+        "https"
+    ]
 }
 
 enum AddressDestination {
