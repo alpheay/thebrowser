@@ -102,7 +102,7 @@ struct MigrationView: View {
                     .font(.system(size: presentation == .firstRun ? 30 : 22, weight: .semibold, design: .rounded))
                     .foregroundStyle(Palette.textPrimary)
 
-                Text("Import sign-ins, passwords, cookies, bookmarks, and history.")
+                Text("Import bookmarks and history from your existing browser.")
                     .font(.system(size: 13, weight: .medium))
                     .foregroundStyle(Palette.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -215,7 +215,7 @@ struct MigrationView: View {
                 Text(viewModel.profiles.isEmpty ? "No local \(viewModel.selectedSource.displayName) profile found" : "Ready to migrate")
                     .font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(Palette.textPrimary)
-                Text(viewModel.profiles.isEmpty ? "Install \(viewModel.selectedSource.displayName) or refresh after opening it once." : "Local browser data will be imported into WebKit and Keychain.")
+                Text(viewModel.profiles.isEmpty ? "Install \(viewModel.selectedSource.displayName) or refresh after opening it once." : "Bookmarks and history will be imported into TheBrowser.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Palette.textMuted)
             }
@@ -392,7 +392,7 @@ private struct RunningPanel: View {
                 Text("Migrating from \(source.displayName)")
                     .font(.system(size: 13.5, weight: .semibold))
                     .foregroundStyle(Palette.textPrimary)
-                Text("Reading profile data, importing cookies, saving passwords to Keychain.")
+                Text("Reading bookmarks and history from the local profile.")
                     .font(.system(size: 12, weight: .medium))
                     .foregroundStyle(Palette.textMuted)
             }
@@ -535,9 +535,6 @@ private struct CountGrid: View {
 
     private var rows: [(MigrationDataKind, Int)] {
         [
-            (.accounts, counts.accounts),
-            (.passwords, counts.passwords),
-            (.cookies, counts.cookies),
             (.bookmarks, counts.bookmarks),
             (.history, counts.history)
         ]
