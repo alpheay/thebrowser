@@ -92,6 +92,7 @@ struct NativeBrowserToolsTests {
             openURL: { url in openedURL = url },
             readTabsContent: { _ in "" },
             readHighlightsContent: { _ in "" },
+            smartReadContent: { "" },
             saveAndOpenArtifact: { _, _ in URL(fileURLWithPath: "/tmp/unused.html") }
         )
         let result = await executor.execute(
@@ -158,6 +159,7 @@ struct NativeBrowserToolsTests {
             openURL: { _ in },
             readTabsContent: { _ in "" },
             readHighlightsContent: { _ in "" },
+            smartReadContent: { "" },
             saveAndOpenArtifact: { _, _ in savedURL }
         )
 

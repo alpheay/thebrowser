@@ -70,6 +70,43 @@ final class SmartReadModel: ObservableObject {
         isPresented = false
         phase = .idle
     }
+
+    /// Formats the current Smart Read state as plain text for the AI agent.
+    /// Returned via the `read_smart_read` native tool so the model can answer
+    /// questions like "what did the smart read say?" without re-reading the
+    /// page. Mirrors the on-screen card structure (TL;DR, key points,
+    /// metadata) so the model's reply matches what the user sees.
+    func summaryText() -> String {
+        switch phase {
+        case .idle:
+            return "No Smart Read summary is currently available. The user can run one with the toolbar button or ⌘⇧R while viewing an article."
+        case .loading(let title):
+            return "A Smart Read summary is still being generated for \"\(title)\". Ask the user to wait a moment and try again."
+        case .failed(let message):
+            return "The Smart Read panel is in a failed state: \(message)"
+        case .loaded(let result):
+            var lines: [String] = []
+            lines.append("Smart Read summary currently displayed in the chat sidebar:")
+            lines.append("")
+            lines.append("Page title: \(result.title)")
+            if !result.url.isEmpty {
+                lines.append("Page URL: \(result.url)")
+            }
+            lines.append("Estimated read time: \(result.readTimeMinutes) min")
+            lines.append("Word count: \(result.wordCount)")
+            lines.append("")
+            lines.append("TL;DR:")
+            lines.append(result.tldr)
+            if !result.keyPoints.isEmpty {
+                lines.append("")
+                lines.append("Key points:")
+                for (index, point) in result.keyPoints.enumerated() {
+                    lines.append("\(index + 1). \(point)")
+                }
+            }
+            return lines.joined(separator: "\n")
+        }
+    }
 }
 
 enum SmartReadClient {

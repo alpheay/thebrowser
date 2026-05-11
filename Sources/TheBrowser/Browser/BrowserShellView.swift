@@ -54,6 +54,9 @@ struct BrowserShellView: View {
                             readHighlightsContent: { indices in
                                 chatModel.collectAttachments(indices: indices)
                             },
+                            smartReadContent: {
+                                smartReadModel.summaryText()
+                            },
                             saveAndOpenArtifact: { title, html in
                                 let url = try ArtifactStore.shared.save(title: title, html: html)
                                 model.openArtifact(at: url)
@@ -220,10 +223,17 @@ struct BrowserShellView: View {
         model.selectedTab.clearSelectionInfo()
     }
 
-    // MARK: - Smart Read
-
+    /// Kicks off a Smart Read summary and opens the AI chat sidebar so the
+    /// resulting card has somewhere to land. The card renders inside the chat
+    /// panel above the message list (see `AIChatPanel.messageList`).
     private func triggerSmartRead() {
-        smartReadModel.start(tab: model.selectedTab)
+        guard model.selectedTab.isSmartReadEligible else { return }
+        if !model.isChatVisible {
+            withAnimation(Motion.springSnap) { model.toggleChat() }
+        }
+        withAnimation(Motion.springSnap) {
+            smartReadModel.start(tab: model.selectedTab)
+        }
     }
 
     // MARK: - Welcome notification
@@ -291,9 +301,7 @@ struct BrowserShellView: View {
             focusAddressShortcut: {
                 model.focusAddress()
             },
-            smartReadShortcut: {
-                smartReadModel.start(tab: model.selectedTab)
-            }
+            smartReadShortcut: triggerSmartRead
         ]
     }
 }

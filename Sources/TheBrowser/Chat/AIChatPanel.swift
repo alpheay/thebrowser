@@ -190,7 +190,12 @@ final class ChatViewModel: ObservableObject {
         store.directory(for: sessionID)
     }
 
-    func send(context: BrowserPageContext, tabs: [TabManifestEntry], nativeTools: NativeBrowserToolExecutor) {
+    func send(
+        context: BrowserPageContext,
+        tabs: [TabManifestEntry],
+        nativeTools: NativeBrowserToolExecutor,
+        smartReadActive: Bool = false
+    ) {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         // Allow sending when there's an attached highlight even if the text
         // box is empty — the attachment carries the question's subject.
@@ -219,7 +224,8 @@ final class ChatViewModel: ObservableObject {
             history: history,
             configuration: configuration,
             tabs: tabs,
-            attachments: attachmentsForTurn
+            attachments: attachmentsForTurn,
+            smartReadActive: smartReadActive
         )
 
         Task {
@@ -524,7 +530,7 @@ struct AIChatPanel: View {
                 draft: $viewModel.draft,
                 focused: $composerFocused,
                 placeholder: composerPlaceholder,
-                onSubmit: { viewModel.send(context: context, tabs: tabs, nativeTools: nativeTools) }
+                onSubmit: sendCurrent
             ) {
                 HStack(spacing: 6) {
                     ModelPickerButton(
@@ -534,7 +540,7 @@ struct AIChatPanel: View {
                     SendButton(
                         enabled: canSend,
                         sending: viewModel.isSending,
-                        action: { viewModel.send(context: context, tabs: tabs, nativeTools: nativeTools) }
+                        action: sendCurrent
                     )
                 }
             }
@@ -602,6 +608,18 @@ struct AIChatPanel: View {
             return "Ask about the highlight…"
         }
         return "Ask \(provider.displayName)…"
+    }
+
+    /// Wraps `ChatViewModel.send` with the current Smart Read state so the
+    /// prompt builder knows whether to hint the model about the available
+    /// summary and the `read_smart_read` tool.
+    private func sendCurrent() {
+        viewModel.send(
+            context: context,
+            tabs: tabs,
+            nativeTools: nativeTools,
+            smartReadActive: smartReadModel.isPresented
+        )
     }
 
     private var canSend: Bool {
