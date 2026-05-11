@@ -21,8 +21,15 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private var observations: [NSKeyValueObservation] = []
     private var searchBackStack: [BrowserSearchPage] = []
     private let selectionBridge: TextSelectionBridge
+    private let citedClipboardBridge: CitedClipboardBridge
     private let linkHoverBridge: LinkHoverBridge
     private let inlineCompletionsBridge: InlineCompletionsBridge
+
+    /// Cited Clipboard capture gate. Returns false for tabs that should
+    /// never feed the clipboard log — currently only the placeholder for
+    /// future incognito mode, since ``BrowserTab`` doesn't yet have an
+    /// incognito flag. When incognito ships, flip this off for those tabs.
+    var allowsClipboardCapture: Bool { true }
 
     /// Subscribers (the shell-level ``HoverPreviewModel``) get every hover
     /// observation from this tab's web content. Weakly referenced — the
@@ -50,6 +57,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     override init() {
         let bridge = TextSelectionBridge()
         selectionBridge = bridge
+        let citedBridge = CitedClipboardBridge()
+        citedClipboardBridge = citedBridge
         let hoverBridge = LinkHoverBridge()
         linkHoverBridge = hoverBridge
         let inlineBridge = InlineCompletionsBridge()
@@ -62,8 +71,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         configuration.userContentController.addUserScript(Self.darkModeUserScript)
         configuration.userContentController.addUserScript(Self.unsupportedBrowserBannerKillerScript)
         configuration.userContentController.addUserScript(Self.textSelectionUserScript)
+        configuration.userContentController.addUserScript(CitedClipboardScript.userScript)
         configuration.userContentController.addUserScript(Self.makeLinkHoverUserScript())
         configuration.userContentController.add(bridge, name: TextSelectionBridge.messageName)
+        configuration.userContentController.add(citedBridge, name: CitedClipboardBridge.messageName)
         configuration.userContentController.add(hoverBridge, name: LinkHoverBridge.messageName)
         if !isIncognito {
             configuration.userContentController.addUserScript(InlineCompletionsUserScript.make())
@@ -78,6 +89,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         super.init()
 
         bridge.tab = self
+        citedBridge.tab = self
         hoverBridge.tab = self
         if !isIncognito {
             inlineBridge.attach(to: webView)
