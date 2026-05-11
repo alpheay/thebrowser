@@ -233,12 +233,40 @@ struct NativeBrowserToolsTests {
     @Test("BrowserTab.artifactAlias renders friendly URL-bar labels for artifacts")
     func artifactAlias() {
         let stamped = URL(fileURLWithPath: "/Users/test/.thebrowser/web_artifacts/2026-05-10_23-54-50_georgia-institute-of-technology-school.html")
-        #expect(BrowserTab.artifactAlias(for: stamped) == "Artifact · Georgia Institute Of Technology School")
+        #expect(BrowserTab.artifactAlias(for: stamped) == "Georgia Institute Of Technology School")
 
         let singleWord = URL(fileURLWithPath: "/tmp/2026-01-01_00-00-00_overview.html")
-        #expect(BrowserTab.artifactAlias(for: singleWord) == "Artifact · Overview")
+        #expect(BrowserTab.artifactAlias(for: singleWord) == "Overview")
 
         let noTimestamp = URL(fileURLWithPath: "/tmp/loose-file.html")
-        #expect(BrowserTab.artifactAlias(for: noTimestamp) == "Artifact · Loose File")
+        #expect(BrowserTab.artifactAlias(for: noTimestamp) == "Loose File")
+    }
+
+    @MainActor
+    @Test("BrowserTab.editableAddress reveals the raw URL while displayAddress masks artifacts")
+    func editableAddressMasksArtifacts() {
+        let tab = BrowserTab()
+
+        // Home tab: both empty.
+        #expect(tab.displayAddress == "")
+        #expect(tab.editableAddress == "")
+
+        // Artifact: displayAddress shows the friendly alias, editableAddress
+        // exposes the file URL so the user can copy or edit it.
+        let artifactURL = ArtifactStore.rootURL.appendingPathComponent("2026-05-10_12-00-00_market-brief.html")
+        tab.isHome = false
+        tab.url = artifactURL
+
+        #expect(tab.isArtifact)
+        #expect(tab.displayAddress == "Market Brief")
+        #expect(tab.editableAddress == artifactURL.absoluteString)
+
+        // Regular URL: both return the absolute URL.
+        let regularURL = URL(string: "https://example.com/")!
+        tab.url = regularURL
+
+        #expect(!tab.isArtifact)
+        #expect(tab.displayAddress == regularURL.absoluteString)
+        #expect(tab.editableAddress == regularURL.absoluteString)
     }
 }

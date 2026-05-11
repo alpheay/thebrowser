@@ -79,6 +79,21 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         return url?.absoluteString ?? ""
     }
 
+    /// Raw address shown when the URL bar is focused — exposes the actual
+    /// URL the user can copy or edit. Differs from ``displayAddress`` only
+    /// for artifacts, where ``displayAddress`` substitutes a friendly name.
+    var editableAddress: String {
+        if isHome {
+            return ""
+        }
+
+        if let searchPage {
+            return searchPage.query
+        }
+
+        return url?.absoluteString ?? ""
+    }
+
     var isArtifact: Bool {
         guard let url, url.isFileURL else { return false }
         let artifactRoot = ArtifactStore.rootURL.standardizedFileURL.path
@@ -87,9 +102,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     /// Turns an artifact file URL into a friendly label for the URL bar — e.g.
     /// `file:///…/2026-05-10_23-54-50_georgia-tech-school.html` becomes
-    /// `Artifact · Georgia Tech School`. Mirrors the `<stamp>_<slug>.html`
-    /// format from ``ArtifactStore``; falls back to the bare filename stem
-    /// if the timestamp prefix doesn't match.
+    /// `Georgia Tech School`. Mirrors the `<stamp>_<slug>.html` format from
+    /// ``ArtifactStore``; falls back to the bare filename stem if the
+    /// timestamp prefix doesn't match.
     nonisolated static func artifactAlias(for url: URL) -> String {
         let stem = url.deletingPathExtension().lastPathComponent
         let slug: String
@@ -105,7 +120,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 return first.uppercased() + word.dropFirst()
             }
             .joined(separator: " ")
-        return pretty.isEmpty ? stem : "Artifact · \(pretty)"
+        return pretty.isEmpty ? stem : pretty
     }
 
     func navigate(to rawInput: String) {

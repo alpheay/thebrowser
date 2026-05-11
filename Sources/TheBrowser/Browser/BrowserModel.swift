@@ -154,6 +154,7 @@ final class BrowserModel: ObservableObject {
         tabs.append(tab)
         select(tab)
         tab.loadArtifact(at: url)
+        updateAddressFromSelectedTab()
     }
 
     /// Selects an existing tab whose loaded URL matches `fileURL`; opens a

@@ -4,6 +4,7 @@ struct BrowserToolbar: View {
     @ObservedObject var model: BrowserModel
     @ObservedObject var selectedTab: BrowserTab
     var reservesTrafficLightGutter: Bool
+    var onSmartRead: () -> Void = {}
 
     @FocusState private var addressFocused: Bool
     @State private var submitPulse = false
@@ -119,6 +120,13 @@ struct BrowserToolbar: View {
         .onChange(of: model.addressFocusToken) { _, _ in
             addressFocused = true
         }
+        .onChange(of: addressFocused) { _, focused in
+            if focused {
+                model.addressDraft = selectedTab.editableAddress
+            } else {
+                model.addressDraft = selectedTab.displayAddress
+            }
+        }
         .onChange(of: submitPulse) { _, newValue in
             if newValue {
                 Task { @MainActor in
@@ -153,6 +161,14 @@ struct BrowserToolbar: View {
 
     private var rightCluster: some View {
         HStack(spacing: 6) {
+            if selectedTab.isSmartReadEligible {
+                Button(action: onSmartRead) {
+                    Image(systemName: "text.magnifyingglass")
+                }
+                .buttonStyle(IconButtonStyle(size: 28))
+                .help("Smart Read")
+            }
+
             Button {
                 withAnimation(Motion.springSnap) { model.toggleTabs() }
             } label: {
