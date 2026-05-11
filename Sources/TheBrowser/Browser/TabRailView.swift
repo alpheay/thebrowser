@@ -256,12 +256,21 @@ private struct TabRow: View {
         HStack(spacing: 10) {
             TabIcon(tab: tab, selected: selected)
                 .frame(width: 16, height: 16)
+                .opacity(tab.isHibernated ? 0.55 : 1)
 
             Text(tab.displayTitle)
                 .font(.system(size: 13, weight: selected ? .medium : .regular))
-                .foregroundStyle(selected ? Palette.textPrimary : Palette.textSecondary)
+                .foregroundStyle(titleColor)
                 .lineLimit(1)
                 .truncationMode(.tail)
+
+            if tab.isHibernated {
+                Image(systemName: "moon.zzz.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Palette.textFaint)
+                    .help("Hibernated — selecting reloads the page")
+                    .transition(.opacity)
+            }
 
             if tab.isPinned {
                 Image(systemName: "pin.fill")
@@ -296,6 +305,12 @@ private struct TabRow: View {
         if selected { return Palette.surfaceActive }
         if isHovering { return Palette.surfaceHover }
         return Color.clear
+    }
+
+    private var titleColor: Color {
+        if selected { return Palette.textPrimary }
+        if tab.isHibernated { return Palette.textMuted }
+        return Palette.textSecondary
     }
 }
 

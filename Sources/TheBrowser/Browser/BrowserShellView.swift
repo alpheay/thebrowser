@@ -162,6 +162,10 @@ struct BrowserShellView: View {
             }
             hoverPreview.dismiss()
             installLinkHoverListener()
+            // Smart Read state is pinned to the tab so it survives
+            // hibernation. Pull the freshly-selected tab's saved state
+            // into the shared model so the card reflects this tab.
+            smartReadModel.bind(to: model.selectedTab)
         }
         .onChange(of: hoverPreviewEnabled) { _, newValue in
             for tab in model.tabs { tab.updateHoverPreviewEnabled(newValue) }
@@ -175,6 +179,7 @@ struct BrowserShellView: View {
             installLinkHoverListener()
             hoverPreview.prefetcher.updateBlocklist(hoverPreviewBlocklist)
             for tab in model.tabs { tab.updateHoverPreviewEnabled(hoverPreviewEnabled) }
+            smartReadModel.bind(to: model.selectedTab)
             guard !migrationPromptCompleted else { return }
             isShowingMigrationPrompt = true
         }

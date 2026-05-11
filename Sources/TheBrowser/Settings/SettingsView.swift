@@ -36,6 +36,7 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.toolbarShowClipboard) private var toolbarShowClipboard = false
     @AppStorage(PreferenceKey.toolbarShowTabRailToggle) private var toolbarShowTabRailToggle = true
     @AppStorage(PreferenceKey.toolbarShowChatToggle) private var toolbarShowChatToggle = true
+    @AppStorage(PreferenceKey.tabHibernationMinutes) private var tabHibernationMinutes = 30
 
     @State private var selectedTab: SettingsTab = .general
     @State private var showClearAllConfirm = false
@@ -248,6 +249,15 @@ struct SettingsView: View {
                         }
                         .buttonStyle(PillButtonStyle())
                     }
+                }
+            }
+
+            section("Tabs") {
+                row(
+                    label: "Hibernate after",
+                    help: "Background tabs idle for this long are unloaded to free memory. Selecting them reloads the page; the Smart Read card and tab title are preserved. Set to zero to never hibernate."
+                ) {
+                    NumericStepperField(value: $tabHibernationMinutes, range: 0...720, step: 5, suffix: "min")
                 }
             }
 

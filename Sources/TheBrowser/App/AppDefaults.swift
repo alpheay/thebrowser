@@ -54,6 +54,11 @@ enum PreferenceKey {
     static let toolbarShowClipboard = "toolbar.showClipboard"
     static let toolbarShowTabRailToggle = "toolbar.showTabRailToggle"
     static let toolbarShowChatToggle = "toolbar.showChatToggle"
+    /// Minutes of background-tab idleness before the WKWebView is freed
+    /// to reclaim memory. Tab metadata, favicon, and the Smart Read card
+    /// survive; selecting the tab reloads the page. Set to zero to
+    /// disable hibernation entirely.
+    static let tabHibernationMinutes = "tabs.hibernationMinutes"
 }
 
 /// Modifier choices for Hover Preview. Raw values are stored in
@@ -161,7 +166,8 @@ enum AppDefaults {
             PreferenceKey.toolbarShowSmartRead: false,
             PreferenceKey.toolbarShowClipboard: false,
             PreferenceKey.toolbarShowTabRailToggle: true,
-            PreferenceKey.toolbarShowChatToggle: true
+            PreferenceKey.toolbarShowChatToggle: true,
+            PreferenceKey.tabHibernationMinutes: 30
         ])
     }
 
