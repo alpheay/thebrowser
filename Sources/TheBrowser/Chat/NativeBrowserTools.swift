@@ -8,12 +8,14 @@ enum NativeBrowserToolName: String, Equatable, Sendable {
     case readHighlights = "read_highlights"
     case readSmartRead = "read_smart_read"
     case createArtifact = "create_artifact"
+    case webControl = "web_control"
 }
 
 struct NativeBrowserToolCall: Equatable, Sendable {
     var name: NativeBrowserToolName
     var url: String? = nil
     var query: String? = nil
+    var task: String? = nil
     var title: String? = nil
     var html: String? = nil
     var indices: [Int]? = nil
@@ -33,6 +35,8 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             return url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         case .search:
             return query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        case .webControl:
+            return task?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         case .readTabs, .readHighlights:
             if let indices, !indices.isEmpty {
                 return indices.map(String.init).joined(separator: ",")
@@ -70,6 +74,10 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             ?? stringValue(named: "target", in: dictionary, arguments: arguments)
         let query = stringValue(named: "query", in: dictionary, arguments: arguments)
             ?? stringValue(named: "q", in: dictionary, arguments: arguments)
+        let task = stringValue(named: "task", in: dictionary, arguments: arguments)
+            ?? stringValue(named: "goal", in: dictionary, arguments: arguments)
+            ?? stringValue(named: "request", in: dictionary, arguments: arguments)
+            ?? stringValue(named: "instruction", in: dictionary, arguments: arguments)
         let title = stringValue(named: "title", in: dictionary, arguments: arguments)
         let html = stringValue(named: "html", in: dictionary, arguments: arguments)
         let indices = intArrayValue(named: "indices", in: dictionary, arguments: arguments)
@@ -80,13 +88,14 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             name: name,
             url: url,
             query: query,
+            task: task,
             title: title,
             html: html,
             indices: indices
         )
 
         switch name {
-        case .open, .fetch, .search:
+        case .open, .fetch, .search, .webControl:
             return call.rawInput.isEmpty ? nil : call
         case .readTabs, .readHighlights, .readSmartRead:
             return call
@@ -327,6 +336,29 @@ struct NativeBrowserToolExecutor {
     /// idle, loading, or in a failed state.
     var smartReadContent: @MainActor () async -> String
     var saveAndOpenArtifact: @MainActor (_ title: String, _ html: String) async throws -> URL
+    var runWebControl: @MainActor (_ task: String) async -> WebControlAgentOutcome
+
+    init(
+        openURL: @escaping @MainActor (URL) -> Void,
+        readTabsContent: @escaping @MainActor ([Int]?) async -> String,
+        readHighlightsContent: @escaping @MainActor ([Int]?) async -> String,
+        smartReadContent: @escaping @MainActor () async -> String,
+        saveAndOpenArtifact: @escaping @MainActor (_ title: String, _ html: String) async throws -> URL,
+        runWebControl: @escaping @MainActor (_ task: String) async -> WebControlAgentOutcome = { _ in
+            WebControlAgentOutcome(
+                succeeded: false,
+                summary: "Web control is not configured in this browser surface.",
+                stepCount: 0
+            )
+        }
+    ) {
+        self.openURL = openURL
+        self.readTabsContent = readTabsContent
+        self.readHighlightsContent = readHighlightsContent
+        self.smartReadContent = smartReadContent
+        self.saveAndOpenArtifact = saveAndOpenArtifact
+        self.runWebControl = runWebControl
+    }
 
     func execute(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
         switch call.name {
@@ -344,6 +376,8 @@ struct NativeBrowserToolExecutor {
             return await readSmartRead(call)
         case .createArtifact:
             return await createArtifact(call)
+        case .webControl:
+            return await webControl(call)
         }
     }
 }
@@ -358,6 +392,7 @@ enum NativeBrowserToolPrompt {
     - read_highlights: returns the full text of highlights (page passages the user clipped via the Ask widget) attached earlier in the conversation. The prompt lists prior highlights by their 1-based global index with source + preview only; use this tool to fetch the full text of one or more of them when the user references "the highlight", "what I sent earlier", a specific quoted phrase, etc. Pass `indices` (1-based) to read specific highlights, or omit it to read all of them. The CURRENT turn's highlights are already inlined in the prompt — only call this tool for highlights from PRIOR turns.
     - read_smart_read: returns the Smart Read summary currently displayed in the chat sidebar (TL;DR sentence, numbered key points, read time, word count, page title, page URL). Use this whenever the user references "the smart read", "the summary", "what did smart read say", or asks for any details from the summary panel. The prompt notes when a Smart Read is active — only call this tool while one is shown. Takes no arguments.
     - create_artifact: saves a fully self-contained HTML document under ~/.thebrowser/web_artifacts/ and opens it in a new tab. Use this when the user asks for an "artifact", "document", "report", "dashboard", "summary", or anything similar that should be rendered as a standalone page.
+    - web_control: delegates a bounded task to a separate web-control agent and live-page harness that can click, type, press keys, scroll, wait, navigate, and inspect the current WKWebView without adding its step-by-step context to this chat. Use it when the user asks you to interact with a live site or web app on their behalf: click links/buttons, fill fields/forms, operate menus, submit searches, complete a workflow, or play a browser game such as Wordle. Pass a concise `task` string describing the user's goal and any constraints. The harness will show an "Agent is Working" overlay while it controls the page.
 
     To use a tool, reply with only one JSON object and no prose:
     {"tool":"open","url":"https://example.com"}
@@ -368,6 +403,7 @@ enum NativeBrowserToolPrompt {
     {"tool":"read_highlights","indices":[2]}
     {"tool":"read_smart_read"}
     {"tool":"create_artifact","title":"Market Overview","html":"<!doctype html><html>…</html>"}
+    {"tool":"web_control","task":"On the current page, play one game of Wordle and report the outcome."}
 
     CRITICAL tool-call rules — follow these or the dispatcher will treat your tool call as plain chat text and the action will silently fail:
     1. EXACTLY ONE tool call per response. Never emit two JSON objects in the same response. If you need read_tabs THEN create_artifact, emit only the read_tabs call now and wait for the result before emitting create_artifact in your next turn.
@@ -375,7 +411,7 @@ enum NativeBrowserToolPrompt {
     3. The response MUST start with `{` and END with `}`. Anything else is treated as a normal chat answer.
     4. When you need to describe what a tool does to the user, use plain English. Do not paste JSON examples into chat answers.
 
-    Use a tool only when it helps the user's request. If the user asks you to open or navigate to a site, use the open tool instead of saying you will do it. If no tool is needed, answer normally. Never say a browser action happened unless a native tool result in this conversation says it succeeded. Do not claim you can click buttons, fill forms, manage bookmarks/history/settings, or inspect hidden page state.
+    Use a tool only when it helps the user's request. If the user asks you to open or navigate to a site, use the open tool instead of saying you will do it. Use web_control for live interactions that require clicking, typing, pressing keys, scrolling, or reading dynamic page state. If no tool is needed, answer normally. Never say a browser action happened unless a native tool result in this conversation says it succeeded. Do not claim you managed bookmarks/history/settings or inspected hidden page state.
 
     create_artifact design language — every artifact MUST follow this style:
     - Background #0a0a0a, text in pure white and warm grays only. NO other colors. No blue links, no green success badges, no red warnings.

@@ -151,6 +151,51 @@ struct NativeBrowserToolsTests {
         #expect(NativeBrowserToolCall.parse(from: json) == nil)
     }
 
+    @Test("web_control parses task argument")
+    func webControlParsesTask() throws {
+        let call = try #require(NativeBrowserToolCall.parse(from: #"{"tool":"web_control","task":"Click the first result and summarize it."}"#))
+
+        #expect(call.name == .webControl)
+        #expect(call.task == "Click the first result and summarize it.")
+        #expect(call.rawInput == "Click the first result and summarize it.")
+    }
+
+    @Test("Web control agent command parses actions")
+    func webControlAgentCommandParsesActions() throws {
+        let command = try #require(WebControlAgentCommand.parse(from: #"{"action":"type","id":"wca-abc","text":"wordle","clear":true}"#))
+
+        #expect(command.action == .type)
+        #expect(command.id == "wca-abc")
+        #expect(command.text == "wordle")
+        #expect(command.clear)
+    }
+
+    @MainActor
+    @Test("web_control invokes isolated runner closure")
+    func webControlInvokesRunner() async {
+        var receivedTask = ""
+        let executor = NativeBrowserToolExecutor(
+            openURL: { _ in },
+            readTabsContent: { _ in "" },
+            readHighlightsContent: { _ in "" },
+            smartReadContent: { "" },
+            saveAndOpenArtifact: { _, _ in URL(fileURLWithPath: "/tmp/unused.html") },
+            runWebControl: { task in
+                receivedTask = task
+                return WebControlAgentOutcome(succeeded: true, summary: "Done.", stepCount: 3)
+            }
+        )
+
+        let result = await executor.execute(
+            NativeBrowserToolCall(name: .webControl, task: "Play Wordle")
+        )
+
+        #expect(result.succeeded)
+        #expect(receivedTask == "Play Wordle")
+        #expect(result.content.contains("Steps: 3"))
+        #expect(result.invocation.tool == "web_control")
+    }
+
     @MainActor
     @Test("create_artifact carries the saved file URL into the tool result and invocation")
     func createArtifactPropagatesURL() async {

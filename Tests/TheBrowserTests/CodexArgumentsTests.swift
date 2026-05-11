@@ -166,6 +166,17 @@ struct CodexArgumentsTests {
         #expect(!args.contains(""))
     }
 
+    @Test("Reasoning effort is passed as a Codex config override")
+    func reasoningEffortConfigOverride() {
+        let args = CLIArguments.codexArguments(
+            for: TestSupport.makeConfiguration(provider: .codex, reasoningEffort: " medium "),
+            prompt: "p",
+            outputURL: TestSupport.outputURL
+        )
+
+        #expect(configOverrides(in: args).contains("model_reasoning_effort=\"medium\""))
+    }
+
     @Test("Codex never emits Claude-only flags")
     func codexNeverEmitsClaudeFlags() {
         let config = TestSupport.makeConfiguration(

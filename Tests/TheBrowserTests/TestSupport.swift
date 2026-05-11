@@ -13,7 +13,8 @@ enum TestSupport {
         allowedTools: String = "",
         disallowedTools: String = "",
         mcpConfigPath: String = "",
-        extraArguments: String = ""
+        extraArguments: String = "",
+        reasoningEffort: String = ""
     ) -> AIHarnessConfiguration {
         AIHarnessConfiguration(
             provider: provider,
@@ -26,7 +27,8 @@ enum TestSupport {
             allowedTools: allowedTools,
             disallowedTools: disallowedTools,
             mcpConfigPath: mcpConfigPath,
-            extraArguments: extraArguments
+            extraArguments: extraArguments,
+            reasoningEffort: reasoningEffort
         )
     }
 
