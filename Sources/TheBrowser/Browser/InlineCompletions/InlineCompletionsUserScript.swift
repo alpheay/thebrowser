@@ -111,18 +111,26 @@ enum InlineCompletionsUserScript {
             if (el.getAttribute('aria-autocomplete') === 'inline') return false;
 
             if (document.body && document.body.getAttribute('data-tb-inline-suspend') === '1') return false;
-            if (looksLikeGmailCompose(el)) return false;
+            if (hasActiveCompetingGhost(el)) return false;
 
             return true;
         }
 
-        function looksLikeGmailCompose(el) {
-            if (!/(^|\.)mail\.google\.com$/.test(location.hostname)) return false;
-            let cur = el;
-            while (cur && cur !== document.body) {
-                const cls = cur.classList;
-                if (cls && cls.contains('Am') && cls.contains('Al')) return true;
-                cur = cur.parentElement;
+        /// True when another inline-completion UI (Gmail Smart Compose, etc.)
+        /// is currently painting its own ghost text inside this element.
+        /// We yield only when we can see the competing UI is active — not
+        /// just because the site *could* offer one — so Gmail compose still
+        /// gets our completions when Smart Compose stays quiet.
+        function hasActiveCompetingGhost(el) {
+            if (!el || !el.querySelector) return false;
+            // Gmail Smart Compose paints a <span data-smartmail="gmail_smartcompose">.
+            if (el.querySelector('[data-smartmail], span.smartcompose-suggestion')) return true;
+            // Generic: any descendant span whose aria-label suggests
+            // "press Tab to accept" — the universal Smart Compose pattern.
+            const candidates = el.querySelectorAll('span[aria-label]');
+            for (let i = 0; i < candidates.length; i++) {
+                const label = (candidates[i].getAttribute('aria-label') || '').toLowerCase();
+                if (label.indexOf('press tab') !== -1 || label.indexOf('tab to accept') !== -1) return true;
             }
             return false;
         }
