@@ -136,6 +136,10 @@ struct BrowserToolbar: View {
                 .controlSize(.small)
                 .scaleEffect(0.6)
                 .frame(width: 16, height: 16)
+        } else if selectedTab.isArtifact {
+            ArtifactMark()
+                .foregroundStyle(Palette.textMuted)
+                .frame(width: 16, height: 16)
         } else if let host = selectedTab.url?.host(percentEncoded: false), !selectedTab.isHome {
             FaviconView(host: host)
                 .frame(width: 16, height: 16)

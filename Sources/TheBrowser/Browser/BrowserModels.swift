@@ -72,6 +72,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             return searchPage.query
         }
 
+        if isArtifact, let url {
+            return BrowserTab.artifactAlias(for: url)
+        }
+
         return url?.absoluteString ?? ""
     }
 
@@ -79,6 +83,29 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         guard let url, url.isFileURL else { return false }
         let artifactRoot = ArtifactStore.rootURL.standardizedFileURL.path
         return url.standardizedFileURL.path.hasPrefix(artifactRoot)
+    }
+
+    /// Turns an artifact file URL into a friendly label for the URL bar — e.g.
+    /// `file:///…/2026-05-10_23-54-50_georgia-tech-school.html` becomes
+    /// `Artifact · Georgia Tech School`. Mirrors the `<stamp>_<slug>.html`
+    /// format from ``ArtifactStore``; falls back to the bare filename stem
+    /// if the timestamp prefix doesn't match.
+    nonisolated static func artifactAlias(for url: URL) -> String {
+        let stem = url.deletingPathExtension().lastPathComponent
+        let slug: String
+        if let match = stem.firstMatch(of: #/^\d{4}-\d{2}-\d{2}_\d{2}-\d{2}-\d{2}_/#) {
+            slug = String(stem[match.range.upperBound...])
+        } else {
+            slug = stem
+        }
+        let pretty = slug
+            .split(separator: "-", omittingEmptySubsequences: true)
+            .map { word -> String in
+                guard let first = word.first else { return "" }
+                return first.uppercased() + word.dropFirst()
+            }
+            .joined(separator: " ")
+        return pretty.isEmpty ? stem : "Artifact · \(pretty)"
     }
 
     func navigate(to rawInput: String) {
