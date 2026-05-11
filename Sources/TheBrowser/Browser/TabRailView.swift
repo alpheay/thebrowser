@@ -309,6 +309,9 @@ private struct TabIcon: View {
         Group {
             if tab.isLoading {
                 LoadingPulse(selected: selected)
+            } else if tab.isDiscord {
+                DiscordMark()
+                    .foregroundStyle(selected ? Palette.textPrimary : Palette.textMuted)
             } else if let host = tab.url?.host(percentEncoded: false), !tab.isHome {
                 FaviconView(host: host)
             } else if tab.isHome {

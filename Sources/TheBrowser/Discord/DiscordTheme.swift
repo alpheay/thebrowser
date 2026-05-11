@@ -21,6 +21,12 @@ import Foundation
 enum DiscordTheme {
     static let injectionScript: String = """
     (function () {
+        // Hostname gate — this script runs on every browser tab via
+        // BrowserTab's user-script list, so bail immediately for non-Discord
+        // pages. `endsWith('discord.com')` catches discord.com, ptb.discord.com,
+        // canary.discord.com, and any future subdomain Discord adds.
+        if (!location.hostname.endsWith('discord.com')) return;
+
         const css = `\(themeCSS)`;
         function apply() {
             if (document.getElementById('thebrowser-discord-theme')) return;

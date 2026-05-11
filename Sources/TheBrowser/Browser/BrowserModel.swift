@@ -200,6 +200,40 @@ final class BrowserModel: ObservableObject {
         openArtifact(at: fileURL)
     }
 
+    /// ⌘D entry point. Selects an existing Discord tab if there is one;
+    /// otherwise creates a fresh one. Either way, the tab's webview is
+    /// reloaded with `reloadIgnoringLocalAndRemoteCacheData` so a stale or
+    /// half-broken cached response (the "sometimes Discord doesn't load"
+    /// failure mode) is bypassed every time the shortcut fires.
+    func openOrFocusDiscord() {
+        let entryURL = URL(string: "https://discord.com/channels/@me")!
+
+        if let existing = tabs.first(where: { $0.isDiscord }) {
+            select(existing)
+            existing.webView.load(URLRequest(
+                url: existing.url ?? entryURL,
+                cachePolicy: .reloadIgnoringLocalAndRemoteCacheData
+            ))
+            return
+        }
+
+        let tab = makeTab()
+        tabs.append(tab)
+        select(tab)
+        // Mirror the bookkeeping `navigate(to:)` does, then issue the
+        // cache-bypassing load directly.
+        tab.isHome = false
+        tab.searchPage = nil
+        tab.loadError = nil
+        tab.url = entryURL
+        tab.title = "Discord"
+        tab.webView.load(URLRequest(
+            url: entryURL,
+            cachePolicy: .reloadIgnoringLocalAndRemoteCacheData
+        ))
+        updateAddressFromSelectedTab()
+    }
+
     /// Runs the separate web-control agent against the tab that was selected
     /// when the tool started. The status is observed by the shell to draw the
     /// vignette and block user input while the harness is driving the page.

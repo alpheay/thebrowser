@@ -2,7 +2,6 @@ import AppKit
 import SwiftUI
 
 struct BrowserShellView: View {
-    @Environment(\.openWindow) private var openWindow
     @StateObject private var model = BrowserModel()
     @StateObject private var chatModel = ChatViewModel()
     @StateObject private var selectionWidget = TextSelectionWidgetModel()
@@ -434,7 +433,7 @@ struct BrowserShellView: View {
                 CitedClipboardCursorPanelController.shared.toggle()
             },
             openDiscordShortcut: {
-                openWindow(id: WindowID.discord)
+                model.openOrFocusDiscord()
             }
         ]
     }

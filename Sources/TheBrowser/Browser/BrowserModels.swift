@@ -77,6 +77,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         configuration.userContentController.addUserScript(Self.textSelectionUserScript)
         configuration.userContentController.addUserScript(CitedClipboardScript.userScript)
         configuration.userContentController.addUserScript(Self.makeLinkHoverUserScript())
+        configuration.userContentController.addUserScript(Self.discordThemeUserScript)
         configuration.userContentController.add(bridge, name: TextSelectionBridge.messageName)
         configuration.userContentController.add(citedBridge, name: CitedClipboardBridge.messageName)
         configuration.userContentController.add(hoverBridge, name: LinkHoverBridge.messageName)
@@ -143,6 +144,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             return searchPage.query
         }
 
+        if isDiscord {
+            return "Discord"
+        }
+
         if !title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             return title
         }
@@ -161,6 +166,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
         if isArtifact, let url {
             return BrowserTab.artifactAlias(for: url)
+        }
+
+        if isDiscord {
+            return "Discord"
         }
 
         return url?.absoluteString ?? ""
@@ -185,6 +194,16 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         guard let url, url.isFileURL else { return false }
         let artifactRoot = ArtifactStore.rootURL.standardizedFileURL.path
         return url.standardizedFileURL.path.hasPrefix(artifactRoot)
+    }
+
+    /// True when this tab is sitting on a Discord page — `discord.com` proper
+    /// or any subdomain (ptb / canary). Triggers the masked "Discord" label
+    /// in the URL bar + the Discord glyph in the tab rail.
+    var isDiscord: Bool {
+        guard let host = url?.host(percentEncoded: false)?.lowercased() else {
+            return false
+        }
+        return host == "discord.com" || host.hasSuffix(".discord.com")
     }
 
     var isSmartReadEligible: Bool {
@@ -1037,6 +1056,16 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         """,
         injectionTime: .atDocumentStart,
         forMainFrameOnly: false
+    )
+
+    /// Re-themes Discord pages (`discord.com` + subdomains) into the matte
+    /// black/white palette of the rest of the app. The script itself gates on
+    /// `location.hostname` so it's a no-op on every other site — we can add it
+    /// once at tab creation alongside the other global scripts.
+    static let discordThemeUserScript = WKUserScript(
+        source: DiscordTheme.injectionScript,
+        injectionTime: .atDocumentStart,
+        forMainFrameOnly: true
     )
 
     /// Removes Google's "this browser is no longer supported" banner across
