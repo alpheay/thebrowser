@@ -121,8 +121,9 @@ struct DiscordAccountView: View {
 
                 DiscordStepList(steps: [
                     "Open the Discord Developer Portal and create a new Application.",
-                    "Under OAuth2 → Redirects, add: thebrowser-discord://oauth/callback",
-                    "Copy the Application's Client ID and paste it below."
+                    "Under OAuth2 → Redirects, click the Copy button below to paste the exact redirect URI (typos will cause an Invalid OAuth2 redirect_uri error).",
+                    "Toggle Public Client to ON — required so PKCE alone is enough and no client secret is needed.",
+                    "Copy the Application's Client ID from the same page and paste it below."
                 ])
 
                 DiscordClientIDField(text: $clientIDPref, focused: $clientIDFocused)
