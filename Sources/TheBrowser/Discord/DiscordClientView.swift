@@ -186,14 +186,18 @@ private struct DiscordMessagingPane: View {
     let selection: DiscordSelection
     let guild: DiscordGuild?
 
+    @StateObject private var controller = DiscordWebController()
+
     var body: some View {
         VStack(spacing: 0) {
             DiscordContextHeader(
                 title: title,
                 subtitle: subtitle,
-                externalURL: url
+                externalURL: url,
+                loadingState: controller.loadingState,
+                onReload: { controller.loadFresh() }
             )
-            DiscordWebContent(url: url)
+            DiscordWebContent(url: url, controller: controller)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
@@ -227,36 +231,86 @@ private struct DiscordContextHeader: View {
     let title: String
     let subtitle: String?
     let externalURL: URL
+    let loadingState: DiscordWebLoadingState
+    let onReload: () -> Void
 
     var body: some View {
-        HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(title)
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Palette.textPrimary)
-                if let subtitle {
-                    Text(subtitle)
-                        .font(.system(size: 11, weight: .medium))
-                        .foregroundStyle(Palette.textMuted)
+        VStack(spacing: 0) {
+            HStack(spacing: 10) {
+                VStack(alignment: .leading, spacing: 1) {
+                    HStack(spacing: 6) {
+                        Text(title)
+                            .font(.system(size: 13, weight: .semibold))
+                            .foregroundStyle(Palette.textPrimary)
+                        loadingChip
+                    }
+                    if let subtitle {
+                        Text(subtitle)
+                            .font(.system(size: 11, weight: .medium))
+                            .foregroundStyle(Palette.textMuted)
+                    }
                 }
+
+                Spacer()
+
+                DiscordHeaderIconButton(
+                    symbol: "arrow.clockwise",
+                    tooltip: "Reload",
+                    action: onReload
+                )
+
+                DiscordHeaderIconButton(
+                    symbol: "arrow.up.right.square",
+                    tooltip: "Open in default browser",
+                    action: {
+                        NSWorkspace.shared.open(externalURL)
+                    }
+                )
             }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 10)
+            .frame(height: 44)
 
-            Spacer()
-
-            DiscordHeaderIconButton(
-                symbol: "arrow.up.right.square",
-                tooltip: "Open in default browser",
-                action: {
-                    NSWorkspace.shared.open(externalURL)
+            if case .failed(let message) = loadingState {
+                HStack(spacing: 8) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color(red: 1.0, green: 0.55, blue: 0.55))
+                    Text("Couldn't load Discord — \(message)")
+                        .font(.system(size: 11.5, weight: .medium))
+                        .foregroundStyle(Color(red: 1.0, green: 0.55, blue: 0.55))
+                        .lineLimit(2)
+                    Spacer()
                 }
-            )
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .background(Color(red: 0.18, green: 0.05, blue: 0.05))
+            }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 10)
-        .frame(height: 44)
         .background(Palette.bgSunken)
         .overlay(alignment: .bottom) {
             Rectangle().fill(Palette.stroke).frame(height: 1)
+        }
+    }
+
+    @ViewBuilder
+    private var loadingChip: some View {
+        switch loadingState {
+        case .idle, .loaded:
+            EmptyView()
+        case .loading:
+            HStack(spacing: 4) {
+                ProgressView().controlSize(.mini).tint(Palette.textMuted)
+                Text("Loading")
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(0.6)
+                    .foregroundStyle(Palette.textMuted)
+            }
+        case .failed:
+            Text("FAILED")
+                .font(.system(size: 9.5, weight: .bold))
+                .tracking(1.0)
+                .foregroundStyle(Color(red: 1.0, green: 0.55, blue: 0.55))
         }
     }
 }
