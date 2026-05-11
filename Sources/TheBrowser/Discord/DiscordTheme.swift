@@ -52,95 +52,113 @@ enum DiscordTheme {
 
     /// The actual CSS payload. Pulled out of the JS literal so the IDE can
     /// syntax-highlight most of it.
+    ///
+    /// Every variable declaration carries `!important`. Without it, Discord's
+    /// later `.theme-dark { --background-primary: #313338 }` wins on equal
+    /// specificity + cascade order (we inject at atDocumentStart, theirs
+    /// loads after). The `!important` lifts our values above the cascade
+    /// entirely, which is the only reliable way to override a same-class
+    /// selector that comes later.
     private static let themeCSS: String = #"""
-    /* ---- Color tokens ---- */
+    /* ---- Color tokens (forced) ---- */
     :root,
     html,
+    html.theme-dark,
+    html.theme-darker,
+    html.theme-light,
+    html.theme-pure-dark,
     .theme-dark,
     .theme-darker,
-    .theme-light {
+    .theme-light,
+    .theme-pure-dark,
+    [class*="visual-refresh"] {
         /* Plates — pure matte black */
-        --background-primary: #0A0A0A;
-        --background-secondary: #050505;
-        --background-secondary-alt: #050505;
-        --background-tertiary: #050505;
-        --background-floating: #131313;
-        --background-accent: #181818;
-        --background-nested-floating: #131313;
-        --background-mobile-primary: #0A0A0A;
-        --background-mobile-secondary: #050505;
+        --background-primary: #0A0A0A !important;
+        --background-secondary: #050505 !important;
+        --background-secondary-alt: #050505 !important;
+        --background-tertiary: #050505 !important;
+        --background-floating: #131313 !important;
+        --background-accent: #181818 !important;
+        --background-nested-floating: #131313 !important;
+        --background-mobile-primary: #0A0A0A !important;
+        --background-mobile-secondary: #050505 !important;
 
         /* Hover / active scrims */
-        --background-modifier-hover: rgba(255,255,255,0.04);
-        --background-modifier-active: rgba(255,255,255,0.08);
-        --background-modifier-selected: rgba(255,255,255,0.10);
-        --background-modifier-accent: rgba(255,255,255,0.06);
-        --background-message-hover: rgba(255,255,255,0.03);
-        --background-message-highlight: rgba(255,255,255,0.04);
+        --background-modifier-hover: rgba(255,255,255,0.04) !important;
+        --background-modifier-active: rgba(255,255,255,0.08) !important;
+        --background-modifier-selected: rgba(255,255,255,0.10) !important;
+        --background-modifier-accent: rgba(255,255,255,0.06) !important;
+        --background-message-hover: rgba(255,255,255,0.03) !important;
+        --background-message-highlight: rgba(255,255,255,0.04) !important;
 
         /* Channel chrome */
-        --channels-default: rgba(255,255,255,0.62);
-        --channel-text-area-placeholder: rgba(255,255,255,0.40);
-        --channeltextarea-background: #131313;
-        --activity-card-background: #131313;
+        --channels-default: rgba(255,255,255,0.62) !important;
+        --channel-text-area-placeholder: rgba(255,255,255,0.40) !important;
+        --channeltextarea-background: #131313 !important;
+        --activity-card-background: #131313 !important;
 
         /* Strokes */
-        --border-faint: rgba(255,255,255,0.04);
-        --border-subtle: rgba(255,255,255,0.08);
-        --border-strong: rgba(255,255,255,0.14);
+        --border-faint: rgba(255,255,255,0.04) !important;
+        --border-subtle: rgba(255,255,255,0.08) !important;
+        --border-strong: rgba(255,255,255,0.14) !important;
 
         /* Text */
-        --header-primary: rgba(255,255,255,0.95);
-        --header-secondary: rgba(255,255,255,0.62);
-        --text-normal: rgba(255,255,255,0.85);
-        --text-muted: rgba(255,255,255,0.40);
-        --text-faint: rgba(255,255,255,0.22);
-        --text-link: rgba(255,255,255,0.95);
-        --text-link-low-saturation: rgba(255,255,255,0.62);
-        --text-positive: rgba(255,255,255,0.85);
-        --text-warning: rgba(255,255,255,0.85);
-        --text-danger: rgba(255,180,180,0.85);
-        --text-brand: rgba(255,255,255,0.95);
+        --header-primary: rgba(255,255,255,0.95) !important;
+        --header-secondary: rgba(255,255,255,0.62) !important;
+        --text-normal: rgba(255,255,255,0.85) !important;
+        --text-muted: rgba(255,255,255,0.40) !important;
+        --text-faint: rgba(255,255,255,0.22) !important;
+        --text-link: rgba(255,255,255,0.95) !important;
+        --text-link-low-saturation: rgba(255,255,255,0.62) !important;
+        --text-positive: rgba(255,255,255,0.85) !important;
+        --text-warning: rgba(255,255,255,0.85) !important;
+        --text-danger: rgba(255,180,180,0.85) !important;
+        --text-brand: rgba(255,255,255,0.95) !important;
 
         /* Interactive */
-        --interactive-normal: rgba(255,255,255,0.62);
-        --interactive-hover: rgba(255,255,255,0.95);
-        --interactive-active: rgba(255,255,255,1.0);
-        --interactive-muted: rgba(255,255,255,0.22);
+        --interactive-normal: rgba(255,255,255,0.62) !important;
+        --interactive-hover: rgba(255,255,255,0.95) !important;
+        --interactive-active: rgba(255,255,255,1.0) !important;
+        --interactive-muted: rgba(255,255,255,0.22) !important;
 
         /* Brand — strip the blurple */
-        --brand-experiment: #ffffff;
-        --brand-experiment-560: #ffffff;
-        --brand-experiment-500: #ffffff;
-        --brand-experiment-400: #ffffff;
-        --brand-experiment-300: rgba(255,255,255,0.92);
-        --brand-experiment-200: rgba(255,255,255,0.80);
-        --brand-experiment-100: rgba(255,255,255,0.62);
-        --brand-experiment-15a: rgba(255,255,255,0.15);
-        --brand-experiment-30a: rgba(255,255,255,0.20);
-        --brand-experiment-60a: rgba(255,255,255,0.30);
-        --brand-500: #ffffff;
-        --brand-560: #ffffff;
+        --brand-experiment: #ffffff !important;
+        --brand-experiment-560: #ffffff !important;
+        --brand-experiment-500: #ffffff !important;
+        --brand-experiment-400: #ffffff !important;
+        --brand-experiment-300: rgba(255,255,255,0.92) !important;
+        --brand-experiment-200: rgba(255,255,255,0.80) !important;
+        --brand-experiment-100: rgba(255,255,255,0.62) !important;
+        --brand-experiment-15a: rgba(255,255,255,0.15) !important;
+        --brand-experiment-30a: rgba(255,255,255,0.20) !important;
+        --brand-experiment-60a: rgba(255,255,255,0.30) !important;
+        --brand-500: #ffffff !important;
+        --brand-560: #ffffff !important;
 
-        /* Status (keep destructive red faintly tinted) */
-        --status-positive: rgba(255,255,255,0.85);
-        --status-warning: rgba(255,255,255,0.85);
-        --status-danger: rgba(255,150,150,0.90);
-        --status-danger-background: rgba(255,80,80,0.18);
+        /* Status (grayscale w/ a faint red kept for danger) */
+        --status-positive: rgba(255,255,255,0.85) !important;
+        --status-warning: rgba(255,255,255,0.55) !important;
+        --status-danger: rgba(255,150,150,0.90) !important;
+        --status-danger-background: rgba(255,80,80,0.18) !important;
+        --status-online: rgba(255,255,255,0.85) !important;
+        --status-idle: rgba(255,255,255,0.45) !important;
+        --status-dnd: rgba(255,180,180,0.85) !important;
+        --status-offline: rgba(255,255,255,0.22) !important;
+        --status-streaming: rgba(255,255,255,0.62) !important;
 
         /* Scrollbars */
-        --scrollbar-thin-thumb: rgba(255,255,255,0.10);
-        --scrollbar-thin-track: transparent;
-        --scrollbar-auto-thumb: rgba(255,255,255,0.10);
-        --scrollbar-auto-track: transparent;
-        --scrollbar-auto-scrollbar-color-thumb: rgba(255,255,255,0.10);
-        --scrollbar-auto-scrollbar-color-track: transparent;
+        --scrollbar-thin-thumb: rgba(255,255,255,0.10) !important;
+        --scrollbar-thin-track: transparent !important;
+        --scrollbar-auto-thumb: rgba(255,255,255,0.10) !important;
+        --scrollbar-auto-track: transparent !important;
+        --scrollbar-auto-scrollbar-color-thumb: rgba(255,255,255,0.10) !important;
+        --scrollbar-auto-scrollbar-color-track: transparent !important;
 
         /* Fonts — match the rest of the app */
-        --font-primary: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif;
-        --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
-        --font-headline: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif;
-        --font-code: ui-monospace, "SF Mono", Menlo, monospace;
+        --font-primary: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", sans-serif !important;
+        --font-display: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif !important;
+        --font-headline: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Helvetica Neue", sans-serif !important;
+        --font-code: ui-monospace, "SF Mono", Menlo, monospace !important;
     }
 
     /* ---- Hard floor backgrounds ---- */
@@ -148,13 +166,46 @@ enum DiscordTheme {
         background: #0A0A0A !important;
     }
 
-    /* ---- Hide upsell banners only ---- */
-    /* We previously also hid Discord's own server rail to deduplicate with
-       ours, but Discord's flex layout is fragile: `display: none`-ing the
-       rail collapsed the DM sidebar and main content into a zero-height
-       black void on /channels/@me. The redundancy of two rails is the
-       lesser evil. Promo banners stay hidden — they're floating elements,
-       removing them doesn't cascade.                                       */
+    /* ---- Hide Discord's redundant server rail ----
+       We use `flex: 0 0 0; width: 0` rather than `display: none` so the
+       adjacent flex items (channel/DM sidebar, main content) keep their
+       layout and expand into the freed space instead of collapsing to a
+       zero-size void. visibility: hidden suppresses the visual; the element
+       still participates in the flex flow with zero size.                 */
+    nav[aria-label*="Servers" i],
+    nav[aria-label*="Guilds" i] {
+        flex: 0 0 0 !important;
+        width: 0 !important;
+        min-width: 0 !important;
+        max-width: 0 !important;
+        padding: 0 !important;
+        margin: 0 !important;
+        overflow: hidden !important;
+        visibility: hidden !important;
+    }
+
+    /* ---- Hide the voice user-area bar at the bottom of the channel
+       sidebar (mic, deafen, settings). We're not doing voice, and it
+       eats vertical space.                                              */
+    section[aria-label*="User area" i],
+    [aria-label*="User panel" i] {
+        display: none !important;
+    }
+
+    /* ---- Strip color from the small status indicators on avatars and
+       in friend rows. Discord paints these via hardcoded SVG fills + via
+       the --status-* variables; grayscaling the dot wrapper covers both. */
+    [class*="status_"] svg,
+    [class*="statusDot_"],
+    [class*="statusOnline_"],
+    [class*="statusIdle_"],
+    [class*="statusDnd_"],
+    [class*="statusOffline_"],
+    [class*="statusStreaming_"] {
+        filter: grayscale(1) !important;
+    }
+
+    /* ---- Hide upsell banners / promos ---- */
     [class*="upsellBanner"],
     [class*="nitroUpsell"],
     [class*="premiumBanner"],
