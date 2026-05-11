@@ -20,6 +20,13 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private var observations: [NSKeyValueObservation] = []
     private var searchBackStack: [BrowserSearchPage] = []
     private let selectionBridge: TextSelectionBridge
+    private let citedClipboardBridge: CitedClipboardBridge
+
+    /// Cited Clipboard capture gate. Returns false for tabs that should
+    /// never feed the clipboard log — currently only the placeholder for
+    /// future incognito mode, since ``BrowserTab`` doesn't yet have an
+    /// incognito flag. When incognito ships, flip this off for those tabs.
+    var allowsClipboardCapture: Bool { true }
 
     /// User agent used for both browsing tabs and the in-app Google sign-in
     /// sheet. WKWebView's default UA omits the `Version/X Safari/Y` suffix,
@@ -34,6 +41,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     override init() {
         let bridge = TextSelectionBridge()
         selectionBridge = bridge
+        let citedBridge = CitedClipboardBridge()
+        citedClipboardBridge = citedBridge
 
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
@@ -41,7 +50,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         configuration.userContentController.addUserScript(Self.darkModeUserScript)
         configuration.userContentController.addUserScript(Self.unsupportedBrowserBannerKillerScript)
         configuration.userContentController.addUserScript(Self.textSelectionUserScript)
+        configuration.userContentController.addUserScript(CitedClipboardScript.userScript)
         configuration.userContentController.add(bridge, name: TextSelectionBridge.messageName)
+        configuration.userContentController.add(citedBridge, name: CitedClipboardBridge.messageName)
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.customUserAgent = Self.userAgent
         webView.allowsBackForwardNavigationGestures = true
@@ -51,6 +62,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         super.init()
 
         bridge.tab = self
+        citedBridge.tab = self
         webView.navigationDelegate = self
         observeWebView()
     }

@@ -20,6 +20,7 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.closeTabShortcut) private var closeTabShortcut = "command+w"
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
     @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "command+shift+r"
+    @AppStorage(PreferenceKey.pasteWithCitationShortcut) private var pasteWithCitationShortcut = "command+shift+v"
 
     @State private var selectedTab: SettingsTab = .general
     @State private var showClearAllConfirm = false
@@ -90,6 +91,8 @@ struct SettingsView: View {
             accountSettings
         case .ai:
             aiSettings
+        case .clipboard:
+            CitedClipboardSettingsContent()
         case .keybindings:
             keybindingsSettings
         case .migration:
@@ -221,6 +224,9 @@ struct SettingsView: View {
                 row(label: "Smart Read", help: "Summarizes the current website near your cursor.") {
                     ShortcutRecorder(value: $smartReadShortcut)
                 }
+                row(label: "Paste with citation", help: "Opens the clipboard history popover.") {
+                    ShortcutRecorder(value: $pasteWithCitationShortcut)
+                }
             }
         }
     }
@@ -306,6 +312,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case account
     case ai
+    case clipboard
     case keybindings
     case migration
 
@@ -316,6 +323,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "General"
         case .account: "Account"
         case .ai: "AI Engine"
+        case .clipboard: "Clipboard"
         case .keybindings: "Keybindings"
         case .migration: "Migration"
         }
@@ -326,6 +334,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "slider.horizontal.3"
         case .account: "person.crop.circle"
         case .ai: "sparkles"
+        case .clipboard: "doc.on.clipboard"
         case .keybindings: "keyboard"
         case .migration: "arrow.triangle.2.circlepath"
         }

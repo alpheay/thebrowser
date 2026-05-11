@@ -5,6 +5,7 @@ struct BrowserToolbar: View {
     @ObservedObject var selectedTab: BrowserTab
     var reservesTrafficLightGutter: Bool
     var onSmartRead: () -> Void = {}
+    @Binding var isClipboardPopoverPresented: Bool
 
     @FocusState private var addressFocused: Bool
     @State private var submitPulse = false
@@ -170,6 +171,17 @@ struct BrowserToolbar: View {
             }
 
             Button {
+                isClipboardPopoverPresented.toggle()
+            } label: {
+                Image(systemName: "doc.on.clipboard")
+            }
+            .buttonStyle(IconButtonStyle(selected: isClipboardPopoverPresented, size: 28))
+            .help("Paste with citation")
+            .popover(isPresented: $isClipboardPopoverPresented, arrowEdge: .bottom) {
+                CitedClipboardPopoverHost(isPresented: $isClipboardPopoverPresented)
+            }
+
+            Button {
                 withAnimation(Motion.springSnap) { model.toggleTabs() }
             } label: {
                 Image(systemName: "sidebar.left")
@@ -184,6 +196,27 @@ struct BrowserToolbar: View {
             }
             .buttonStyle(IconButtonStyle(selected: model.isChatVisible, size: 28))
             .help("Toggle AI chat")
+        }
+    }
+}
+
+/// Thin wrapper that owns the popover model so the popover keeps its state
+/// across open/close cycles (the model resets `pickedClip` and search when
+/// the popover dismisses).
+private struct CitedClipboardPopoverHost: View {
+    @Binding var isPresented: Bool
+    @StateObject private var model = CitedClipboardPopoverModel()
+
+    var body: some View {
+        CitedClipboardPopover(model: model) {
+            isPresented = false
+        }
+        .onChange(of: isPresented) { _, presented in
+            if !presented {
+                model.reset()
+            } else {
+                model.reload()
+            }
         }
     }
 }

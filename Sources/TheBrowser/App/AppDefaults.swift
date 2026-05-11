@@ -28,7 +28,14 @@ enum PreferenceKey {
     static let closeTabShortcut = "shortcut.closeTab"
     static let focusAddressShortcut = "shortcut.focusAddress"
     static let smartReadShortcut = "shortcut.smartRead"
+    static let pasteWithCitationShortcut = "shortcut.pasteWithCitation"
     static let googleOAuthClientID = "google.oauth.clientID"
+    static let clipboardEnabled = "clipboard.enabled"
+    static let clipboardSmartPasteEnabled = "clipboard.smartPasteEnabled"
+    static let clipboardMarkdownStyle = "clipboard.markdownStyle"
+    static let clipboardCitationStyle = "clipboard.citationStyle"
+    static let clipboardBlocklist = "clipboard.blocklist"
+    static let clipboardAppOverrides = "clipboard.appOverrides"
 }
 
 enum AppDefaults {
@@ -58,7 +65,14 @@ enum AppDefaults {
             PreferenceKey.closeTabShortcut: "command+w",
             PreferenceKey.focusAddressShortcut: "command+l",
             PreferenceKey.smartReadShortcut: "command+shift+r",
-            PreferenceKey.googleOAuthClientID: ""
+            PreferenceKey.pasteWithCitationShortcut: "command+shift+v",
+            PreferenceKey.googleOAuthClientID: "",
+            PreferenceKey.clipboardEnabled: true,
+            PreferenceKey.clipboardSmartPasteEnabled: true,
+            PreferenceKey.clipboardMarkdownStyle: CitedMarkdownStyle.blockquote.rawValue,
+            PreferenceKey.clipboardCitationStyle: CitedCitationStyle.bracketed.rawValue,
+            PreferenceKey.clipboardBlocklist: CitedClipboardPolicy.defaultBlocklistString,
+            PreferenceKey.clipboardAppOverrides: ""
         ])
     }
 

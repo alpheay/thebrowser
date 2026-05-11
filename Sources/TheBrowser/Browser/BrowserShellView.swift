@@ -13,11 +13,13 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.closeTabShortcut) private var closeTabShortcut = "command+w"
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
     @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "command+shift+r"
+    @AppStorage(PreferenceKey.pasteWithCitationShortcut) private var pasteWithCitationShortcut = "command+shift+v"
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
 
     @State private var isPeekingRail = false
     @State private var peekDismissTask: Task<Void, Never>? = nil
     @State private var isShowingMigrationPrompt = false
+    @State private var isClipboardPopoverPresented = false
 
     private var railOverlayVisible: Bool {
         model.isTabRailVisible || isPeekingRail
@@ -154,7 +156,8 @@ struct BrowserShellView: View {
                 model: model,
                 selectedTab: model.selectedTab,
                 reservesTrafficLightGutter: !model.isTabRailVisible,
-                onSmartRead: triggerSmartRead
+                onSmartRead: triggerSmartRead,
+                isClipboardPopoverPresented: $isClipboardPopoverPresented
             )
 
             ZStack {
@@ -274,7 +277,10 @@ struct BrowserShellView: View {
             focusAddressShortcut: {
                 model.focusAddress()
             },
-            smartReadShortcut: triggerSmartRead
+            smartReadShortcut: triggerSmartRead,
+            pasteWithCitationShortcut: {
+                isClipboardPopoverPresented.toggle()
+            }
         ]
     }
 }
