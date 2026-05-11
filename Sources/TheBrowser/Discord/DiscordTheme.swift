@@ -166,24 +166,6 @@ enum DiscordTheme {
         background: #0A0A0A !important;
     }
 
-    /* ---- Hide Discord's redundant server rail ----
-       We use `flex: 0 0 0; width: 0` rather than `display: none` so the
-       adjacent flex items (channel/DM sidebar, main content) keep their
-       layout and expand into the freed space instead of collapsing to a
-       zero-size void. visibility: hidden suppresses the visual; the element
-       still participates in the flex flow with zero size.                 */
-    nav[aria-label*="Servers" i],
-    nav[aria-label*="Guilds" i] {
-        flex: 0 0 0 !important;
-        width: 0 !important;
-        min-width: 0 !important;
-        max-width: 0 !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        overflow: hidden !important;
-        visibility: hidden !important;
-    }
-
     /* ---- Hide the voice user-area bar at the bottom of the channel
        sidebar (mic, deafen, settings). We're not doing voice, and it
        eats vertical space.                                              */
