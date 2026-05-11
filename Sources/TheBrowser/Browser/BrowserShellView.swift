@@ -444,46 +444,40 @@ private struct WebControlWorkingOverlay: View {
             edgeVignette
 
             VStack(spacing: 0) {
+                Spacer(minLength: 0)
+
                 HStack(spacing: 10) {
                     ZStack {
                         Circle()
-                            .stroke(Palette.accent.opacity(0.28), lineWidth: 1)
+                            .stroke(Color.white.opacity(0.22), lineWidth: 1)
+                            .frame(width: 14, height: 14)
                         Circle()
-                            .fill(Palette.accent.opacity(pulse ? 0.28 : 0.12))
-                            .frame(width: 9, height: 9)
+                            .fill(Color.white.opacity(pulse ? 0.85 : 0.45))
+                            .frame(width: 6, height: 6)
                     }
-                    .frame(width: 18, height: 18)
 
-                    VStack(alignment: .leading, spacing: 2) {
+                    VStack(alignment: .leading, spacing: 1) {
                         Text("Agent is Working")
-                            .font(.system(size: 13, weight: .semibold))
+                            .font(.system(size: 12.5, weight: .semibold))
                             .foregroundStyle(Palette.textPrimary)
                         Text(status.detail)
                             .font(.system(size: 10.5, weight: .medium))
                             .foregroundStyle(Palette.textMuted)
                             .lineLimit(1)
                     }
-
-                    if status.step > 0 {
-                        Text("Step \(status.step)")
-                            .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
-                            .foregroundStyle(Palette.textSecondary)
-                    }
                 }
                 .padding(.horizontal, 14)
-                .padding(.vertical, 10)
+                .padding(.vertical, 9)
                 .background {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .fill(Palette.bg.opacity(0.86))
+                    RoundedRectangle(cornerRadius: 999, style: .continuous)
+                        .fill(Palette.bgRaised)
                 }
                 .overlay {
-                    RoundedRectangle(cornerRadius: 12, style: .continuous)
-                        .stroke(Palette.strokeStrong, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 999, style: .continuous)
+                        .stroke(Palette.stroke, lineWidth: 1)
                 }
-                .shadow(color: Color.black.opacity(0.28), radius: 18, x: 0, y: 12)
-                .padding(.top, 24)
-
-                Spacer(minLength: 0)
+                .shadow(color: Color.black.opacity(0.35), radius: 20, x: 0, y: 10)
+                .padding(.bottom, 20)
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous))
@@ -491,7 +485,7 @@ private struct WebControlWorkingOverlay: View {
         .padding(.bottom, Metrics.webviewInset)
         .allowsHitTesting(true)
         .onAppear {
-            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+            withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
                 pulse = true
             }
         }
@@ -499,42 +493,20 @@ private struct WebControlWorkingOverlay: View {
 
     private var edgeVignette: some View {
         ZStack {
-            Color.black.opacity(0.12)
-
-            HStack(spacing: 0) {
-                LinearGradient(
-                    colors: [Color.black.opacity(0.62), Color.black.opacity(0)],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(width: 96)
-                Spacer(minLength: 0)
-                LinearGradient(
-                    colors: [Color.black.opacity(0), Color.black.opacity(0.62)],
-                    startPoint: .leading,
-                    endPoint: .trailing
-                )
-                .frame(width: 96)
-            }
+            Color.black.opacity(0.08)
 
             VStack(spacing: 0) {
-                LinearGradient(
-                    colors: [Color.black.opacity(0.58), Color.black.opacity(0)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 82)
                 Spacer(minLength: 0)
                 LinearGradient(
-                    colors: [Color.black.opacity(0), Color.black.opacity(0.58)],
+                    colors: [Color.black.opacity(0), Color.black.opacity(0.42)],
                     startPoint: .top,
                     endPoint: .bottom
                 )
-                .frame(height: 82)
+                .frame(height: 110)
             }
 
             RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous)
-                .stroke(Palette.accent.opacity(pulse ? 0.34 : 0.18), lineWidth: 1.5)
+                .stroke(Color.white.opacity(pulse ? 0.18 : 0.08), lineWidth: 1)
         }
     }
 }
