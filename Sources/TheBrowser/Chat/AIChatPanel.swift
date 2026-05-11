@@ -25,6 +25,58 @@ struct ChatMessage: Identifiable, Equatable {
     var role: Role
     var text: String
     var toolChain: [ToolInvocation] = []
+    var attachments: [ChatAttachment] = []
+}
+
+/// A snippet of page text the user clipped via the in-page selection widget
+/// (or any future attachment surface) and queued as additional context for
+/// the next chat turn. Attachments are first-class — they live with the
+/// user message they were sent with, persist into session history, and are
+/// formatted into the AI prompt as a structured "Highlighted passages" block
+/// so the model can cite them precisely.
+struct ChatAttachment: Identifiable, Equatable, Hashable {
+    let id: UUID
+    var text: String
+    var pageTitle: String
+    var pageURL: String
+
+    init(
+        id: UUID = UUID(),
+        text: String,
+        pageTitle: String,
+        pageURL: String
+    ) {
+        self.id = id
+        self.text = text
+        self.pageTitle = pageTitle
+        self.pageURL = pageURL
+    }
+
+    /// Best label for the chip: the page title when known, otherwise the
+    /// host, otherwise a generic "Highlight" fallback.
+    var displayLabel: String {
+        let trimmedTitle = pageTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmedTitle.isEmpty { return trimmedTitle }
+        if let host = host, !host.isEmpty { return host }
+        return "Highlight"
+    }
+
+    var host: String? {
+        guard let url = URL(string: pageURL) else { return nil }
+        return url.host(percentEncoded: false)
+    }
+
+    /// Short single-line preview of the clipped text, for tooltips and
+    /// compact chip captions. Collapses whitespace and caps length.
+    var preview: String {
+        let collapsed = text
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+        if collapsed.count > 140 {
+            return String(collapsed.prefix(140)) + "…"
+        }
+        return collapsed
+    }
 }
 
 @MainActor
@@ -33,6 +85,7 @@ final class ChatViewModel: ObservableObject {
     @Published var draft = ""
     @Published var isSending = false
     @Published var focusComposerToken = 0
+    @Published var pendingAttachments: [ChatAttachment] = []
     @Published private(set) var sessionID: String
 
     private let client = AIProviderClient()
@@ -40,6 +93,95 @@ final class ChatViewModel: ObservableObject {
 
     init() {
         self.sessionID = ChatSessionStore.shared.newSessionID()
+    }
+
+    /// Flattens every attachment ever sent in this conversation into a
+    /// stable, globally-numbered list (1-based, oldest first). The number
+    /// the model sees in the prompt — e.g. `[2]` — maps directly back to
+    /// `result.index` here.
+    func enumeratedAttachments() -> [(index: Int, messageID: ChatMessage.ID, attachment: ChatAttachment)] {
+        var results: [(Int, ChatMessage.ID, ChatAttachment)] = []
+        var counter = 0
+        for msg in messages where msg.role == .user {
+            for att in msg.attachments {
+                counter += 1
+                results.append((counter, msg.id, att))
+            }
+        }
+        return results
+    }
+
+    /// Resolves a `read_highlights` tool call against the conversation's
+    /// global attachment numbering. `indices` is 1-based; nil means "give
+    /// me every highlight in this conversation." Returns a formatted text
+    /// block that mirrors the inline format used for current-turn
+    /// highlights, so the model sees the same shape whether the content
+    /// arrived in the prompt or via the tool result.
+    func collectAttachments(indices: [Int]?) -> String {
+        let all = enumeratedAttachments()
+        guard !all.isEmpty else {
+            return "No highlighted passages have been attached in this conversation."
+        }
+
+        let selected: [(Int, ChatMessage.ID, ChatAttachment)]
+        if let indices, !indices.isEmpty {
+            let wanted = Set(indices)
+            selected = all.filter { wanted.contains($0.0) }
+        } else {
+            selected = all
+        }
+
+        guard !selected.isEmpty else {
+            let available = all.map { String($0.0) }.joined(separator: ", ")
+            return "No highlight matches the requested index. Available indices: \(available)."
+        }
+
+        var sections: [String] = []
+        for (idx, _, attachment) in selected {
+            let title = attachment.pageTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+            let url = attachment.pageURL.trimmingCharacters(in: .whitespacesAndNewlines)
+            let source: String
+            if !title.isEmpty && !url.isEmpty {
+                source = "\(title) — \(url)"
+            } else if !title.isEmpty {
+                source = title
+            } else if !url.isEmpty {
+                source = url
+            } else {
+                source = "unknown source"
+            }
+            var lines: [String] = ["[\(idx)] From \(source):"]
+            for piece in attachment.text.split(separator: "\n", omittingEmptySubsequences: false) {
+                lines.append("> \(piece)")
+            }
+            sections.append(lines.joined(separator: "\n"))
+        }
+        return sections.joined(separator: "\n\n")
+    }
+
+    /// Queues a highlighted page passage as additional context for the
+    /// next chat turn. Deduplicates identical highlights from the same URL
+    /// so users can spam the Ask button without piling up duplicates.
+    func attachHighlight(text: String, pageContext: BrowserPageContext) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+        let already = pendingAttachments.contains { existing in
+            existing.text == trimmed && existing.pageURL == pageContext.url
+        }
+        guard !already else { return }
+        pendingAttachments.append(ChatAttachment(
+            text: trimmed,
+            pageTitle: pageContext.title,
+            pageURL: pageContext.url
+        ))
+    }
+
+    func removeAttachment(id: UUID) {
+        pendingAttachments.removeAll { $0.id == id }
+    }
+
+    func clearAttachments() {
+        pendingAttachments.removeAll()
     }
 
     /// The directory that backs the current session. Persisted at
@@ -50,11 +192,20 @@ final class ChatViewModel: ObservableObject {
 
     func send(context: BrowserPageContext, tabs: [TabManifestEntry], nativeTools: NativeBrowserToolExecutor) {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !isSending else {
+        // Allow sending when there's an attached highlight even if the text
+        // box is empty — the attachment carries the question's subject.
+        guard (!trimmed.isEmpty || !pendingAttachments.isEmpty), !isSending else {
             return
         }
 
-        messages.append(ChatMessage(role: .user, text: trimmed))
+        let attachmentsForTurn = pendingAttachments
+        pendingAttachments.removeAll()
+
+        // If the composer was empty but the user attached highlights, treat
+        // the send as an implicit "summarize / discuss these passages".
+        let userText = trimmed.isEmpty ? "What can you tell me about the highlighted passage?" : trimmed
+
+        messages.append(ChatMessage(role: .user, text: userText, attachments: attachmentsForTurn))
         draft = ""
         isSending = true
         persist(context: context)
@@ -63,11 +214,12 @@ final class ChatViewModel: ObservableObject {
         let history = messages
         let configuration = AIHarnessConfiguration.current()
         let prompt = AIProviderClient.prompt(
-            for: trimmed,
+            for: userText,
             context: context,
             history: history,
             configuration: configuration,
-            tabs: tabs
+            tabs: tabs,
+            attachments: attachmentsForTurn
         )
 
         Task {
@@ -150,6 +302,7 @@ final class ChatViewModel: ObservableObject {
 
 struct AIChatPanel: View {
     @ObservedObject var viewModel: ChatViewModel
+    @ObservedObject var smartReadModel: SmartReadModel
     var context: BrowserPageContext
     var tabs: [TabManifestEntry]
     var nativeTools: NativeBrowserToolExecutor
@@ -252,7 +405,9 @@ struct AIChatPanel: View {
 
     @ViewBuilder
     private var content: some View {
-        if viewModel.messages.isEmpty && !viewModel.isSending {
+        if smartReadModel.isPresented || !viewModel.messages.isEmpty || viewModel.isSending {
+            messageList
+        } else {
             EmptyChatState(
                 providerName: provider.displayName,
                 context: context,
@@ -263,8 +418,6 @@ struct AIChatPanel: View {
             )
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .transition(.opacity)
-        } else {
-            messageList
         }
     }
 
@@ -272,6 +425,22 @@ struct AIChatPanel: View {
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
+                    if smartReadModel.isPresented {
+                        SmartReadCard(
+                            phase: smartReadModel.phase,
+                            onClose: {
+                                withAnimation(Motion.springSnap) {
+                                    smartReadModel.close()
+                                }
+                            }
+                        )
+                        .id("smart-read")
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .offset(y: -6)),
+                            removal: .opacity.combined(with: .scale(scale: 0.98, anchor: .top))
+                        ))
+                    }
+
                     ForEach(viewModel.messages) { message in
                         MessageView(
                             message: message,
@@ -295,6 +464,8 @@ struct AIChatPanel: View {
                 .padding(.vertical, 18)
                 .animation(Motion.springSoft, value: viewModel.messages.count)
                 .animation(Motion.springSoft, value: viewModel.isSending)
+                .animation(Motion.springSnap, value: smartReadModel.isPresented)
+                .animation(Motion.springSnap, value: smartReadModel.phase)
             }
             .scrollIndicators(.hidden)
             .mask(scrollFadeMask)
@@ -337,6 +508,11 @@ struct AIChatPanel: View {
 
     private var composer: some View {
         VStack(spacing: 8) {
+            if !viewModel.pendingAttachments.isEmpty {
+                pendingAttachmentsList
+                    .transition(.opacity.combined(with: .offset(y: 4)))
+            }
+
             if !context.title.isEmpty || !context.url.isEmpty {
                 HStack(spacing: 6) {
                     contextPill
@@ -347,7 +523,7 @@ struct AIChatPanel: View {
             ComposerField(
                 draft: $viewModel.draft,
                 focused: $composerFocused,
-                placeholder: "Ask \(provider.displayName)…",
+                placeholder: composerPlaceholder,
                 onSubmit: { viewModel.send(context: context, tabs: tabs, nativeTools: nativeTools) }
             ) {
                 HStack(spacing: 6) {
@@ -356,7 +532,7 @@ struct AIChatPanel: View {
                         showingPicker: $showingModelPicker
                     )
                     SendButton(
-                        enabled: !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                        enabled: canSend,
                         sending: viewModel.isSending,
                         action: { viewModel.send(context: context, tabs: tabs, nativeTools: nativeTools) }
                     )
@@ -365,6 +541,73 @@ struct AIChatPanel: View {
         }
         .padding(14)
         .padding(.bottom, 4)
+        .animation(Motion.springSnap, value: viewModel.pendingAttachments.map(\.id))
+    }
+
+    /// Stack of queued highlights shown above the composer. Capped at three
+    /// visible chips with a quiet "+N more" indicator beyond that so the
+    /// composer doesn't grow without bound on a clipping spree.
+    private var pendingAttachmentsList: some View {
+        let attachments = viewModel.pendingAttachments
+        let visibleLimit = 3
+        let visible = Array(attachments.prefix(visibleLimit))
+        let overflow = max(0, attachments.count - visibleLimit)
+        return VStack(spacing: 6) {
+            ForEach(visible) { attachment in
+                PendingAttachmentChip(
+                    attachment: attachment,
+                    onRemove: {
+                        withAnimation(Motion.springSnap) {
+                            viewModel.removeAttachment(id: attachment.id)
+                        }
+                    }
+                )
+                .transition(.asymmetric(
+                    insertion: .opacity.combined(with: .offset(y: -6)),
+                    removal: .opacity.combined(with: .scale(scale: 0.92))
+                ))
+            }
+            if overflow > 0 {
+                overflowFooter(count: overflow)
+            }
+        }
+    }
+
+    private func overflowFooter(count: Int) -> some View {
+        HStack(spacing: 6) {
+            Text("+\(count) more highlight\(count == 1 ? "" : "s")")
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(Palette.textMuted)
+            Spacer(minLength: 0)
+            Button {
+                withAnimation(Motion.springSoft) {
+                    viewModel.clearAttachments()
+                }
+            } label: {
+                Text("Clear all")
+                    .font(.system(size: 10.5, weight: .semibold))
+                    .foregroundStyle(Palette.textSecondary)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Remove all queued highlights")
+        }
+        .padding(.horizontal, 4)
+    }
+
+    private var composerPlaceholder: String {
+        if !viewModel.pendingAttachments.isEmpty {
+            return "Ask about the highlight…"
+        }
+        return "Ask \(provider.displayName)…"
+    }
+
+    private var canSend: Bool {
+        if viewModel.isSending { return false }
+        let hasText = !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return hasText || !viewModel.pendingAttachments.isEmpty
     }
 
     private var provider: AIProviderKind {
@@ -611,7 +854,7 @@ private struct MessageView: View {
     var body: some View {
         switch message.role {
         case .user:
-            UserBubble(text: message.text)
+            UserBubble(text: message.text, attachments: message.attachments)
         case .assistant:
             AssistantMessage(
                 text: message.text,
@@ -626,12 +869,21 @@ private struct MessageView: View {
 
 private struct UserBubble: View {
     var text: String
+    var attachments: [ChatAttachment] = []
     @State private var isHovering = false
 
     var body: some View {
         HStack(spacing: 0) {
             Spacer(minLength: 32)
             VStack(alignment: .trailing, spacing: 6) {
+                if !attachments.isEmpty {
+                    VStack(alignment: .trailing, spacing: 4) {
+                        ForEach(attachments) { attachment in
+                            SentAttachmentChip(attachment: attachment)
+                        }
+                    }
+                }
+
                 Text(text)
                     .font(.system(size: 13.5))
                     .foregroundStyle(Palette.textPrimary)
@@ -812,6 +1064,7 @@ private struct ToolChainChip: View {
         case "search": return "magnifyingglass"
         case "fetch": return "arrow.down.doc"
         case "read_tabs": return "rectangle.on.rectangle"
+        case "read_highlights": return "quote.opening"
         case "create_artifact": return "doc.richtext"
         default: return "wrench"
         }
@@ -823,6 +1076,7 @@ private struct ToolChainChip: View {
         case "search": return "search"
         case "fetch": return "fetch"
         case "read_tabs": return "read tabs"
+        case "read_highlights": return "read highlights"
         case "create_artifact": return "artifact"
         default: return invocation.tool
         }

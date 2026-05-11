@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 import SwiftUI
 
@@ -22,7 +21,6 @@ final class SmartReadModel: ObservableObject {
 
     @Published var isPresented = false
     @Published var phase: Phase = .idle
-    @Published var anchor = CGPoint(x: 420, y: 180)
 
     private var task: Task<Void, Never>?
 
@@ -32,7 +30,6 @@ final class SmartReadModel: ObservableObject {
         }
 
         task?.cancel()
-        anchor = Self.cursorAnchorInKeyWindow()
         isPresented = true
         phase = .loading(title: tab.displayTitle)
 
@@ -73,16 +70,6 @@ final class SmartReadModel: ObservableObject {
         isPresented = false
         phase = .idle
     }
-
-    private static func cursorAnchorInKeyWindow() -> CGPoint {
-        guard let window = NSApp.keyWindow else {
-            return CGPoint(x: 420, y: 180)
-        }
-
-        let point = window.convertPoint(fromScreen: NSEvent.mouseLocation)
-        return CGPoint(x: point.x, y: window.frame.height - point.y)
-    }
-
 }
 
 enum SmartReadClient {
@@ -200,97 +187,72 @@ enum SmartReadError: LocalizedError {
     }
 }
 
-struct SmartReadOverlay: View {
-    @ObservedObject var model: SmartReadModel
+// MARK: - Card
 
-    var body: some View {
-        GeometryReader { geometry in
-            if model.isPresented {
-                SmartReadModal(phase: model.phase, onClose: model.close)
-                    .frame(width: 430)
-                    .position(clampedPosition(in: geometry.size))
-                    .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .scale(scale: 0.96)).combined(with: .offset(y: 6)),
-                        removal: .opacity.combined(with: .scale(scale: 0.98))
-                    ))
-                    .zIndex(20)
-            }
-        }
-        .allowsHitTesting(model.isPresented)
-        .animation(Motion.springSnap, value: model.isPresented)
-        .animation(Motion.springSnap, value: model.phase)
-    }
-
-    private func clampedPosition(in size: CGSize) -> CGPoint {
-        let width: CGFloat = 430
-        let estimatedHeight: CGFloat = 470
-        let margin: CGFloat = 18
-        let desiredX = model.anchor.x + width / 2 + 14
-        let desiredY = model.anchor.y + estimatedHeight / 2 + 14
-        let x = size.width <= width + margin * 2
-            ? size.width / 2
-            : min(max(desiredX, width / 2 + margin), size.width - width / 2 - margin)
-        let y = size.height <= estimatedHeight + margin * 2
-            ? size.height / 2
-            : min(max(desiredY, estimatedHeight / 2 + margin), size.height - estimatedHeight / 2 - margin)
-        return CGPoint(x: x, y: y)
-    }
-}
-
-private struct SmartReadModal: View {
+/// Compact Smart Read panel designed to live at the top of the AI chat
+/// sidebar. Sized to fit the chat panel width with the same horizontal
+/// padding as message bubbles so it visually belongs to the column.
+struct SmartReadCard: View {
     let phase: SmartReadModel.Phase
     var onClose: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            summaryStrip
+            header
+
             Rectangle()
-                .fill(Color.white.opacity(0.10))
+                .fill(Palette.strokeFaint)
                 .frame(height: 1)
+
             content
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
         .background {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .fill(Color.black.opacity(0.94))
+                .fill(Palette.surface)
         }
         .overlay {
             RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .stroke(Color.white.opacity(0.18), lineWidth: 1)
+                .stroke(Palette.stroke, lineWidth: 1)
         }
-        .shadow(color: Color.black.opacity(0.34), radius: 28, x: 0, y: 18)
+        .animation(Motion.springSnap, value: phase)
     }
 
-    private var summaryStrip: some View {
-        HStack(spacing: 10) {
-            Image(systemName: isLoading ? "sparkles" : "text.magnifyingglass")
-                .font(.system(size: 12, weight: .semibold))
-                .foregroundStyle(Color.white)
-                .modifier(SmartReadPulse(active: isLoading))
+    // MARK: Header
+
+    private var header: some View {
+        HStack(spacing: 9) {
+            ZStack {
+                Circle()
+                    .fill(Palette.bgRaised)
+                Circle()
+                    .stroke(Palette.stroke, lineWidth: 1)
+                Image(systemName: isLoading ? "sparkles" : "text.magnifyingglass")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Palette.textPrimary)
+                    .modifier(SmartReadIconPulse(active: isLoading))
+            }
+            .frame(width: 22, height: 22)
 
             Text("Smart Read")
                 .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(Color.white.opacity(0.96))
+                .foregroundStyle(Palette.textPrimary)
 
-            Spacer(minLength: 8)
+            Spacer(minLength: 6)
 
             if let meta = metaText {
                 Text(meta)
-                    .font(.system(size: 10.5, weight: .medium, design: .monospaced))
-                    .foregroundStyle(Color.white.opacity(0.42))
+                    .font(.system(size: 9.5, weight: .semibold, design: .monospaced))
+                    .tracking(0.8)
+                    .foregroundStyle(Palette.textMuted)
                     .lineLimit(1)
             }
 
-            Button(action: onClose) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10.5, weight: .bold))
-                    .frame(width: 24, height: 24)
-            }
-            .buttonStyle(SmartReadIconButtonStyle())
-            .help("Close Smart Read")
+            CardCloseButton(action: onClose)
         }
-        .padding(.leading, 16)
-        .padding(.trailing, 10)
-        .frame(height: 44)
+        .padding(.leading, 12)
+        .padding(.trailing, 8)
+        .frame(height: 40)
     }
 
     @ViewBuilder
@@ -299,68 +261,11 @@ private struct SmartReadModal: View {
         case .idle:
             EmptyView()
         case .loading(let title):
-            VStack(alignment: .leading, spacing: 18) {
-                Text(title)
-                    .font(.system(size: 17, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.94))
-                    .lineLimit(2)
-                SmartReadShimmer()
-            }
-            .padding(18)
+            LoadingContent(title: title)
         case .loaded(let result):
-            loadedContent(result)
-                .padding(18)
+            LoadedContent(result: result)
         case .failed(let message):
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "exclamationmark.triangle")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Color.white.opacity(0.70))
-                Text(message)
-                    .font(.system(size: 12.5, weight: .medium))
-                    .foregroundStyle(Color.white.opacity(0.62))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .padding(18)
-        }
-    }
-
-    private func loadedContent(_ result: SmartReadResult) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 7) {
-                Text("TL;DR")
-                    .font(.system(size: 9.5, weight: .semibold))
-                    .tracking(1.4)
-                    .foregroundStyle(Color.white.opacity(0.34))
-                Text(result.tldr)
-                    .font(.system(size: 18, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Color.white.opacity(0.96))
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            VStack(alignment: .leading, spacing: 10) {
-                ForEach(Array(result.keyPoints.prefix(5).enumerated()), id: \.offset) { index, point in
-                    HStack(alignment: .top, spacing: 10) {
-                        Text(String(format: "%02d", index + 1))
-                            .font(.system(size: 10, weight: .medium, design: .monospaced))
-                            .foregroundStyle(Color.black)
-                            .frame(width: 24, height: 20)
-                            .background {
-                                Capsule().fill(Color.white.opacity(0.92))
-                            }
-                        Text(point)
-                            .font(.system(size: 13.2, weight: .medium))
-                            .lineSpacing(2)
-                            .foregroundStyle(Color.white.opacity(0.72))
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-            }
-
-            HStack(spacing: 8) {
-                metricPill("\(result.readTimeMinutes) min", "read")
-                metricPill("\(result.wordCount)", "words")
-                Spacer(minLength: 0)
-            }
+            FailedContent(message: message)
         }
     }
 
@@ -372,107 +277,247 @@ private struct SmartReadModal: View {
     private var metaText: String? {
         switch phase {
         case .loaded(let result):
-            return "\(result.readTimeMinutes) min read"
+            return "\(result.readTimeMinutes) MIN READ"
         case .loading:
-            return "reading"
+            return "READING"
         case .failed:
-            return "paused"
+            return "PAUSED"
         case .idle:
             return nil
         }
     }
+}
 
-    private func metricPill(_ value: String, _ label: String) -> some View {
+// MARK: - Phase content
+
+private struct LoadingContent: View {
+    let title: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(title)
+                .font(.system(size: 14.5, weight: .semibold))
+                .foregroundStyle(Palette.textPrimary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+
+            VStack(alignment: .leading, spacing: 8) {
+                SmartReadShimmerBar(widthFraction: 1.00, delay: 0.00)
+                SmartReadShimmerBar(widthFraction: 0.92, delay: 0.06)
+                SmartReadShimmerBar(widthFraction: 0.68, delay: 0.12)
+                SmartReadShimmerBar(widthFraction: 0.84, delay: 0.18)
+                SmartReadShimmerBar(widthFraction: 0.52, delay: 0.24)
+            }
+        }
+        .padding(14)
+    }
+}
+
+private struct LoadedContent: View {
+    let result: SmartReadResult
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 6) {
+                SectionLabel(text: "TL;DR")
+                Text(result.tldr)
+                    .font(.system(size: 14, weight: .semibold, design: .rounded))
+                    .foregroundStyle(Palette.textPrimary)
+                    .lineSpacing(2.5)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if !result.keyPoints.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    SectionLabel(text: "Key Points")
+                    VStack(alignment: .leading, spacing: 9) {
+                        ForEach(Array(result.keyPoints.prefix(5).enumerated()), id: \.offset) { index, point in
+                            KeyPointRow(index: index + 1, text: point)
+                        }
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                MetricPill(value: "\(result.readTimeMinutes) min", label: "READ")
+                MetricPill(
+                    value: Self.wordCountFormatter.string(from: NSNumber(value: result.wordCount)) ?? "\(result.wordCount)",
+                    label: "WORDS"
+                )
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(14)
+    }
+
+    private static let wordCountFormatter: NumberFormatter = {
+        let f = NumberFormatter()
+        f.numberStyle = .decimal
+        return f
+    }()
+}
+
+private struct FailedContent: View {
+    let message: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle")
+                .font(.system(size: 12.5, weight: .semibold))
+                .foregroundStyle(Palette.textSecondary)
+            Text(message)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(Palette.textSecondary)
+                .lineSpacing(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(14)
+    }
+}
+
+// MARK: - Pieces
+
+private struct SectionLabel: View {
+    let text: String
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 9, weight: .bold))
+            .tracking(1.4)
+            .textCase(.uppercase)
+            .foregroundStyle(Palette.textMuted)
+    }
+}
+
+private struct KeyPointRow: View {
+    let index: Int
+    let text: String
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Text("\(index)")
+                .font(.system(size: 9.5, weight: .bold, design: .monospaced))
+                .foregroundStyle(Palette.textPrimary)
+                .frame(width: 18, height: 18)
+                .background {
+                    Circle().stroke(Palette.strokeStrong, lineWidth: 1)
+                }
+                .padding(.top, 1)
+
+            Text(text)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(Palette.textSecondary)
+                .lineSpacing(2.5)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct MetricPill: View {
+    let value: String
+    let label: String
+
+    var body: some View {
         HStack(spacing: 5) {
             Text(value)
-                .font(.system(size: 11, weight: .semibold, design: .monospaced))
-                .foregroundStyle(Color.white.opacity(0.90))
-            Text(label.uppercased())
-                .font(.system(size: 8.5, weight: .semibold))
-                .tracking(1.0)
-                .foregroundStyle(Color.white.opacity(0.34))
+                .font(.system(size: 10.5, weight: .semibold, design: .monospaced))
+                .foregroundStyle(Palette.textPrimary)
+            Text(label)
+                .font(.system(size: 8.5, weight: .bold))
+                .tracking(0.9)
+                .foregroundStyle(Palette.textMuted)
         }
-        .padding(.horizontal, 10)
-        .frame(height: 26)
+        .padding(.horizontal, 9)
+        .frame(height: 22)
         .background {
-            Capsule()
-                .fill(Color.white.opacity(0.07))
+            Capsule().fill(Palette.bgRaised)
         }
         .overlay {
-            Capsule()
-                .stroke(Color.white.opacity(0.10), lineWidth: 1)
+            Capsule().stroke(Palette.stroke, lineWidth: 1)
         }
     }
 }
 
-private struct SmartReadShimmer: View {
+private struct CardCloseButton: View {
+    let action: () -> Void
+    @State private var isHovering = false
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            SmartReadShimmerBar(widthFraction: 1.0, delay: 0.0)
-            SmartReadShimmerBar(widthFraction: 0.88, delay: 0.06)
-            SmartReadShimmerBar(widthFraction: 0.54, delay: 0.12)
-            Spacer(minLength: 4)
-            SmartReadShimmerBar(widthFraction: 0.95, delay: 0.18)
-            SmartReadShimmerBar(widthFraction: 0.78, delay: 0.24)
-            SmartReadShimmerBar(widthFraction: 0.70, delay: 0.30)
+        Button(action: action) {
+            Image(systemName: "xmark")
+                .font(.system(size: 9.5, weight: .bold))
+                .foregroundStyle(isHovering ? Palette.textPrimary : Palette.textMuted)
+                .frame(width: 22, height: 22)
+                .background {
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .fill(isHovering ? Palette.surfaceHover : Color.clear)
+                }
+                .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(Motion.hoverFade) { isHovering = hovering }
+        }
+        .help("Close Smart Read")
     }
 }
+
+// MARK: - Shimmer
 
 private struct SmartReadShimmerBar: View {
     var widthFraction: CGFloat
     var delay: Double
-    @State private var phase: CGFloat = -0.35
+    @State private var phase: CGFloat = -0.4
 
     var body: some View {
         GeometryReader { geometry in
             let width = geometry.size.width * widthFraction
             ZStack {
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
-                    .fill(Color.white.opacity(0.06))
+                    .fill(Color.white.opacity(0.07))
                 RoundedRectangle(cornerRadius: 4, style: .continuous)
                     .fill(
                         LinearGradient(
                             stops: [
-                                .init(color: .clear, location: max(0, phase - 0.32)),
-                                .init(color: Color.white.opacity(0.18), location: max(0, min(1, phase))),
-                                .init(color: .clear, location: min(1, phase + 0.32))
+                                .init(color: .clear, location: max(0, phase - 0.3)),
+                                .init(color: Color.white.opacity(0.22), location: max(0, min(1, phase))),
+                                .init(color: .clear, location: min(1, phase + 0.3))
                             ],
                             startPoint: .leading,
                             endPoint: .trailing
                         )
                     )
             }
-            .frame(width: width, height: 12, alignment: .leading)
+            .frame(width: width, height: 10, alignment: .leading)
         }
-        .frame(height: 12)
+        .frame(height: 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .onAppear {
             DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                withAnimation(.linear(duration: 1.35).repeatForever(autoreverses: false)) {
-                    phase = 1.35
+                withAnimation(.linear(duration: 1.4).repeatForever(autoreverses: false)) {
+                    phase = 1.4
                 }
             }
         }
     }
 }
 
-private struct SmartReadPulse: ViewModifier {
+private struct SmartReadIconPulse: ViewModifier {
     var active: Bool
     @State private var pulse = false
 
     func body(content: Content) -> some View {
         content
-            .opacity(active && pulse ? 0.42 : 1)
+            .opacity(active && pulse ? 0.55 : 1.0)
             .onAppear {
                 guard active else { return }
-                withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                withAnimation(.easeInOut(duration: 0.95).repeatForever(autoreverses: true)) {
                     pulse = true
                 }
             }
             .onChange(of: active) { _, newValue in
                 if newValue {
-                    withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) {
+                    withAnimation(.easeInOut(duration: 0.95).repeatForever(autoreverses: true)) {
                         pulse = true
                     }
                 } else {
@@ -481,29 +526,5 @@ private struct SmartReadPulse: ViewModifier {
                     }
                 }
             }
-    }
-}
-
-private struct SmartReadIconButtonStyle: ButtonStyle {
-    func makeBody(configuration: Configuration) -> some View {
-        SmartReadIconButtonBody(configuration: configuration)
-    }
-}
-
-private struct SmartReadIconButtonBody: View {
-    let configuration: ButtonStyleConfiguration
-    @State private var isHovering = false
-
-    var body: some View {
-        configuration.label
-            .foregroundStyle(Color.white.opacity(isHovering ? 0.96 : 0.66))
-            .background {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(isHovering || configuration.isPressed ? Color.white.opacity(0.10) : Color.clear)
-            }
-            .scaleEffect(configuration.isPressed ? 0.94 : 1.0)
-            .onHover { isHovering = $0 }
-            .animation(Motion.hoverFade, value: isHovering)
-            .animation(Motion.microTap, value: configuration.isPressed)
     }
 }

@@ -119,6 +119,16 @@ final class ChatSessionStore {
                                 succeeded: $0.succeeded,
                                 artifactURL: $0.artifactURL?.absoluteString
                             )
+                        },
+                    attachments: msg.attachments.isEmpty
+                        ? nil
+                        : msg.attachments.map {
+                            AttachmentPayload(
+                                id: $0.id.uuidString,
+                                text: $0.text,
+                                pageTitle: $0.pageTitle,
+                                pageURL: $0.pageURL
+                            )
                         }
                 )
             }
@@ -189,7 +199,15 @@ final class ChatSessionStore {
                     artifactURL: $0.artifactURL.flatMap(URL.init(string:))
                 )
             }
-            return ChatMessage(role: role, text: item.text, toolChain: chain)
+            let attachments = (item.attachments ?? []).map {
+                ChatAttachment(
+                    id: UUID(uuidString: $0.id) ?? UUID(),
+                    text: $0.text,
+                    pageTitle: $0.pageTitle,
+                    pageURL: $0.pageURL
+                )
+            }
+            return ChatMessage(role: role, text: item.text, toolChain: chain, attachments: attachments)
         }
     }
 
@@ -207,6 +225,9 @@ final class ChatSessionStore {
         var role: String
         var text: String
         var toolChain: [ToolInvocationPayload]?
+        /// Optional so sessions saved before attachments existed still
+        /// decode cleanly — the field is treated as an empty array on load.
+        var attachments: [AttachmentPayload]?
     }
 
     private struct ToolInvocationPayload: Codable {
@@ -214,6 +235,13 @@ final class ChatSessionStore {
         var input: String
         var succeeded: Bool
         var artifactURL: String?
+    }
+
+    private struct AttachmentPayload: Codable {
+        var id: String
+        var text: String
+        var pageTitle: String
+        var pageURL: String
     }
 }
 

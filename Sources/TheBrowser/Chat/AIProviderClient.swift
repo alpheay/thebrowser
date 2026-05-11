@@ -221,9 +221,31 @@ struct AIProviderClient {
         context: BrowserPageContext,
         history: [ChatMessage] = [],
         configuration: AIHarnessConfiguration? = nil,
-        tabs: [TabManifestEntry] = []
+        tabs: [TabManifestEntry] = [],
+        attachments: [ChatAttachment] = []
     ) -> String {
         let pageURL = context.url.isEmpty ? "Home page" : context.url
+
+        // Build the conversation-wide global numbering for every attachment
+        // ever sent. The current user message has already been appended to
+        // `history` at this point (so it includes its own attachments) and
+        // the same `attachments` array is mirrored here for the inline
+        // "this-turn highlights" block. Walking history once gives us
+        // stable 1-based indices that match `ChatViewModel.collectAttachments`.
+        struct NumberedAttachment {
+            var index: Int
+            var messageID: ChatMessage.ID
+            var attachment: ChatAttachment
+        }
+        var globalAttachments: [NumberedAttachment] = []
+        var counter = 0
+        for msg in history where msg.role == .user {
+            for att in msg.attachments {
+                counter += 1
+                globalAttachments.append(NumberedAttachment(index: counter, messageID: msg.id, attachment: att))
+            }
+        }
+        let currentMessageID = history.last(where: { $0.role == .user })?.id
 
         // Conversation history excludes the user message just appended (it
         // becomes the explicit "User request" below) and any system rows
@@ -235,7 +257,15 @@ struct AIProviderClient {
             transcript = "Conversation so far:\n"
             for msg in priorTurns {
                 let label = msg.role == .user ? "User" : "Assistant"
-                transcript += "\(label): \(msg.text)\n"
+                if msg.role == .user, !msg.attachments.isEmpty {
+                    let indices = globalAttachments
+                        .filter { $0.messageID == msg.id }
+                        .map { "[\($0.index)]" }
+                        .joined(separator: ", ")
+                    transcript += "\(label) (with highlights \(indices)): \(msg.text)\n"
+                } else {
+                    transcript += "\(label): \(msg.text)\n"
+                }
             }
             transcript += "\n"
         }
@@ -252,6 +282,62 @@ struct AIProviderClient {
             tabsBlock = lines.joined(separator: "\n") + "\n\n"
         }
 
+        // Prior-turn highlights surface as a compact manifest (index +
+        // source + short preview) so the model knows they exist without
+        // paying for their full content on every turn. To read the full
+        // text it must call read_highlights.
+        let priorNumbered = globalAttachments.filter { $0.messageID != currentMessageID }
+        var priorManifestBlock = ""
+        if !priorNumbered.isEmpty {
+            var lines: [String] = ["Highlights previously attached in this conversation (call read_highlights with the desired index to retrieve the full text):"]
+            for item in priorNumbered {
+                let att = item.attachment
+                let label = att.displayLabel
+                let host = att.host ?? ""
+                let preview = att.preview
+                let trimmedPreview = preview.count > 90 ? String(preview.prefix(90)) + "…" : preview
+                let suffix = host.isEmpty || host == label ? "" : " (\(host))"
+                lines.append("[\(item.index)] \(label)\(suffix) — \(trimmedPreview)")
+            }
+            priorManifestBlock = lines.joined(separator: "\n") + "\n\n"
+        }
+
+        // Current turn's highlights are inlined in full so the model can
+        // act on them immediately, using the same global indices the
+        // manifest exposes (so [4] in the inline block is the same [4]
+        // the model would later fetch via read_highlights).
+        let currentNumbered = globalAttachments.filter { $0.messageID == currentMessageID }
+        var currentAttachmentsBlock = ""
+        if !attachments.isEmpty {
+            var lines: [String] = ["Highlighted passages the user attached for this turn:"]
+            // Pair each passed-in attachment with its global index. If a
+            // numbering entry isn't found (shouldn't happen when called
+            // from ChatViewModel.send), fall back to the local 1-based
+            // order so the prompt still renders sensibly.
+            for (offset, attachment) in attachments.enumerated() {
+                let resolvedIndex = currentNumbered.first(where: { $0.attachment.id == attachment.id })?.index
+                    ?? (counter - attachments.count + offset + 1)
+                let title = attachment.pageTitle.trimmingCharacters(in: .whitespacesAndNewlines)
+                let url = attachment.pageURL.trimmingCharacters(in: .whitespacesAndNewlines)
+                let source: String
+                if !title.isEmpty && !url.isEmpty {
+                    source = "\(title) — \(url)"
+                } else if !title.isEmpty {
+                    source = title
+                } else if !url.isEmpty {
+                    source = url
+                } else {
+                    source = "unknown source"
+                }
+                lines.append("[\(resolvedIndex)] From \(source):")
+                for piece in attachment.text.split(separator: "\n", omittingEmptySubsequences: false) {
+                    lines.append("> \(piece)")
+                }
+            }
+            lines.append("(Treat these passages as authoritative quotations from the cited sources. Refer to them by their bracketed index when relevant.)")
+            currentAttachmentsBlock = lines.joined(separator: "\n") + "\n\n"
+        }
+
         return """
         \(NativeBrowserToolPrompt.instructions)
 
@@ -261,7 +347,7 @@ struct AIProviderClient {
         Title: \(context.title)
         URL: \(pageURL)
 
-        \(transcript)User request:
+        \(priorManifestBlock)\(currentAttachmentsBlock)\(transcript)User request:
         \(message)
         """
     }

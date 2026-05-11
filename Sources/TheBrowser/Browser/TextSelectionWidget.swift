@@ -203,22 +203,64 @@ struct TextSelectionOverlay: View {
         return CGPoint(x: centerX, y: clampedY)
     }
 
-    /// Same anchor logic as the pill, but with the larger card's footprint
-    /// so it doesn't run off the webview edges. Height is approximated; the
-    /// clamps cover taller summary text gracefully.
+    /// Picks a center point for the summary card that stays out of the way
+    /// of the highlight and surrounding reading context. The algorithm
+    /// tries placements in this order:
+    ///
+    /// 1. Right of the highlight (if there's room for the full card width
+    ///    and the card fits vertically) — the most common winner for body
+    ///    text inside a centered article column.
+    /// 2. Left of the highlight — same idea for selections that sit close
+    ///    to the right edge of the page.
+    /// 3. Below the highlight (if there's more space below than above).
+    /// 4. Above the highlight.
+    ///
+    /// Card width is fixed at 360pt; height assumes the worst case (~360pt
+    /// for a full success card with header, body, and footer). Real cards
+    /// are often shorter — the over-estimate just leaves a bit more breathing
+    /// room around the card, which is fine.
     private func summaryPosition(for rect: CGRect, in container: CGSize) -> CGPoint {
-        let approxWidth: CGFloat = 360
-        let approxHeight: CGFloat = 200
-        let halfW = approxWidth / 2
-        let halfH = approxHeight / 2
+        let cardW: CGFloat = 360
+        let cardH: CGFloat = 360
+        let gap: CGFloat = 14
+        let margin: CGFloat = 12
+        let halfW = cardW / 2
+        let halfH = cardH / 2
 
-        let centerX = min(max(halfW + 8, rect.midX), container.width - halfW - 8)
-        let aboveY = rect.minY - halfH - 10
-        let belowY = rect.maxY + halfH + 10
-        let preferAbove = aboveY >= halfH + 8
-        let y = preferAbove ? aboveY : belowY
-        let clampedY = min(max(halfH + 8, y), container.height - halfH - 8)
-        return CGPoint(x: centerX, y: clampedY)
+        // Free space outside the highlight rect, minus the gap we want
+        // between the highlight and the card.
+        let above = rect.minY - gap
+        let below = container.height - rect.maxY - gap
+        let left = rect.minX - gap
+        let right = container.width - rect.maxX - gap
+
+        // Vertical center bounded so the card stays inside the viewport,
+        // used for both side placements.
+        let clampedMidY = max(margin + halfH, min(rect.midY, container.height - margin - halfH))
+        let clampedMidX = max(margin + halfW, min(rect.midX, container.width - margin - halfW))
+
+        // Side placement requires enough horizontal room AND that the card
+        // itself fits vertically inside the viewport.
+        let fitsVertical = container.height >= cardH + 2 * margin
+
+        if fitsVertical && right >= cardW + margin {
+            return CGPoint(x: rect.maxX + gap + halfW, y: clampedMidY)
+        }
+        if fitsVertical && left >= cardW + margin {
+            return CGPoint(x: rect.minX - gap - halfW, y: clampedMidY)
+        }
+
+        // Falling back to above/below — pick the direction with more space
+        // so the card overlaps the selection as little as possible.
+        if below >= above {
+            let y = rect.maxY + gap + halfH
+            let clampedY = max(margin + halfH, min(y, container.height - margin - halfH))
+            return CGPoint(x: clampedMidX, y: clampedY)
+        } else {
+            let y = rect.minY - gap - halfH
+            let clampedY = max(margin + halfH, min(y, container.height - margin - halfH))
+            return CGPoint(x: clampedMidX, y: clampedY)
+        }
     }
 
     private func copyToPasteboard(_ text: String) {

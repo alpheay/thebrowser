@@ -91,6 +91,7 @@ struct NativeBrowserToolsTests {
         let executor = NativeBrowserToolExecutor(
             openURL: { url in openedURL = url },
             readTabsContent: { _ in "" },
+            readHighlightsContent: { _ in "" },
             saveAndOpenArtifact: { _, _ in URL(fileURLWithPath: "/tmp/unused.html") }
         )
         let result = await executor.execute(
@@ -156,6 +157,7 @@ struct NativeBrowserToolsTests {
         let executor = NativeBrowserToolExecutor(
             openURL: { _ in },
             readTabsContent: { _ in "" },
+            readHighlightsContent: { _ in "" },
             saveAndOpenArtifact: { _, _ in savedURL }
         )
 

@@ -5,6 +5,7 @@ enum NativeBrowserToolName: String, Equatable, Sendable {
     case search
     case fetch
     case readTabs = "read_tabs"
+    case readHighlights = "read_highlights"
     case createArtifact = "create_artifact"
 }
 
@@ -31,7 +32,7 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             return url?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         case .search:
             return query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        case .readTabs:
+        case .readTabs, .readHighlights:
             if let indices, !indices.isEmpty {
                 return indices.map(String.init).joined(separator: ",")
             }
@@ -70,6 +71,7 @@ struct NativeBrowserToolCall: Equatable, Sendable {
         let html = stringValue(named: "html", in: dictionary, arguments: arguments)
         let indices = intArrayValue(named: "indices", in: dictionary, arguments: arguments)
             ?? intArrayValue(named: "tabs", in: dictionary, arguments: arguments)
+            ?? intArrayValue(named: "highlights", in: dictionary, arguments: arguments)
 
         let call = NativeBrowserToolCall(
             name: name,
@@ -83,7 +85,7 @@ struct NativeBrowserToolCall: Equatable, Sendable {
         switch name {
         case .open, .fetch, .search:
             return call.rawInput.isEmpty ? nil : call
-        case .readTabs:
+        case .readTabs, .readHighlights:
             return call
         case .createArtifact:
             return (html?.isEmpty == false) ? call : nil
@@ -310,6 +312,12 @@ struct NativeBrowserToolResult: Equatable, Sendable {
 struct NativeBrowserToolExecutor {
     var openURL: @MainActor (URL) -> Void
     var readTabsContent: @MainActor ([Int]?) async -> String
+    /// Resolves a `read_highlights` call against the chat session's
+    /// accumulated highlights. Receives 1-based global indices (or nil to
+    /// dump them all) and returns a formatted text block. Implemented in
+    /// the chat layer so the executor itself doesn't need to know about
+    /// ChatViewModel.
+    var readHighlightsContent: @MainActor ([Int]?) async -> String
     var saveAndOpenArtifact: @MainActor (_ title: String, _ html: String) async throws -> URL
 
     func execute(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
@@ -322,6 +330,8 @@ struct NativeBrowserToolExecutor {
             return await fetch(call)
         case .readTabs:
             return await readTabs(call)
+        case .readHighlights:
+            return await readHighlights(call)
         case .createArtifact:
             return await createArtifact(call)
         }
@@ -335,6 +345,7 @@ enum NativeBrowserToolPrompt {
     - search: runs the app's native web search and returns result titles, URLs, and snippets.
     - fetch: downloads a URL and returns readable page text.
     - read_tabs: returns the visible text of the user's currently open tabs. Use this when the user asks about, summarizes across, or wants to act on the tabs they already have open. Pass `indices` (1-based) to read specific tabs, or omit it to read all of them.
+    - read_highlights: returns the full text of highlights (page passages the user clipped via the Ask widget) attached earlier in the conversation. The prompt lists prior highlights by their 1-based global index with source + preview only; use this tool to fetch the full text of one or more of them when the user references "the highlight", "what I sent earlier", a specific quoted phrase, etc. Pass `indices` (1-based) to read specific highlights, or omit it to read all of them. The CURRENT turn's highlights are already inlined in the prompt — only call this tool for highlights from PRIOR turns.
     - create_artifact: saves a fully self-contained HTML document under ~/.thebrowser/web_artifacts/ and opens it in a new tab. Use this when the user asks for an "artifact", "document", "report", "dashboard", "summary", or anything similar that should be rendered as a standalone page.
 
     To use a tool, reply with only one JSON object and no prose:
@@ -343,6 +354,7 @@ enum NativeBrowserToolPrompt {
     {"tool":"fetch","url":"https://example.com/article"}
     {"tool":"read_tabs"}
     {"tool":"read_tabs","indices":[1,3]}
+    {"tool":"read_highlights","indices":[2]}
     {"tool":"create_artifact","title":"Market Overview","html":"<!doctype html><html>…</html>"}
 
     CRITICAL tool-call rules — follow these or the dispatcher will treat your tool call as plain chat text and the action will silently fail:

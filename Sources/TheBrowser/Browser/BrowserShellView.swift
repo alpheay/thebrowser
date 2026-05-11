@@ -40,6 +40,7 @@ struct BrowserShellView: View {
                 if model.isChatVisible {
                     AIChatPanel(
                         viewModel: chatModel,
+                        smartReadModel: smartReadModel,
                         context: model.selectedContext,
                         tabs: model.tabsManifest(),
                         nativeTools: NativeBrowserToolExecutor(
@@ -49,6 +50,9 @@ struct BrowserShellView: View {
                             },
                             readTabsContent: { indices in
                                 await model.collectTabsContent(indices: indices)
+                            },
+                            readHighlightsContent: { indices in
+                                chatModel.collectAttachments(indices: indices)
                             },
                             saveAndOpenArtifact: { title, html in
                                 let url = try ArtifactStore.shared.save(title: title, html: html)
@@ -118,8 +122,6 @@ struct BrowserShellView: View {
                 .frame(width: 0, height: 0)
                 .opacity(0)
                 .allowsHitTesting(false)
-
-            SmartReadOverlay(model: smartReadModel)
         }
         .background(Palette.bg)
         .onChange(of: model.selectedTabID) { _, _ in
@@ -149,9 +151,7 @@ struct BrowserShellView: View {
                 model: model,
                 selectedTab: model.selectedTab,
                 reservesTrafficLightGutter: !model.isTabRailVisible,
-                onSmartRead: {
-                    smartReadModel.start(tab: model.selectedTab)
-                }
+                onSmartRead: triggerSmartRead
             )
 
             ZStack {
@@ -197,35 +197,21 @@ struct BrowserShellView: View {
 
     // MARK: - Ask action (Summarize lives inside the overlay sub-view)
 
+    /// Queues the highlight as a first-class attachment on the chat
+    /// composer, opens the chat panel if it's hidden, and focuses the
+    /// composer so the user can type their question on top of fresh
+    /// context. Highlights are passed to the AI in a structured prompt
+    /// block — see `ChatViewModel.attachHighlight` and
+    /// `AIProviderClient.prompt(for:...)`.
     private func handleAsk(text: String) {
-        let quoted = quotedDraft(for: text)
+        chatModel.attachHighlight(text: text, pageContext: model.selectedContext)
         if !model.isChatVisible {
             withAnimation(Motion.springSnap) { model.toggleChat() }
         }
-        chatModel.draft = quoted
         DispatchQueue.main.async {
             chatModel.focusComposer()
         }
         model.selectedTab.clearSelectionInfo()
-    }
-
-    /// Builds the pre-filled chat draft: each line of the highlight is
-    /// rendered as a Markdown blockquote, followed by a blank line where the
-    /// user's actual question goes. Long passages are truncated with an
-    /// ellipsis so the composer stays usable.
-    private func quotedDraft(for text: String) -> String {
-        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
-        let capped: String = {
-            if normalized.count > 1200 {
-                return String(normalized.prefix(1200)) + "…"
-            }
-            return normalized
-        }()
-        let quoted = capped
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .map { "> \($0)" }
-            .joined(separator: "\n")
-        return quoted + "\n\n"
     }
 
     // MARK: - Hover-peek timing
