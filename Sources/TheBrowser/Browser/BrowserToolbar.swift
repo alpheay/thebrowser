@@ -23,18 +23,33 @@ struct BrowserToolbar: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                if reservesTrafficLightGutter {
+            ZStack {
+                // Cluster rail: two flex sections that hug a centered slot
+                // matching the URL bar's footprint, so navCluster sits right
+                // before the URL bar and rightCluster right after it.
+                HStack(spacing: 0) {
+                    HStack(spacing: 6) {
+                        if reservesTrafficLightGutter {
+                            Color.clear
+                                .frame(width: Metrics.trafficLightGutter, height: 28)
+                        }
+                        Spacer(minLength: 0)
+                        navCluster
+                    }
+                    .frame(maxWidth: .infinity)
+
                     Color.clear
-                        .frame(width: Metrics.trafficLightGutter, height: 28)
+                        .frame(width: Metrics.contentMaxWidth + 20, height: 28)
+
+                    HStack(spacing: 6) {
+                        rightCluster
+                        Spacer(minLength: 0)
+                    }
+                    .frame(maxWidth: .infinity)
                 }
 
-                navCluster
-
                 addressBar
-                    .padding(.horizontal, 10)
-
-                rightCluster
+                    .frame(maxWidth: Metrics.contentMaxWidth)
             }
             .padding(.horizontal, 10)
             .frame(height: Metrics.toolbarHeight)
@@ -132,7 +147,7 @@ struct BrowserToolbar: View {
                 .blur(radius: 12)
                 .animation(.easeOut(duration: 0.18), value: addressFocused)
         }
-        .frame(maxWidth: 720)
+        .frame(maxWidth: Metrics.contentMaxWidth)
         .scaleEffect(submitPulse ? 0.985 : 1)
         .animation(.spring(response: 0.24, dampingFraction: 0.6), value: submitPulse)
         .onChange(of: model.addressFocusToken) { _, _ in
