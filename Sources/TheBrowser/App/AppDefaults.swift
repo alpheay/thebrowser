@@ -31,6 +31,8 @@ enum PreferenceKey {
     static let readerModeShortcut = "shortcut.readerMode"
     static let pasteWithCitationShortcut = "shortcut.pasteWithCitation"
     static let googleOAuthClientID = "google.oauth.clientID"
+    static let discordOAuthClientID = "discord.oauth.clientID"
+    static let openDiscordShortcut = "shortcut.openDiscord"
     static let clipboardEnabled = "clipboard.enabled"
     static let clipboardSmartPasteEnabled = "clipboard.smartPasteEnabled"
     static let clipboardMarkdownStyle = "clipboard.markdownStyle"
@@ -137,6 +139,8 @@ enum AppDefaults {
             PreferenceKey.readerModeShortcut: "command+r",
             PreferenceKey.pasteWithCitationShortcut: "shift+command+v",
             PreferenceKey.googleOAuthClientID: "",
+            PreferenceKey.discordOAuthClientID: "",
+            PreferenceKey.openDiscordShortcut: "command+d",
             PreferenceKey.clipboardEnabled: true,
             PreferenceKey.clipboardSmartPasteEnabled: true,
             PreferenceKey.clipboardMarkdownStyle: CitedMarkdownStyle.blockquote.rawValue,

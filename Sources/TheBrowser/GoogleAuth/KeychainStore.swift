@@ -7,12 +7,15 @@ enum KeychainError: Error {
 }
 
 enum KeychainStore {
+    /// Default keychain service. Predates the Discord integration — kept as
+    /// the default so Google tokens written with the old API path continue
+    /// to resolve. New callers pass an explicit `service:` (e.g. Discord).
     static let serviceName = "com.thebrowser.googleAccount"
 
-    static func save(_ data: Data, account: String) throws {
+    static func save(_ data: Data, account: String, service: String = serviceName) throws {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
 
@@ -38,17 +41,17 @@ enum KeychainStore {
         }
     }
 
-    static func saveString(_ value: String, account: String) throws {
+    static func saveString(_ value: String, account: String, service: String = serviceName) throws {
         guard let data = value.data(using: .utf8) else {
             throw KeychainError.encoding
         }
-        try save(data, account: account)
+        try save(data, account: account, service: service)
     }
 
-    static func load(account: String) -> Data? {
+    static func load(account: String, service: String = serviceName) -> Data? {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne
@@ -62,16 +65,16 @@ enum KeychainStore {
         return item as? Data
     }
 
-    static func loadString(account: String) -> String? {
-        guard let data = load(account: account) else { return nil }
+    static func loadString(account: String, service: String = serviceName) -> String? {
+        guard let data = load(account: account, service: service) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
     @discardableResult
-    static func delete(account: String) -> Bool {
+    static func delete(account: String, service: String = serviceName) -> Bool {
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account
         ]
         let status = SecItemDelete(query as CFDictionary)
