@@ -216,7 +216,7 @@ struct BrowserShellView: View {
                         }
                     )
                 } else {
-                    BrowserWebView(tab: model.selectedTab)
+                    BrowserTabContent(tab: model.selectedTab)
                         .id(model.selectedTab.id)
                         .clipShape(RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous))
                         .overlay {
