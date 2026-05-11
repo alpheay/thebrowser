@@ -4,12 +4,15 @@ import SwiftUI
 struct BrowserShellView: View {
     @StateObject private var model = BrowserModel()
     @StateObject private var chatModel = ChatViewModel()
+    @StateObject private var selectionWidget = TextSelectionWidgetModel()
+    @StateObject private var smartReadModel = SmartReadModel()
 
     @AppStorage(PreferenceKey.toggleChatShortcut) private var toggleChatShortcut = "command+j"
     @AppStorage(PreferenceKey.toggleTabsShortcut) private var toggleTabsShortcut = "command+b"
     @AppStorage(PreferenceKey.newTabShortcut) private var newTabShortcut = "command+t"
     @AppStorage(PreferenceKey.closeTabShortcut) private var closeTabShortcut = "command+w"
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
+    @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "command+shift+r"
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
 
     @State private var isPeekingRail = false
@@ -115,6 +118,8 @@ struct BrowserShellView: View {
                 .frame(width: 0, height: 0)
                 .opacity(0)
                 .allowsHitTesting(false)
+
+            SmartReadOverlay(model: smartReadModel)
         }
         .background(Palette.bg)
         .onChange(of: model.selectedTabID) { _, _ in
@@ -143,7 +148,10 @@ struct BrowserShellView: View {
             BrowserToolbar(
                 model: model,
                 selectedTab: model.selectedTab,
-                reservesTrafficLightGutter: !model.isTabRailVisible
+                reservesTrafficLightGutter: !model.isTabRailVisible,
+                onSmartRead: {
+                    smartReadModel.start(tab: model.selectedTab)
+                }
             )
 
             ZStack {
@@ -166,8 +174,17 @@ struct BrowserShellView: View {
                         .id(model.selectedTab.id)
                         .clipShape(RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous))
                         .overlay {
+                            TextSelectionOverlay(
+                                tab: model.selectedTab,
+                                widgetModel: selectionWidget,
+                                pageContext: model.selectedContext,
+                                onAsk: { text in handleAsk(text: text) }
+                            )
+                        }
+                        .overlay {
                             RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous)
                                 .stroke(Palette.stroke, lineWidth: 1)
+                                .allowsHitTesting(false)
                         }
                         .padding(.horizontal, Metrics.webviewInset)
                         .padding(.bottom, Metrics.webviewInset)
@@ -176,6 +193,39 @@ struct BrowserShellView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    // MARK: - Ask action (Summarize lives inside the overlay sub-view)
+
+    private func handleAsk(text: String) {
+        let quoted = quotedDraft(for: text)
+        if !model.isChatVisible {
+            withAnimation(Motion.springSnap) { model.toggleChat() }
+        }
+        chatModel.draft = quoted
+        DispatchQueue.main.async {
+            chatModel.focusComposer()
+        }
+        model.selectedTab.clearSelectionInfo()
+    }
+
+    /// Builds the pre-filled chat draft: each line of the highlight is
+    /// rendered as a Markdown blockquote, followed by a blank line where the
+    /// user's actual question goes. Long passages are truncated with an
+    /// ellipsis so the composer stays usable.
+    private func quotedDraft(for text: String) -> String {
+        let normalized = text.replacingOccurrences(of: "\r\n", with: "\n")
+        let capped: String = {
+            if normalized.count > 1200 {
+                return String(normalized.prefix(1200)) + "…"
+            }
+            return normalized
+        }()
+        let quoted = capped
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { "> \($0)" }
+            .joined(separator: "\n")
+        return quoted + "\n\n"
     }
 
     // MARK: - Hover-peek timing
@@ -221,6 +271,9 @@ struct BrowserShellView: View {
             },
             focusAddressShortcut: {
                 model.focusAddress()
+            },
+            smartReadShortcut: {
+                smartReadModel.start(tab: model.selectedTab)
             }
         ]
     }

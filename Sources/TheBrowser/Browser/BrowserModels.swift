@@ -14,10 +14,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var isHome = true
     @Published var searchPage: BrowserSearchPage?
     @Published var searchReloadToken = 0
+    @Published var selectionInfo: TextSelectionInfo?
 
     let webView: WKWebView
     private var observations: [NSKeyValueObservation] = []
     private var searchBackStack: [BrowserSearchPage] = []
+    private let selectionBridge: TextSelectionBridge
 
     /// User agent used for both browsing tabs and the in-app Google sign-in
     /// sheet. WKWebView's default UA omits the `Version/X Safari/Y` suffix,
@@ -30,11 +32,16 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15"
 
     override init() {
+        let bridge = TextSelectionBridge()
+        selectionBridge = bridge
+
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.websiteDataStore = .default()
         configuration.userContentController.addUserScript(Self.darkModeUserScript)
         configuration.userContentController.addUserScript(Self.unsupportedBrowserBannerKillerScript)
+        configuration.userContentController.addUserScript(Self.textSelectionUserScript)
+        configuration.userContentController.add(bridge, name: TextSelectionBridge.messageName)
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.customUserAgent = Self.userAgent
         webView.allowsBackForwardNavigationGestures = true
@@ -43,8 +50,18 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
         super.init()
 
+        bridge.tab = self
         webView.navigationDelegate = self
         observeWebView()
+    }
+
+    func applySelectionInfo(_ info: TextSelectionInfo?) {
+        guard selectionInfo != info else { return }
+        selectionInfo = info
+    }
+
+    func clearSelectionInfo() {
+        selectionInfo = nil
     }
 
     var displayTitle: String {
@@ -98,6 +115,13 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         guard let url, url.isFileURL else { return false }
         let artifactRoot = ArtifactStore.rootURL.standardizedFileURL.path
         return url.standardizedFileURL.path.hasPrefix(artifactRoot)
+    }
+
+    var isSmartReadEligible: Bool {
+        guard !isHome, searchPage == nil, let scheme = url?.scheme?.lowercased() else {
+            return false
+        }
+        return scheme == "http" || scheme == "https"
     }
 
     /// Turns an artifact file URL into a friendly label for the URL bar — e.g.
@@ -168,6 +192,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         estimatedProgress = 0
         title = "New Space"
         url = nil
+        selectionInfo = nil
     }
 
     /// Loads a local file (typically a generated artifact) into this tab. Uses
@@ -210,6 +235,71 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         }
         let prefix = String(collapsed.prefix(maxBytes))
         return prefix + "\n…[truncated]"
+    }
+
+    func extractReadableText(maxBytes: Int = 24_000) async -> String? {
+        await extractReadablePage(maxBytes: maxBytes)?.text
+    }
+
+    func extractReadablePage(maxBytes: Int = 24_000) async -> ReadablePageExtraction? {
+        guard isSmartReadEligible else { return nil }
+        let script = """
+        (() => {
+            const selectors = [
+                "article",
+                "main",
+                "[role='main']",
+                ".post-content",
+                ".entry-content",
+                ".article-content",
+                ".story-body"
+            ];
+            const score = (el) => {
+                const text = (el.innerText || "").replace(/\\s+/g, " ").trim();
+                if (!text) return { text, value: 0 };
+                const paragraphs = el.querySelectorAll("p").length;
+                return { text, value: text.length + paragraphs * 180 };
+            };
+            let best = score(document.body || document.documentElement);
+            for (const selector of selectors) {
+                for (const el of document.querySelectorAll(selector)) {
+                    const candidate = score(el);
+                    if (candidate.value > best.value) best = candidate;
+                }
+            }
+            const text = best.text || "";
+            const wordCount = (text.match(/\\S+/g) || []).length;
+            return JSON.stringify({ text, wordCount });
+        })();
+        """
+        let raw: Any?
+        do {
+            raw = try await webView.evaluateJavaScript(script)
+        } catch {
+            guard let fallback = await extractVisibleText(maxBytes: maxBytes) else { return nil }
+            return ReadablePageExtraction(
+                text: fallback,
+                wordCount: Self.wordCount(in: fallback)
+            )
+        }
+        guard let text = raw as? String,
+              let data = text.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(ReadablePagePayload.self, from: data) else {
+            return nil
+        }
+        let collapsed = Self.normalizeExtractedText(payload.text)
+        guard !collapsed.isEmpty else { return nil }
+        if collapsed.utf8.count <= maxBytes {
+            return ReadablePageExtraction(
+                text: collapsed,
+                wordCount: max(payload.wordCount, Self.wordCount(in: collapsed))
+            )
+        }
+        let prefix = String(collapsed.prefix(maxBytes))
+        return ReadablePageExtraction(
+            text: prefix + "\n…[truncated]",
+            wordCount: max(payload.wordCount, Self.wordCount(in: collapsed))
+        )
     }
 
     func goBack() {
@@ -262,6 +352,20 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 webView?.load(URLRequest(url: target))
             }
         }
+    }
+
+    nonisolated private static func normalizeExtractedText(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: #"[ \t\r\f]+"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"\n\s*\n+"#, with: "\n\n", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    nonisolated private static func wordCount(in text: String) -> Int {
+        text
+            .split { $0.isWhitespace || $0.isNewline }
+            .filter { !$0.isEmpty }
+            .count
     }
 
     private func observeWebView() {
@@ -369,6 +473,17 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 }
                 const style = document.createElement("style");
                 style.id = FILTER_STYLE_ID;
+                // The ::selection rule is co-located with the filter on
+                // purpose. The default browser selection color gets badly
+                // mangled by invert + hue-rotate — most light themes
+                // collapse the highlight to a near-opaque dark rectangle
+                // that hides the selected text. A translucent black overlay
+                // before inversion ends up as a translucent white overlay
+                // afterwards (the conventional dark-mode selection look),
+                // and `color: inherit` keeps the text readable inside it.
+                // Sites where the filter is skipped or later removed get
+                // their native selection because the rule is dropped with
+                // the rest of this style element.
                 style.textContent = `
                     html {
                         filter: invert(1) hue-rotate(180deg) !important;
@@ -380,6 +495,14 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                     [style*="background:url"],
                     [style*="background: url"] {
                         filter: invert(1) hue-rotate(180deg) !important;
+                    }
+                    ::selection {
+                        background-color: rgba(0, 0, 0, 0.42) !important;
+                        color: inherit !important;
+                    }
+                    ::-moz-selection {
+                        background-color: rgba(0, 0, 0, 0.42) !important;
+                        color: inherit !important;
                     }
                 `;
                 document.documentElement.appendChild(style);
@@ -548,6 +671,7 @@ extension BrowserTab: WKNavigationDelegate {
         Task { @MainActor in
             self.isHome = false
             self.isLoading = true
+            self.selectionInfo = nil
         }
     }
 
@@ -573,6 +697,16 @@ extension BrowserTab: WKNavigationDelegate {
             self.isLoading = false
         }
     }
+}
+
+struct ReadablePageExtraction: Equatable {
+    var text: String
+    var wordCount: Int
+}
+
+private struct ReadablePagePayload: Decodable {
+    var text: String
+    var wordCount: Int
 }
 
 enum AddressResolver {

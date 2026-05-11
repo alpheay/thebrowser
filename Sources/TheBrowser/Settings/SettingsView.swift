@@ -19,6 +19,7 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.newTabShortcut) private var newTabShortcut = "command+t"
     @AppStorage(PreferenceKey.closeTabShortcut) private var closeTabShortcut = "command+w"
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
+    @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "command+shift+r"
 
     @State private var selectedTab: SettingsTab = .general
     @State private var showClearAllConfirm = false
@@ -217,6 +218,9 @@ struct SettingsView: View {
                 row(label: "New tab") { ShortcutRecorder(value: $newTabShortcut) }
                 row(label: "Close tab") { ShortcutRecorder(value: $closeTabShortcut) }
                 row(label: "Focus address") { ShortcutRecorder(value: $focusAddressShortcut) }
+                row(label: "Smart Read", help: "Summarizes the current website near your cursor.") {
+                    ShortcutRecorder(value: $smartReadShortcut)
+                }
             }
         }
     }
