@@ -28,6 +28,7 @@ enum PreferenceKey {
     static let closeTabShortcut = "shortcut.closeTab"
     static let focusAddressShortcut = "shortcut.focusAddress"
     static let smartReadShortcut = "shortcut.smartRead"
+    static let readerModeShortcut = "shortcut.readerMode"
     static let pasteWithCitationShortcut = "shortcut.pasteWithCitation"
     static let googleOAuthClientID = "google.oauth.clientID"
     static let clipboardEnabled = "clipboard.enabled"
@@ -125,6 +126,7 @@ enum AppDefaults {
             // normalizes incoming bindings as a safety net for any older
             // string that survived in `@AppStorage`.
             PreferenceKey.smartReadShortcut: "shift+command+r",
+            PreferenceKey.readerModeShortcut: "command+r",
             PreferenceKey.pasteWithCitationShortcut: "shift+command+v",
             PreferenceKey.googleOAuthClientID: "",
             PreferenceKey.clipboardEnabled: true,

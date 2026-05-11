@@ -6,6 +6,7 @@ struct BrowserShellView: View {
     @StateObject private var chatModel = ChatViewModel()
     @StateObject private var selectionWidget = TextSelectionWidgetModel()
     @StateObject private var smartReadModel = SmartReadModel()
+    @StateObject private var readerModel = ReaderModeModel()
     @StateObject private var hoverPreview = HoverPreviewModel()
 
     @AppStorage(PreferenceKey.toggleChatShortcut) private var toggleChatShortcut = "command+j"
@@ -14,6 +15,7 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.closeTabShortcut) private var closeTabShortcut = "command+w"
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
     @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "shift+command+r"
+    @AppStorage(PreferenceKey.readerModeShortcut) private var readerModeShortcut = "command+r"
     @AppStorage(PreferenceKey.pasteWithCitationShortcut) private var pasteWithCitationShortcut = "shift+command+v"
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
     @AppStorage(PreferenceKey.hoverPreviewEnabled) private var hoverPreviewEnabled = true
@@ -151,6 +153,9 @@ struct BrowserShellView: View {
         .background(Palette.bg)
         .onChange(of: model.selectedTabID) { _, _ in
             model.updateAddressFromSelectedTab()
+            if readerModel.isPresented {
+                readerModel.close()
+            }
             hoverPreview.dismiss()
             installLinkHoverListener()
         }
@@ -189,7 +194,9 @@ struct BrowserShellView: View {
                 model: model,
                 selectedTab: model.selectedTab,
                 reservesTrafficLightGutter: !model.isTabRailVisible,
+                readerActive: readerModel.isPresented,
                 onSmartRead: triggerSmartRead,
+                onReaderMode: triggerReaderMode,
                 isClipboardPopoverPresented: $isClipboardPopoverPresented
             )
 
@@ -233,9 +240,25 @@ struct BrowserShellView: View {
                         }
                         .padding(.horizontal, Metrics.webviewInset)
                         .padding(.bottom, Metrics.webviewInset)
+
+                    if readerModel.isPresented {
+                        ReaderModeView(
+                            model: readerModel,
+                            onOpenLink: { url in
+                                readerModel.close()
+                                model.addressDraft = url.absoluteString
+                                model.navigateSelected(to: url.absoluteString)
+                            }
+                        )
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .offset(y: 6)),
+                            removal: .opacity
+                        ))
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(Motion.springSnap, value: readerModel.isPresented)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -269,6 +292,16 @@ struct BrowserShellView: View {
         }
         withAnimation(Motion.springSnap) {
             smartReadModel.start(tab: model.selectedTab)
+        }
+    }
+
+    /// Toggles Reader Mode for the current tab. Replaces the web view with a
+    /// matte-white, serif-typeset article extracted from the page. Idempotent
+    /// — invoking again while open closes Reader Mode.
+    private func triggerReaderMode() {
+        guard model.selectedTab.isSmartReadEligible else { return }
+        withAnimation(Motion.springSnap) {
+            readerModel.toggle(tab: model.selectedTab)
         }
     }
 
@@ -385,6 +418,7 @@ struct BrowserShellView: View {
                 model.focusAddress()
             },
             smartReadShortcut: triggerSmartRead,
+            readerModeShortcut: triggerReaderMode,
             pasteWithCitationShortcut: {
                 isClipboardPopoverPresented.toggle()
             }

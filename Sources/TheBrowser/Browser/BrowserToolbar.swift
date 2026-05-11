@@ -4,7 +4,9 @@ struct BrowserToolbar: View {
     @ObservedObject var model: BrowserModel
     @ObservedObject var selectedTab: BrowserTab
     var reservesTrafficLightGutter: Bool
+    var readerActive: Bool = false
     var onSmartRead: () -> Void = {}
+    var onReaderMode: () -> Void = {}
     @Binding var isClipboardPopoverPresented: Bool
 
     @FocusState private var addressFocused: Bool
@@ -163,6 +165,12 @@ struct BrowserToolbar: View {
     private var rightCluster: some View {
         HStack(spacing: 6) {
             if selectedTab.isSmartReadEligible {
+                Button(action: onReaderMode) {
+                    Image(systemName: "book.fill")
+                }
+                .buttonStyle(IconButtonStyle(selected: readerActive, size: 28))
+                .help("Reader Mode")
+
                 Button(action: onSmartRead) {
                     Image(systemName: "text.magnifyingglass")
                 }

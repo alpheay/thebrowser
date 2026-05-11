@@ -349,6 +349,43 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         )
     }
 
+    /// Extracts a Readability-style structured article for Reader Mode. Walks
+    /// the most article-shaped container in the DOM and returns ordered
+    /// blocks (headings, paragraphs, images, lists, quotes) along with title,
+    /// byline, and site name. Returns nil when the page has no readable
+    /// article content. Inline formatting (bold/italic/links/code) is encoded
+    /// as a small Markdown subset so SwiftUI can render it with
+    /// `AttributedString(markdown:)`.
+    func extractReaderArticle() async -> ReaderArticle? {
+        guard isSmartReadEligible else { return nil }
+        let raw: Any?
+        do {
+            raw = try await webView.evaluateJavaScript(Self.readerExtractionScript)
+        } catch {
+            return nil
+        }
+        guard let text = raw as? String,
+              let data = text.data(using: .utf8),
+              let payload = try? JSONDecoder().decode(ReaderExtractionPayload.self, from: data),
+              !payload.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !payload.blocks.isEmpty else {
+            return nil
+        }
+
+        let blocks = payload.blocks.compactMap(ReaderBlock.init(payload:))
+        guard !blocks.isEmpty else { return nil }
+
+        let readTime = max(1, Int(ceil(Double(payload.wordCount) / 230.0)))
+        return ReaderArticle(
+            title: payload.title.trimmingCharacters(in: .whitespacesAndNewlines),
+            byline: payload.byline?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            siteName: payload.siteName?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            readTimeMinutes: readTime,
+            wordCount: payload.wordCount,
+            blocks: blocks
+        )
+    }
+
     func goBack() {
         if webView.canGoBack {
             webView.goBack()
@@ -445,6 +482,274 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             }
         ]
     }
+
+    /// Readability-lite extractor for Reader Mode. Picks the most article-
+    /// shaped container, walks it in document order, and emits structured
+    /// blocks. Inline formatting is encoded as a small Markdown subset
+    /// (`**bold**`, `*italic*`, `` `code` ``, `[text](url)`) so the Swift
+    /// side can render it via `AttributedString(markdown:)`. Image URLs are
+    /// resolved against `location.href` so relative `src` values survive.
+    private static let readerExtractionScript: String = """
+    (() => {
+        const ARTICLE_SELECTORS = [
+            "article",
+            "main",
+            "[role='main']",
+            ".post-content",
+            ".post-body",
+            ".entry-content",
+            ".article-content",
+            ".article-body",
+            ".story-body",
+            ".markdown-body"
+        ];
+
+        const SKIP_TAGS = new Set([
+            "script", "style", "noscript", "nav", "header", "footer",
+            "aside", "form", "button", "iframe", "svg"
+        ]);
+
+        const SKIP_CLASS_HINTS = [
+            "share", "social", "newsletter", "subscribe", "related",
+            "comment", "comments", "sidebar", "promo", "advert", "ad-",
+            "footnote", "byline", "author-card"
+        ];
+
+        const score = (el) => {
+            const text = (el.innerText || "").replace(/\\s+/g, " ").trim();
+            if (!text) return 0;
+            const paragraphs = el.querySelectorAll("p").length;
+            return text.length + paragraphs * 180;
+        };
+
+        let bestEl = document.body || document.documentElement;
+        let bestScore = score(bestEl);
+        for (const selector of ARTICLE_SELECTORS) {
+            for (const el of document.querySelectorAll(selector)) {
+                const value = score(el);
+                if (value > bestScore) {
+                    bestEl = el;
+                    bestScore = value;
+                }
+            }
+        }
+        if (!bestEl) return JSON.stringify({ title: "", byline: null, siteName: null, wordCount: 0, blocks: [] });
+
+        const findTitle = () => {
+            const h1 = bestEl.querySelector("h1");
+            if (h1 && h1.innerText) {
+                const t = h1.innerText.trim();
+                if (t) return t;
+            }
+            const og = document.querySelector('meta[property="og:title"]');
+            if (og) {
+                const t = (og.content || "").trim();
+                if (t) return t;
+            }
+            const twTitle = document.querySelector('meta[name="twitter:title"]');
+            if (twTitle) {
+                const t = (twTitle.content || "").trim();
+                if (t) return t;
+            }
+            return (document.title || "").trim();
+        };
+
+        const findByline = () => {
+            const selectors = [
+                'meta[name="author"]',
+                'meta[property="article:author"]',
+                '[rel="author"]',
+                '[itemprop="author"]',
+                '.byline',
+                '.author',
+                '.post-author',
+                '.entry-author'
+            ];
+            for (const sel of selectors) {
+                const el = document.querySelector(sel);
+                if (!el) continue;
+                const raw = (el.content || el.innerText || "").trim();
+                if (raw && raw.length < 200) return raw.replace(/\\s+/g, " ");
+            }
+            return null;
+        };
+
+        const findSiteName = () => {
+            const og = document.querySelector('meta[property="og:site_name"]');
+            if (og) {
+                const t = (og.content || "").trim();
+                if (t) return t;
+            }
+            const apple = document.querySelector('meta[name="apple-mobile-web-app-title"]');
+            if (apple) {
+                const t = (apple.content || "").trim();
+                if (t) return t;
+            }
+            try {
+                const host = location.hostname.replace(/^www\\./, "");
+                return host || null;
+            } catch (_) { return null; }
+        };
+
+        const looksSkippable = (el) => {
+            const cls = (el.className && typeof el.className === "string") ? el.className.toLowerCase() : "";
+            const id = (el.id || "").toLowerCase();
+            return SKIP_CLASS_HINTS.some(h => cls.includes(h) || id.includes(h));
+        };
+
+        const cleanText = (s) => s.replace(/[ \\t\\r\\f]+/g, " ").replace(/\\n /g, "\\n").trim();
+
+        const escapeForMarkdown = (s) =>
+            s.replace(/\\\\/g, "\\\\\\\\")
+             .replace(/([\\*_`\\[\\]\\(\\)])/g, "\\\\$1");
+
+        const inlineToMarkdown = (node) => {
+            let out = "";
+            for (const child of node.childNodes) {
+                if (child.nodeType === 3) {
+                    out += escapeForMarkdown(child.textContent);
+                } else if (child.nodeType === 1) {
+                    const tag = child.tagName.toLowerCase();
+                    if (SKIP_TAGS.has(tag)) continue;
+                    const inner = inlineToMarkdown(child);
+                    if (!inner.trim() && tag !== "br") continue;
+                    if (tag === "br") { out += "\\n"; continue; }
+                    if (tag === "strong" || tag === "b") { out += "**" + inner + "**"; continue; }
+                    if (tag === "em" || tag === "i") { out += "*" + inner + "*"; continue; }
+                    if (tag === "code") { out += "`" + child.textContent + "`"; continue; }
+                    if (tag === "a") {
+                        let href = child.getAttribute("href") || "";
+                        try { href = new URL(href, location.href).href; } catch (_) {}
+                        if (href && /^https?:/i.test(href)) {
+                            const clean = inner.replace(/\\]/g, "\\\\]");
+                            out += "[" + clean + "](" + href + ")";
+                        } else {
+                            out += inner;
+                        }
+                        continue;
+                    }
+                    out += inner;
+                }
+            }
+            return out;
+        };
+
+        const resolveURL = (src) => {
+            if (!src) return null;
+            try { return new URL(src, location.href).href; } catch (_) { return null; }
+        };
+
+        const pickImageSrc = (img) => {
+            if (img.currentSrc) return img.currentSrc;
+            const srcset = img.getAttribute("srcset");
+            if (srcset) {
+                const candidates = srcset.split(",").map(s => s.trim());
+                const last = candidates[candidates.length - 1] || "";
+                const url = last.split(" ")[0];
+                if (url) return url;
+            }
+            return img.getAttribute("src") || "";
+        };
+
+        const blocks = [];
+
+        const pushHeading = (level, text) => {
+            const t = cleanText(text);
+            if (t) blocks.push({ type: "heading", level, text: t });
+        };
+
+        const pushParagraph = (el) => {
+            const text = cleanText(inlineToMarkdown(el));
+            if (text) blocks.push({ type: "paragraph", text });
+        };
+
+        const pushBlockquote = (el) => {
+            const text = cleanText(inlineToMarkdown(el));
+            if (text) blocks.push({ type: "blockquote", text });
+        };
+
+        const pushList = (el, ordered) => {
+            const items = [];
+            for (const li of el.children) {
+                if (li.tagName && li.tagName.toLowerCase() === "li") {
+                    const t = cleanText(inlineToMarkdown(li));
+                    if (t) items.push(t);
+                }
+            }
+            if (items.length === 0) return;
+            blocks.push({ type: ordered ? "orderedList" : "unorderedList", items });
+        };
+
+        const pushImage = (img, caption) => {
+            const raw = pickImageSrc(img);
+            const resolved = resolveURL(raw);
+            if (!resolved) return;
+            const w = img.naturalWidth || parseInt(img.getAttribute("width") || "0", 10) || 0;
+            if (w > 0 && w < 80) return;
+            blocks.push({
+                type: "image",
+                url: resolved,
+                alt: (img.alt || "").trim(),
+                caption: caption ? caption.trim() : null
+            });
+        };
+
+        const walk = (el) => {
+            for (const child of el.children) {
+                if (!child.tagName) continue;
+                const tag = child.tagName.toLowerCase();
+                if (SKIP_TAGS.has(tag)) continue;
+                if (looksSkippable(child)) continue;
+
+                if (/^h([1-6])$/.test(tag)) {
+                    pushHeading(parseInt(tag.charAt(1), 10), child.innerText || "");
+                    continue;
+                }
+                if (tag === "p") { pushParagraph(child); continue; }
+                if (tag === "blockquote") { pushBlockquote(child); continue; }
+                if (tag === "ul") { pushList(child, false); continue; }
+                if (tag === "ol") { pushList(child, true); continue; }
+                if (tag === "pre") {
+                    const code = (child.innerText || "");
+                    if (code.trim()) blocks.push({ type: "codeBlock", text: code });
+                    continue;
+                }
+                if (tag === "hr") { blocks.push({ type: "horizontalRule" }); continue; }
+                if (tag === "img") { pushImage(child, null); continue; }
+                if (tag === "figure") {
+                    const img = child.querySelector("img");
+                    if (img) {
+                        const figcap = child.querySelector("figcaption");
+                        pushImage(img, figcap ? (figcap.innerText || "") : null);
+                    }
+                    continue;
+                }
+                // Container — recurse
+                walk(child);
+            }
+        };
+
+        walk(bestEl);
+
+        const wordCount = blocks.reduce((sum, b) => {
+            if (b.type === "paragraph" || b.type === "heading" || b.type === "blockquote" || b.type === "codeBlock") {
+                return sum + ((b.text || "").match(/\\S+/g) || []).length;
+            }
+            if (b.type === "unorderedList" || b.type === "orderedList") {
+                return sum + b.items.reduce((s, it) => s + ((it.match(/\\S+/g)) || []).length, 0);
+            }
+            return sum;
+        }, 0);
+
+        return JSON.stringify({
+            title: findTitle(),
+            byline: findByline(),
+            siteName: findSiteName(),
+            wordCount,
+            blocks
+        });
+    })();
+    """
 
     /// Forces dark presentation via CSS filter inversion, with a sample-and-strip
     /// fallback so sites that already paint dark aren't double-inverted.
@@ -754,6 +1059,64 @@ struct ReadablePageExtraction: Equatable {
 private struct ReadablePagePayload: Decodable {
     var text: String
     var wordCount: Int
+}
+
+struct ReaderExtractionPayload: Decodable {
+    var title: String
+    var byline: String?
+    var siteName: String?
+    var wordCount: Int
+    var blocks: [ReaderBlockPayload]
+}
+
+struct ReaderBlockPayload: Decodable {
+    var type: String
+    var level: Int?
+    var text: String?
+    var items: [String]?
+    var url: String?
+    var alt: String?
+    var caption: String?
+}
+
+extension ReaderBlock {
+    init?(payload: ReaderBlockPayload) {
+        switch payload.type {
+        case "heading":
+            guard let text = payload.text, !text.isEmpty else { return nil }
+            self = .heading(level: max(1, min(payload.level ?? 2, 6)), text: text)
+        case "paragraph":
+            guard let text = payload.text, !text.isEmpty else { return nil }
+            self = .paragraph(text)
+        case "blockquote":
+            guard let text = payload.text, !text.isEmpty else { return nil }
+            self = .blockquote(text)
+        case "unorderedList":
+            guard let items = payload.items, !items.isEmpty else { return nil }
+            self = .unorderedList(items)
+        case "orderedList":
+            guard let items = payload.items, !items.isEmpty else { return nil }
+            self = .orderedList(items)
+        case "codeBlock":
+            guard let text = payload.text, !text.isEmpty else { return nil }
+            self = .codeBlock(text)
+        case "horizontalRule":
+            self = .horizontalRule
+        case "image":
+            guard let urlString = payload.url,
+                  let url = URL(string: urlString) else { return nil }
+            self = .image(url: url, alt: payload.alt ?? "", caption: payload.caption?.nilIfEmpty)
+        default:
+            return nil
+        }
+    }
+}
+
+extension String {
+    fileprivate var nilIfEmpty: String? {
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
 }
 
 enum AddressResolver {

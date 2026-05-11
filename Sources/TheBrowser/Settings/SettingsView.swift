@@ -21,6 +21,7 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.closeTabShortcut) private var closeTabShortcut = "command+w"
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
     @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "shift+command+r"
+    @AppStorage(PreferenceKey.readerModeShortcut) private var readerModeShortcut = "command+r"
     @AppStorage(PreferenceKey.pasteWithCitationShortcut) private var pasteWithCitationShortcut = "shift+command+v"
     @AppStorage(PreferenceKey.hoverPreviewEnabled) private var hoverPreviewEnabled = true
     @AppStorage(PreferenceKey.hoverPreviewModifier) private var hoverPreviewModifier = HoverPreviewModifier.command.rawValue
@@ -276,6 +277,9 @@ struct SettingsView: View {
                 row(label: "Focus address") { ShortcutRecorder(value: $focusAddressShortcut) }
                 row(label: "Smart Read", help: "Summarizes the current website near your cursor.") {
                     ShortcutRecorder(value: $smartReadShortcut)
+                }
+                row(label: "Reader Mode", help: "Transforms the current article into a clean, dark reading view.") {
+                    ShortcutRecorder(value: $readerModeShortcut)
                 }
                 row(label: "Paste with citation", help: "Opens the clipboard history popover.") {
                     ShortcutRecorder(value: $pasteWithCitationShortcut)
