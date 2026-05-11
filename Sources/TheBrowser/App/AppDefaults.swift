@@ -36,6 +36,8 @@ enum PreferenceKey {
     static let clipboardCitationStyle = "clipboard.citationStyle"
     static let clipboardBlocklist = "clipboard.blocklist"
     static let clipboardAppOverrides = "clipboard.appOverrides"
+    static let notificationCorner = "notifications.corner"
+    static let notificationsWelcomeShown = "notifications.welcomeShown"
     static let hoverPreviewEnabled = "hoverPreview.enabled"
     static let hoverPreviewModifier = "hoverPreview.modifier"
     static let hoverPreviewDelayMs = "hoverPreview.hoverDelayMs"
@@ -131,6 +133,8 @@ enum AppDefaults {
             PreferenceKey.clipboardCitationStyle: CitedCitationStyle.bracketed.rawValue,
             PreferenceKey.clipboardBlocklist: CitedClipboardPolicy.defaultBlocklistString,
             PreferenceKey.clipboardAppOverrides: "",
+            PreferenceKey.notificationCorner: NotificationCorner.topRight.rawValue,
+            PreferenceKey.notificationsWelcomeShown: false,
             PreferenceKey.hoverPreviewEnabled: true,
             PreferenceKey.hoverPreviewModifier: HoverPreviewModifier.command.rawValue,
             PreferenceKey.hoverPreviewDelayMs: 200,
