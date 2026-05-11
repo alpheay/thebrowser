@@ -1,12 +1,9 @@
-import CryptoKit
 import Foundation
 
 enum MigrationError: LocalizedError {
     case profileUnavailable(String)
     case sqliteFailed(String)
     case processFailed(String)
-    case decryptionUnavailable(String)
-    case keychainFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -16,10 +13,6 @@ enum MigrationError: LocalizedError {
             "Could not read browser database: \(detail)"
         case .processFailed(let detail):
             "A helper process failed: \(detail)"
-        case .decryptionUnavailable(let detail):
-            "Could not decrypt browser data: \(detail)"
-        case .keychainFailed(let detail):
-            "Could not save passwords: \(detail)"
         }
     }
 }
@@ -136,70 +129,6 @@ enum ProcessRunner {
         }
 
         return ProcessOutput(stdout: stdout, stderr: stderr)
-    }
-}
-
-enum PasswordKeyDerivation {
-    static func pbkdf2SHA1(password: Data, salt: Data, iterations: Int, keyByteCount: Int) -> Data {
-        var derivedKey = Data()
-        var blockIndex: UInt32 = 1
-
-        while derivedKey.count < keyByteCount {
-            var blockSalt = salt
-            blockSalt.append(contentsOf: withUnsafeBytes(of: blockIndex.bigEndian) { Array($0) })
-
-            var digest = Data(HMAC<Insecure.SHA1>.authenticationCode(
-                for: blockSalt,
-                using: SymmetricKey(data: password)
-            ))
-            var block = digest
-
-            if iterations > 1 {
-                for _ in 1..<iterations {
-                    digest = Data(HMAC<Insecure.SHA1>.authenticationCode(
-                        for: digest,
-                        using: SymmetricKey(data: password)
-                    ))
-                    block.xorInPlace(with: digest)
-                }
-            }
-
-            derivedKey.append(block)
-            blockIndex += 1
-        }
-
-        return derivedKey.prefix(keyByteCount)
-    }
-}
-
-extension Data {
-    init?(hexEncoded hex: String) {
-        var data = Data(capacity: hex.count / 2)
-        var index = hex.startIndex
-
-        while index < hex.endIndex {
-            let nextIndex = hex.index(index, offsetBy: 2, limitedBy: hex.endIndex) ?? hex.endIndex
-            guard nextIndex <= hex.endIndex else { return nil }
-            let byteString = hex[index..<nextIndex]
-            guard byteString.count == 2, let byte = UInt8(byteString, radix: 16) else {
-                return nil
-            }
-            data.append(byte)
-            index = nextIndex
-        }
-
-        self = data
-    }
-
-    var hexEncodedString: String {
-        map { String(format: "%02x", $0) }.joined()
-    }
-
-    mutating func xorInPlace(with other: Data) {
-        let count = Swift.min(count, other.count)
-        for index in 0..<count {
-            self[index] ^= other[index]
-        }
     }
 }
 

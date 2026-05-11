@@ -28,12 +28,15 @@ enum BrowserMigrationService {
         payload.bookmarks = uniqueBookmarks(payload.bookmarks)
         payload.history = uniqueHistory(payload.history)
 
-        let installation = await MigrationDestination.install(payload: payload, source: source)
+        let counts = MigrationCounts(
+            bookmarks: payload.bookmarks.count,
+            history: payload.history.count
+        )
         let result = MigrationResult(
             source: source,
             profileName: profile.name,
-            counts: installation.counts,
-            warnings: installation.warnings,
+            counts: counts,
+            warnings: payload.warnings,
             completedAt: Date()
         )
 
