@@ -6,6 +6,7 @@ struct BrowserShellView: View {
     @StateObject private var chatModel = ChatViewModel()
     @StateObject private var selectionWidget = TextSelectionWidgetModel()
     @StateObject private var smartReadModel = SmartReadModel()
+    @StateObject private var hoverPreview = HoverPreviewModel()
 
     @AppStorage(PreferenceKey.toggleChatShortcut) private var toggleChatShortcut = "command+j"
     @AppStorage(PreferenceKey.toggleTabsShortcut) private var toggleTabsShortcut = "command+b"
@@ -14,6 +15,8 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
     @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "command+shift+r"
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
+    @AppStorage(PreferenceKey.hoverPreviewEnabled) private var hoverPreviewEnabled = true
+    @AppStorage(PreferenceKey.hoverPreviewPrefetchBlocklist) private var hoverPreviewBlocklist = ""
 
     @State private var isPeekingRail = false
     @State private var peekDismissTask: Task<Void, Never>? = nil
@@ -120,6 +123,18 @@ struct BrowserShellView: View {
                 .opacity(0)
                 .allowsHitTesting(false)
 
+            // Hover Preview key monitor — only intercepts Return / ⌘Return
+            // while a peek session is visible. KeyboardShortcutHost ignores
+            // naked keystrokes (no modifier), so this lives in its own host.
+            HoverPreviewKeyMonitor(
+                sessionVisible: hoverPreview.session != nil,
+                onReturn: { performHoverAction(background: false, pinned: false) },
+                onCommandReturn: { performHoverAction(background: true, pinned: false) }
+            )
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .allowsHitTesting(false)
+
             // Hidden window chrome configurator (full-screen on green button)
             WindowFullScreenZoomConfigurator()
                 .frame(width: 0, height: 0)
@@ -129,8 +144,20 @@ struct BrowserShellView: View {
         .background(Palette.bg)
         .onChange(of: model.selectedTabID) { _, _ in
             model.updateAddressFromSelectedTab()
+            hoverPreview.dismiss()
+            installLinkHoverListener()
+        }
+        .onChange(of: hoverPreviewEnabled) { _, newValue in
+            for tab in model.tabs { tab.updateHoverPreviewEnabled(newValue) }
+            if !newValue { hoverPreview.dismiss() }
+        }
+        .onChange(of: hoverPreviewBlocklist) { _, newValue in
+            hoverPreview.prefetcher.updateBlocklist(newValue)
         }
         .onAppear {
+            installLinkHoverListener()
+            hoverPreview.prefetcher.updateBlocklist(hoverPreviewBlocklist)
+            for tab in model.tabs { tab.updateHoverPreviewEnabled(hoverPreviewEnabled) }
             guard !migrationPromptCompleted else { return }
             isShowingMigrationPrompt = true
         }
@@ -185,6 +212,12 @@ struct BrowserShellView: View {
                             )
                         }
                         .overlay {
+                            HoverPreviewOverlay(
+                                model: hoverPreview,
+                                actions: hoverPreviewActions
+                            )
+                        }
+                        .overlay {
                             RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous)
                                 .stroke(Palette.stroke, lineWidth: 1)
                                 .allowsHitTesting(false)
@@ -228,6 +261,53 @@ struct BrowserShellView: View {
         withAnimation(Motion.springSnap) {
             smartReadModel.start(tab: model.selectedTab)
         }
+    }
+
+    // MARK: - Hover Preview wiring
+
+    /// Subscribes the active tab's link-hover bridge to the shell-level
+    /// preview model. Called on appear and whenever the selected tab
+    /// changes; the previous tab's listener is cleared so we never get
+    /// two hover overlays at once.
+    private func installLinkHoverListener() {
+        for tab in model.tabs where tab.id != model.selectedTabID {
+            tab.setLinkHoverListener(nil)
+        }
+        let active = model.selectedTab
+        active.setLinkHoverListener { [weak hoverPreview = hoverPreview] tab, info in
+            guard let hoverPreview else { return }
+            guard let url = info.url else { return }
+            switch info.kind {
+            case .peek:
+                hoverPreview.peek(
+                    url: url,
+                    anchor: info.rect,
+                    tab: tab,
+                    fallbackTitle: info.title
+                )
+            case .prefetch:
+                hoverPreview.prefetch(url: url)
+            case .rect:
+                hoverPreview.updateRect(info.rect, for: url)
+            case .leave:
+                hoverPreview.pointerLeftLink()
+            }
+        }
+    }
+
+    private var hoverPreviewActions: HoverPreviewActions {
+        HoverPreviewActions(
+            openInTab: { performHoverAction(background: false, pinned: false) },
+            openInBackground: { performHoverAction(background: true, pinned: false) },
+            pin: { performHoverAction(background: true, pinned: true) }
+        )
+    }
+
+    private func performHoverAction(background: Bool, pinned: Bool) {
+        guard let session = hoverPreview.session else { return }
+        let url = session.url
+        hoverPreview.dismiss()
+        model.openInNewTab(url: url, background: background, pinned: pinned)
     }
 
     // MARK: - Hover-peek timing
