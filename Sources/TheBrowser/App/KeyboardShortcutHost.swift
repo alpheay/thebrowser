@@ -2,7 +2,22 @@ import AppKit
 import SwiftUI
 
 struct KeyboardShortcutHost: NSViewRepresentable {
-    var bindings: [String: () -> Void]
+    let bindings: [String: () -> Void]
+
+    /// Normalizes the dictionary keys at construction time so that `command+
+    /// shift+v` (a stored default) and `shift+command+v` (the form
+    /// ``AppShortcut.storageValue(from:)`` produces from a real keypress)
+    /// resolve to the same binding. Without this the lookup misses and the
+    /// system handles the chord — for ⌘⇧V that means falling through to
+    /// macOS's "Paste and Match Style".
+    init(bindings: [String: () -> Void]) {
+        var canonical: [String: () -> Void] = [:]
+        canonical.reserveCapacity(bindings.count)
+        for (raw, action) in bindings {
+            canonical[AppShortcut.normalize(raw)] = action
+        }
+        self.bindings = canonical
+    }
 
     func makeCoordinator() -> Coordinator {
         Coordinator(parent: self)

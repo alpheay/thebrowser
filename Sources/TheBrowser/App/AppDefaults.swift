@@ -64,8 +64,13 @@ enum AppDefaults {
             PreferenceKey.newTabShortcut: "command+t",
             PreferenceKey.closeTabShortcut: "command+w",
             PreferenceKey.focusAddressShortcut: "command+l",
-            PreferenceKey.smartReadShortcut: "command+shift+r",
-            PreferenceKey.pasteWithCitationShortcut: "command+shift+v",
+            // Multi-modifier defaults are written in canonical order
+            // (control + option + shift + command + key) so they match
+            // ``AppShortcut.storageValue(from:)``. The keyboard host
+            // normalizes incoming bindings as a safety net for any older
+            // string that survived in `@AppStorage`.
+            PreferenceKey.smartReadShortcut: "shift+command+r",
+            PreferenceKey.pasteWithCitationShortcut: "shift+command+v",
             PreferenceKey.googleOAuthClientID: "",
             PreferenceKey.clipboardEnabled: true,
             PreferenceKey.clipboardSmartPasteEnabled: true,

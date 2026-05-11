@@ -38,7 +38,30 @@ enum AppShortcut {
     }
 
     static func matches(_ event: NSEvent, storageValue expectedValue: String) -> Bool {
-        storageValue(from: event) == expectedValue
+        guard let recorded = storageValue(from: event) else { return false }
+        return recorded == normalize(expectedValue)
+    }
+
+    /// Canonicalizes a stored shortcut string into the same form
+    /// ``storageValue(from:)`` produces (`control+option+shift+command+key`).
+    /// Keys that come back from `@AppStorage` aren't guaranteed to be in any
+    /// particular order — the shortcut recorder happens to write canonical,
+    /// but registered defaults and earlier user edits may not — so the
+    /// keyboard host normalizes at lookup time and the dictionary keys it
+    /// stores are normalized too. Dropping this normalization is what made
+    /// `command+shift+v` (a stored default) miss against the event-derived
+    /// `shift+command+v`.
+    static func normalize(_ raw: String) -> String {
+        let parts = raw.split(separator: "+").map(String.init)
+        guard let key = parts.last else { return raw }
+        let modifiers = Set(parts.dropLast())
+        var ordered: [String] = []
+        if modifiers.contains("control") { ordered.append("control") }
+        if modifiers.contains("option") { ordered.append("option") }
+        if modifiers.contains("shift") { ordered.append("shift") }
+        if modifiers.contains("command") { ordered.append("command") }
+        ordered.append(key)
+        return ordered.joined(separator: "+")
     }
 
     private static func normalizedKey(from event: NSEvent) -> String? {
