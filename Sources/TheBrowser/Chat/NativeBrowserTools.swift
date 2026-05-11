@@ -6,6 +6,7 @@ enum NativeBrowserToolName: String, Equatable, Sendable {
     case fetch
     case readTabs = "read_tabs"
     case readHighlights = "read_highlights"
+    case readSmartRead = "read_smart_read"
     case createArtifact = "create_artifact"
 }
 
@@ -37,6 +38,8 @@ struct NativeBrowserToolCall: Equatable, Sendable {
                 return indices.map(String.init).joined(separator: ",")
             }
             return "all"
+        case .readSmartRead:
+            return "summary"
         case .createArtifact:
             return title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "artifact"
         }
@@ -85,7 +88,7 @@ struct NativeBrowserToolCall: Equatable, Sendable {
         switch name {
         case .open, .fetch, .search:
             return call.rawInput.isEmpty ? nil : call
-        case .readTabs, .readHighlights:
+        case .readTabs, .readHighlights, .readSmartRead:
             return call
         case .createArtifact:
             return (html?.isEmpty == false) ? call : nil
@@ -318,6 +321,11 @@ struct NativeBrowserToolExecutor {
     /// the chat layer so the executor itself doesn't need to know about
     /// ChatViewModel.
     var readHighlightsContent: @MainActor ([Int]?) async -> String
+    /// Resolves a `read_smart_read` call against the current Smart Read
+    /// panel state. Returns the formatted summary (TL;DR + key points +
+    /// metadata) when one is loaded, or a status message when the panel is
+    /// idle, loading, or in a failed state.
+    var smartReadContent: @MainActor () async -> String
     var saveAndOpenArtifact: @MainActor (_ title: String, _ html: String) async throws -> URL
 
     func execute(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
@@ -332,6 +340,8 @@ struct NativeBrowserToolExecutor {
             return await readTabs(call)
         case .readHighlights:
             return await readHighlights(call)
+        case .readSmartRead:
+            return await readSmartRead(call)
         case .createArtifact:
             return await createArtifact(call)
         }
@@ -346,6 +356,7 @@ enum NativeBrowserToolPrompt {
     - fetch: downloads a URL and returns readable page text.
     - read_tabs: returns the visible text of the user's currently open tabs. Use this when the user asks about, summarizes across, or wants to act on the tabs they already have open. Pass `indices` (1-based) to read specific tabs, or omit it to read all of them.
     - read_highlights: returns the full text of highlights (page passages the user clipped via the Ask widget) attached earlier in the conversation. The prompt lists prior highlights by their 1-based global index with source + preview only; use this tool to fetch the full text of one or more of them when the user references "the highlight", "what I sent earlier", a specific quoted phrase, etc. Pass `indices` (1-based) to read specific highlights, or omit it to read all of them. The CURRENT turn's highlights are already inlined in the prompt — only call this tool for highlights from PRIOR turns.
+    - read_smart_read: returns the Smart Read summary currently displayed in the chat sidebar (TL;DR sentence, numbered key points, read time, word count, page title, page URL). Use this whenever the user references "the smart read", "the summary", "what did smart read say", or asks for any details from the summary panel. The prompt notes when a Smart Read is active — only call this tool while one is shown. Takes no arguments.
     - create_artifact: saves a fully self-contained HTML document under ~/.thebrowser/web_artifacts/ and opens it in a new tab. Use this when the user asks for an "artifact", "document", "report", "dashboard", "summary", or anything similar that should be rendered as a standalone page.
 
     To use a tool, reply with only one JSON object and no prose:
@@ -355,6 +366,7 @@ enum NativeBrowserToolPrompt {
     {"tool":"read_tabs"}
     {"tool":"read_tabs","indices":[1,3]}
     {"tool":"read_highlights","indices":[2]}
+    {"tool":"read_smart_read"}
     {"tool":"create_artifact","title":"Market Overview","html":"<!doctype html><html>…</html>"}
 
     CRITICAL tool-call rules — follow these or the dispatcher will treat your tool call as plain chat text and the action will silently fail:

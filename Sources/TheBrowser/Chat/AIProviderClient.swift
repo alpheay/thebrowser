@@ -222,7 +222,8 @@ struct AIProviderClient {
         history: [ChatMessage] = [],
         configuration: AIHarnessConfiguration? = nil,
         tabs: [TabManifestEntry] = [],
-        attachments: [ChatAttachment] = []
+        attachments: [ChatAttachment] = [],
+        smartReadActive: Bool = false
     ) -> String {
         let pageURL = context.url.isEmpty ? "Home page" : context.url
 
@@ -338,6 +339,10 @@ struct AIProviderClient {
             currentAttachmentsBlock = lines.joined(separator: "\n") + "\n\n"
         }
 
+        let smartReadBlock = smartReadActive
+            ? "Smart Read: a summary of the current page is displayed in the chat sidebar. Call read_smart_read to retrieve its TL;DR, key points, and metadata when the user references it.\n\n"
+            : ""
+
         return """
         \(NativeBrowserToolPrompt.instructions)
 
@@ -347,7 +352,7 @@ struct AIProviderClient {
         Title: \(context.title)
         URL: \(pageURL)
 
-        \(priorManifestBlock)\(currentAttachmentsBlock)\(transcript)User request:
+        \(smartReadBlock)\(priorManifestBlock)\(currentAttachmentsBlock)\(transcript)User request:
         \(message)
         """
     }
