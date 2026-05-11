@@ -52,6 +52,7 @@ enum PreferenceKey {
     static let toolbarShowClipboard = "toolbar.showClipboard"
     static let toolbarShowTabRailToggle = "toolbar.showTabRailToggle"
     static let toolbarShowChatToggle = "toolbar.showChatToggle"
+    static let magneticTabClusters = "tabs.magneticClusters"
 }
 
 /// Modifier choices for Hover Preview. Raw values are stored in
@@ -157,7 +158,8 @@ enum AppDefaults {
             PreferenceKey.toolbarShowSmartRead: false,
             PreferenceKey.toolbarShowClipboard: false,
             PreferenceKey.toolbarShowTabRailToggle: true,
-            PreferenceKey.toolbarShowChatToggle: true
+            PreferenceKey.toolbarShowChatToggle: true,
+            PreferenceKey.magneticTabClusters: true
         ])
     }
 

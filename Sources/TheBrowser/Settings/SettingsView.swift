@@ -36,6 +36,7 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.toolbarShowClipboard) private var toolbarShowClipboard = false
     @AppStorage(PreferenceKey.toolbarShowTabRailToggle) private var toolbarShowTabRailToggle = true
     @AppStorage(PreferenceKey.toolbarShowChatToggle) private var toolbarShowChatToggle = true
+    @AppStorage(PreferenceKey.magneticTabClusters) private var magneticTabClusters = true
 
     @State private var selectedTab: SettingsTab = .general
     @State private var showClearAllConfirm = false
@@ -126,11 +127,11 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - Toolbar
+    // MARK: - Toolbar and Tabs
 
     private var toolbarSettings: some View {
         VStack(alignment: .leading, spacing: 28) {
-            pageHeader(title: "Toolbar", subtitle: "Choose which buttons appear in the browser toolbar.")
+            pageHeader(title: "Toolbar and Tabs", subtitle: "Tune the chrome above the page and the side rail.")
 
             ToolbarPreviewBar(
                 showBack: toolbarShowBack,
@@ -195,6 +196,10 @@ struct SettingsView: View {
                     help: "Toggle the AI chat panel.",
                     isOn: $toolbarShowChatToggle
                 )
+            }
+
+            section("Tabs") {
+                MagneticClustersRow(isOn: $magneticTabClusters)
             }
         }
     }
@@ -463,7 +468,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: "General"
         case .account: "Account"
-        case .toolbar: "Toolbar"
+        case .toolbar: "Toolbar and Tabs"
         case .ai: "AI Engine"
         case .clipboard: "Clipboard"
         case .keybindings: "Keybindings"
@@ -676,6 +681,48 @@ private struct ToolbarToggleRow: View {
                     .font(.system(size: 12.5, weight: .semibold))
                     .foregroundStyle(isOn ? Palette.textPrimary : Palette.textSecondary)
                 Text(help)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Palette.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Spacer(minLength: 12)
+
+            ToggleSwitch(isOn: $isOn)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .contentShape(Rectangle())
+        .onTapGesture { isOn.toggle() }
+        .animation(Motion.springSnap, value: isOn)
+    }
+}
+
+/// Settings row for the magnetic-cluster preference. Pairs a tinted symbol
+/// chip and explanation copy with a ``ToggleSwitch``, matching the layout
+/// of ``ToolbarToggleRow`` so the new "Tabs" section feels like a peer of
+/// the toolbar lists above it.
+private struct MagneticClustersRow: View {
+    @Binding var isOn: Bool
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            ZStack {
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isOn ? Palette.surface : Palette.bgRaised.opacity(0.6))
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(isOn ? Palette.stroke : Palette.strokeFaint, lineWidth: 1)
+                Image(systemName: "square.stack.3d.up.fill")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(isOn ? Palette.textPrimary : Palette.textMuted)
+            }
+            .frame(width: 32, height: 32)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Magnetic Tab Clusters")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(isOn ? Palette.textPrimary : Palette.textSecondary)
+                Text("When you drop two same-site tabs together, other tabs from that site fall into the new group automatically.")
                     .font(.system(size: 11, weight: .medium))
                     .foregroundStyle(Palette.textMuted)
                     .fixedSize(horizontal: false, vertical: true)

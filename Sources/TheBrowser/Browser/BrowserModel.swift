@@ -4,6 +4,7 @@ import Foundation
 @MainActor
 final class BrowserModel: ObservableObject {
     @Published var tabs: [BrowserTab]
+    @Published var clusters: [TabCluster] = []
     @Published var selectedTabID: BrowserTab.ID
     @Published var isTabRailVisible = true
     @Published var isChatVisible = true
@@ -72,9 +73,13 @@ final class BrowserModel: ObservableObject {
             return
         }
 
+        let leavingClusterID = tab.clusterID
         tabs.remove(at: closingIndex)
         tab.setNewWindowHandler(nil)
         tabChangeCancellables[tab.id] = nil
+        if let leavingClusterID {
+            collapseClusterIfTooSmall(leavingClusterID)
+        }
 
         if wasSelected {
             let nextIndex = min(closingIndex, tabs.count - 1)
@@ -244,5 +249,195 @@ final class BrowserModel: ObservableObject {
                 self?.objectWillChange.send()
             }
         }
+    }
+}
+
+// MARK: - Tab clustering
+
+@MainActor
+extension BrowserModel {
+    /// All tabs belonging to a cluster, in their current rail order.
+    func tabs(in clusterID: UUID) -> [BrowserTab] {
+        tabs.filter { $0.clusterID == clusterID }
+    }
+
+    /// Lookup helper for views — UUID → cluster.
+    func cluster(id: UUID) -> TabCluster? {
+        clusters.first(where: { $0.id == id })
+    }
+
+    /// Tap-to-collapse on a cluster header. The toggle lives on the model
+    /// rather than each view so all rail copies (peek overlay, rail proper)
+    /// stay synchronized.
+    func toggleClusterExpansion(_ clusterID: UUID) {
+        guard let index = clusters.firstIndex(where: { $0.id == clusterID }) else { return }
+        clusters[index].isExpanded.toggle()
+    }
+
+    /// Renames an existing cluster from the cluster row's inline editor.
+    /// Empty strings are rejected so the header never becomes invisible.
+    func renameCluster(_ clusterID: UUID, to name: String) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              let index = clusters.firstIndex(where: { $0.id == clusterID }) else { return }
+        clusters[index].name = trimmed
+    }
+
+    /// Drag-to-merge entrypoint. `source` is the tab being dragged, `target`
+    /// the row it was dropped on. Both inputs come from the rail; the model
+    /// is responsible for choosing whether to extend an existing cluster or
+    /// mint a new one, and for keeping cluster members contiguous in `tabs`.
+    ///
+    /// Magnetic mode kicks in only when a brand-new cluster forms from two
+    /// tabs that share a host — that's the moment the user "declared the
+    /// group's identity", so other matching same-host tabs adjacent to it
+    /// get pulled in too.
+    @discardableResult
+    func mergeTabs(source: BrowserTab, into target: BrowserTab, magneticEnabled: Bool) -> UUID? {
+        guard source.id != target.id else { return target.clusterID }
+
+        if let targetClusterID = target.clusterID {
+            attach(source, to: targetClusterID)
+            return targetClusterID
+        }
+
+        if let sourceClusterID = source.clusterID {
+            attach(target, to: sourceClusterID)
+            return sourceClusterID
+        }
+
+        // The target acts as the anchor — drag-and-drop puts the dragged
+        // tab onto the dropped one, so the resulting cluster identifies
+        // with the target's host.
+        let host = target.clusterHost ?? source.clusterHost ?? ""
+        let name = host.isEmpty ? "Group" : TabCluster.displayName(forHost: host)
+        let cluster = TabCluster(host: host, name: name)
+        clusters.append(cluster)
+
+        source.isPinned = false
+        target.isPinned = false
+        source.clusterID = cluster.id
+        target.clusterID = cluster.id
+        placeAdjacent(source: source, target: target)
+
+        if magneticEnabled, source.clusterHost == target.clusterHost, source.clusterHost != nil {
+            absorbAdjacentMatches(for: cluster.id)
+        }
+        return cluster.id
+    }
+
+    /// Drops a tab into a specific cluster. Used by drops on the cluster
+    /// header itself (vs. dropping on a tab row).
+    func attach(_ tab: BrowserTab, to clusterID: UUID) {
+        guard clusters.contains(where: { $0.id == clusterID }) else { return }
+        guard tab.clusterID != clusterID else { return }
+        // `clusterID` is published on `BrowserTab`, not the model, so we
+        // hand-fire the model's publisher to make sure ``railItems`` —
+        // which reads `tab.clusterID` — gets recomputed even if the array
+        // mutation below short-circuits (e.g., tab already in position).
+        objectWillChange.send()
+        let previousCluster = tab.clusterID
+        tab.isPinned = false
+        tab.clusterID = clusterID
+        moveTabToEndOfCluster(tab, clusterID: clusterID)
+        if let previousCluster {
+            collapseClusterIfTooSmall(previousCluster)
+        }
+    }
+
+    /// Removes a tab from its cluster without closing the tab. Currently
+    /// reached via the cluster-row context menu / "ungroup" affordance.
+    func detach(_ tab: BrowserTab) {
+        guard let clusterID = tab.clusterID else { return }
+        // Cluster-id mutations live on the tab, not the model — nudge so
+        // the rail recomputes even when the cluster still has ≥2 members
+        // after this detach (no `clusters` array mutation triggers it).
+        objectWillChange.send()
+        tab.clusterID = nil
+        collapseClusterIfTooSmall(clusterID)
+    }
+
+    /// Dissolves a cluster (preserving the underlying tabs as loose rows).
+    func dissolveCluster(_ clusterID: UUID) {
+        objectWillChange.send()
+        for tab in tabs where tab.clusterID == clusterID {
+            tab.clusterID = nil
+        }
+        clusters.removeAll { $0.id == clusterID }
+    }
+
+    /// Closes every tab inside a cluster. Mirrors `close(_:)` for safety
+    /// when the cluster contains the only remaining tab.
+    func closeCluster(_ clusterID: UUID) {
+        let members = tabs.filter { $0.clusterID == clusterID }
+        for tab in members {
+            close(tab)
+        }
+        clusters.removeAll { $0.id == clusterID }
+    }
+
+    // MARK: - Private helpers
+
+    /// Places `source` immediately after `target` in `tabs` so the rail
+    /// renders the two as adjacent rows inside the freshly-minted cluster.
+    /// The captured target index needs adjustment when the source was
+    /// originally before the target — pulling it out shifts the target
+    /// down by one, so the "right-after-target" insertion has to compensate.
+    private func placeAdjacent(source: BrowserTab, target: BrowserTab) {
+        guard let targetIndex = tabs.firstIndex(where: { $0.id == target.id }),
+              let sourceIndex = tabs.firstIndex(where: { $0.id == source.id }) else { return }
+        tabs.removeAll { $0.id == source.id }
+        let adjustedTarget = sourceIndex < targetIndex ? targetIndex - 1 : targetIndex
+        let insertionIndex = min(adjustedTarget + 1, tabs.count)
+        tabs.insert(source, at: insertionIndex)
+    }
+
+    /// Moves `tab` to sit right after the last existing cluster member so
+    /// rail items stay contiguous.
+    private func moveTabToEndOfCluster(_ tab: BrowserTab, clusterID: UUID) {
+        guard let lastClusterIndex = tabs.lastIndex(where: { $0.clusterID == clusterID && $0.id != tab.id }) else { return }
+        guard let currentIndex = tabs.firstIndex(where: { $0.id == tab.id }) else { return }
+        if currentIndex == lastClusterIndex + 1 { return }
+        let toMove = tabs.remove(at: currentIndex)
+        let targetIndex = tabs.lastIndex(where: { $0.clusterID == clusterID }).map { $0 + 1 } ?? tabs.count
+        tabs.insert(toMove, at: min(targetIndex, tabs.count))
+    }
+
+    /// "Magnetic" pass run once at cluster birth. Vacuums every loose tab
+    /// in the rail that shares the cluster's host into the cluster, then
+    /// re-anchors them to sit contiguously around the existing members so
+    /// the rail reads as one tidy group. Tabs that already belong to a
+    /// different cluster, or that are pinned, are left alone.
+    private func absorbAdjacentMatches(for clusterID: UUID) {
+        guard let cluster = self.cluster(id: clusterID) else { return }
+        let host = cluster.host
+        guard !host.isEmpty else { return }
+
+        let absorbing = tabs.filter { tab in
+            tab.clusterID == nil && !tab.isPinned && tab.clusterHost == host
+        }
+        guard !absorbing.isEmpty else { return }
+
+        for tab in absorbing {
+            tab.clusterID = clusterID
+        }
+
+        // Re-pack: move every cluster member to sit in one contiguous run
+        // starting at the position of the original first cluster tab.
+        let anchorIndex = tabs.firstIndex(where: { $0.clusterID == clusterID }) ?? tabs.count
+        let members = tabs.filter { $0.clusterID == clusterID }
+        tabs.removeAll { $0.clusterID == clusterID }
+        let clampedAnchor = min(anchorIndex, tabs.count)
+        tabs.insert(contentsOf: members, at: clampedAnchor)
+    }
+
+    /// A cluster with fewer than 2 members offers nothing over a loose
+    /// tab, so we dissolve it back into singletons when membership dips
+    /// below 2 (e.g., closing one of two cluster tabs).
+    private func collapseClusterIfTooSmall(_ clusterID: UUID) {
+        let remaining = tabs.filter { $0.clusterID == clusterID }
+        if remaining.count >= 2 { return }
+        for tab in remaining { tab.clusterID = nil }
+        clusters.removeAll { $0.id == clusterID }
     }
 }
