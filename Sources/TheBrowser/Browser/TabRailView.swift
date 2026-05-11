@@ -55,10 +55,18 @@ struct TabRailView: View {
 
     // MARK: - Tab list
 
+    /// Pinned tabs always lead, preserving original insertion order within
+    /// each group. Mirrors how Safari/Chrome stack their pinned strip.
+    private var orderedTabs: [BrowserTab] {
+        let pinned = model.tabs.filter { $0.isPinned }
+        let rest = model.tabs.filter { !$0.isPinned }
+        return pinned + rest
+    }
+
     private var tabList: some View {
         ScrollView {
             LazyVStack(spacing: 2) {
-                ForEach(model.tabs) { tab in
+                ForEach(orderedTabs) { tab in
                     TabRow(
                         tab: tab,
                         selected: tab.id == model.selectedTabID,
@@ -254,6 +262,13 @@ private struct TabRow: View {
                 .foregroundStyle(selected ? Palette.textPrimary : Palette.textSecondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
+
+            if tab.isPinned {
+                Image(systemName: "pin.fill")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Palette.textMuted)
+                    .rotationEffect(.degrees(45))
+            }
 
             Spacer(minLength: 4)
 

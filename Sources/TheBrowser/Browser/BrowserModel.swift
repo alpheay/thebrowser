@@ -38,6 +38,23 @@ final class BrowserModel: ObservableObject {
         select(tab)
     }
 
+    /// Opens `url` in a freshly created tab. The new tab is appended to the
+    /// list (pinned tabs always lead in the rail via ``TabRailView``'s sort).
+    /// Set `background` to keep the current tab selected. Set `pinned` to
+    /// mark the new tab as pinned — used by Hover Preview's "Pin" footer.
+    func openInNewTab(url: URL, background: Bool = false, pinned: Bool = false) {
+        let tab = BrowserTab()
+        tab.isPinned = pinned
+        tabs.append(tab)
+        if !background {
+            select(tab)
+        }
+        tab.navigate(to: url.absoluteString)
+        if !background {
+            updateAddressFromSelectedTab()
+        }
+    }
+
     func close(_ tab: BrowserTab) {
         guard tabs.count > 1 else {
             tab.goHome()
