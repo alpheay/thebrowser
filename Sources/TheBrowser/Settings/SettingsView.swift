@@ -20,6 +20,7 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.closeTabShortcut) private var closeTabShortcut = "command+w"
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
     @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "command+shift+r"
+    @AppStorage(PreferenceKey.readerModeShortcut) private var readerModeShortcut = "command+r"
 
     @State private var selectedTab: SettingsTab = .general
     @State private var showClearAllConfirm = false
@@ -220,6 +221,9 @@ struct SettingsView: View {
                 row(label: "Focus address") { ShortcutRecorder(value: $focusAddressShortcut) }
                 row(label: "Smart Read", help: "Summarizes the current website near your cursor.") {
                     ShortcutRecorder(value: $smartReadShortcut)
+                }
+                row(label: "Reader Mode", help: "Transforms the current article into a clean, matte-white reading view.") {
+                    ShortcutRecorder(value: $readerModeShortcut)
                 }
             }
         }

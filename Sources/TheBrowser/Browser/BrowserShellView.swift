@@ -6,6 +6,7 @@ struct BrowserShellView: View {
     @StateObject private var chatModel = ChatViewModel()
     @StateObject private var selectionWidget = TextSelectionWidgetModel()
     @StateObject private var smartReadModel = SmartReadModel()
+    @StateObject private var readerModel = ReaderModeModel()
 
     @AppStorage(PreferenceKey.toggleChatShortcut) private var toggleChatShortcut = "command+j"
     @AppStorage(PreferenceKey.toggleTabsShortcut) private var toggleTabsShortcut = "command+b"
@@ -13,6 +14,7 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.closeTabShortcut) private var closeTabShortcut = "command+w"
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
     @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "command+shift+r"
+    @AppStorage(PreferenceKey.readerModeShortcut) private var readerModeShortcut = "command+r"
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
 
     @State private var isPeekingRail = false
@@ -129,6 +131,9 @@ struct BrowserShellView: View {
         .background(Palette.bg)
         .onChange(of: model.selectedTabID) { _, _ in
             model.updateAddressFromSelectedTab()
+            if readerModel.isPresented {
+                readerModel.close()
+            }
         }
         .onAppear {
             guard !migrationPromptCompleted else { return }
@@ -154,7 +159,9 @@ struct BrowserShellView: View {
                 model: model,
                 selectedTab: model.selectedTab,
                 reservesTrafficLightGutter: !model.isTabRailVisible,
-                onSmartRead: triggerSmartRead
+                readerActive: readerModel.isPresented,
+                onSmartRead: triggerSmartRead,
+                onReaderMode: triggerReaderMode
             )
 
             ZStack {
@@ -191,9 +198,25 @@ struct BrowserShellView: View {
                         }
                         .padding(.horizontal, Metrics.webviewInset)
                         .padding(.bottom, Metrics.webviewInset)
+
+                    if readerModel.isPresented {
+                        ReaderModeView(
+                            model: readerModel,
+                            onOpenLink: { url in
+                                readerModel.close()
+                                model.addressDraft = url.absoluteString
+                                model.navigateSelected(to: url.absoluteString)
+                            }
+                        )
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .offset(y: 6)),
+                            removal: .opacity
+                        ))
+                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .animation(Motion.springSnap, value: readerModel.isPresented)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
@@ -227,6 +250,16 @@ struct BrowserShellView: View {
         }
         withAnimation(Motion.springSnap) {
             smartReadModel.start(tab: model.selectedTab)
+        }
+    }
+
+    /// Toggles Reader Mode for the current tab. Replaces the web view with a
+    /// matte-white, serif-typeset article extracted from the page. Idempotent
+    /// — invoking again while open closes Reader Mode.
+    private func triggerReaderMode() {
+        guard model.selectedTab.isSmartReadEligible else { return }
+        withAnimation(Motion.springSnap) {
+            readerModel.toggle(tab: model.selectedTab)
         }
     }
 
@@ -274,7 +307,8 @@ struct BrowserShellView: View {
             focusAddressShortcut: {
                 model.focusAddress()
             },
-            smartReadShortcut: triggerSmartRead
+            smartReadShortcut: triggerSmartRead,
+            readerModeShortcut: triggerReaderMode
         ]
     }
 }
