@@ -36,6 +36,59 @@ enum PreferenceKey {
     static let clipboardCitationStyle = "clipboard.citationStyle"
     static let clipboardBlocklist = "clipboard.blocklist"
     static let clipboardAppOverrides = "clipboard.appOverrides"
+    static let hoverPreviewEnabled = "hoverPreview.enabled"
+    static let hoverPreviewModifier = "hoverPreview.modifier"
+    static let hoverPreviewDelayMs = "hoverPreview.hoverDelayMs"
+    static let hoverPreviewPrefetchDelayMs = "hoverPreview.prefetchDelayMs"
+    static let hoverPreviewPrefetchBlocklist = "hoverPreview.prefetchBlocklist"
+}
+
+/// Modifier choices for Hover Preview. Raw values are stored in
+/// `UserDefaults` so the value survives across upgrades; the displayed glyph
+/// (⌘ / ⌥ / ⇧) is derived in the UI.
+enum HoverPreviewModifier: String, CaseIterable, Identifiable, Sendable {
+    case command
+    case option
+    case shift
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .command: "⌘ Command"
+        case .option: "⌥ Option"
+        case .shift: "⇧ Shift"
+        }
+    }
+
+    var glyph: String {
+        switch self {
+        case .command: "⌘"
+        case .option: "⌥"
+        case .shift: "⇧"
+        }
+    }
+
+    /// Property name on a DOM `MouseEvent` / `KeyboardEvent` that's `true` when
+    /// this modifier is held — used by the link-hover JS to test modifier
+    /// state without a Swift round-trip.
+    var domEventProperty: String {
+        switch self {
+        case .command: "metaKey"
+        case .option: "altKey"
+        case .shift: "shiftKey"
+        }
+    }
+
+    /// Lowercased `event.key` values that correspond to this modifier on
+    /// keyboard events. Mac sends "Meta" for both Command keys.
+    var domKeyNames: [String] {
+        switch self {
+        case .command: ["meta"]
+        case .option: ["alt"]
+        case .shift: ["shift"]
+        }
+    }
 }
 
 enum AppDefaults {
@@ -77,7 +130,12 @@ enum AppDefaults {
             PreferenceKey.clipboardMarkdownStyle: CitedMarkdownStyle.blockquote.rawValue,
             PreferenceKey.clipboardCitationStyle: CitedCitationStyle.bracketed.rawValue,
             PreferenceKey.clipboardBlocklist: CitedClipboardPolicy.defaultBlocklistString,
-            PreferenceKey.clipboardAppOverrides: ""
+            PreferenceKey.clipboardAppOverrides: "",
+            PreferenceKey.hoverPreviewEnabled: true,
+            PreferenceKey.hoverPreviewModifier: HoverPreviewModifier.command.rawValue,
+            PreferenceKey.hoverPreviewDelayMs: 200,
+            PreferenceKey.hoverPreviewPrefetchDelayMs: 800,
+            PreferenceKey.hoverPreviewPrefetchBlocklist: ""
         ])
     }
 

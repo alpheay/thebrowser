@@ -15,18 +15,26 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var searchPage: BrowserSearchPage?
     @Published var searchReloadToken = 0
     @Published var selectionInfo: TextSelectionInfo?
+    @Published var isPinned = false
 
     let webView: WKWebView
     private var observations: [NSKeyValueObservation] = []
     private var searchBackStack: [BrowserSearchPage] = []
     private let selectionBridge: TextSelectionBridge
     private let citedClipboardBridge: CitedClipboardBridge
+    private let linkHoverBridge: LinkHoverBridge
 
     /// Cited Clipboard capture gate. Returns false for tabs that should
     /// never feed the clipboard log — currently only the placeholder for
     /// future incognito mode, since ``BrowserTab`` doesn't yet have an
     /// incognito flag. When incognito ships, flip this off for those tabs.
     var allowsClipboardCapture: Bool { true }
+
+    /// Subscribers (the shell-level ``HoverPreviewModel``) get every hover
+    /// observation from this tab's web content. Weakly referenced — the
+    /// shell owns the model.
+    typealias LinkHoverListener = @MainActor (BrowserTab, LinkHoverInfo) -> Void
+    private var linkHoverListener: LinkHoverListener?
 
     /// User agent used for both browsing tabs and the in-app Google sign-in
     /// sheet. WKWebView's default UA omits the `Version/X Safari/Y` suffix,
@@ -43,6 +51,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         selectionBridge = bridge
         let citedBridge = CitedClipboardBridge()
         citedClipboardBridge = citedBridge
+        let hoverBridge = LinkHoverBridge()
+        linkHoverBridge = hoverBridge
 
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
@@ -51,8 +61,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         configuration.userContentController.addUserScript(Self.unsupportedBrowserBannerKillerScript)
         configuration.userContentController.addUserScript(Self.textSelectionUserScript)
         configuration.userContentController.addUserScript(CitedClipboardScript.userScript)
+        configuration.userContentController.addUserScript(Self.makeLinkHoverUserScript())
         configuration.userContentController.add(bridge, name: TextSelectionBridge.messageName)
         configuration.userContentController.add(citedBridge, name: CitedClipboardBridge.messageName)
+        configuration.userContentController.add(hoverBridge, name: LinkHoverBridge.messageName)
         webView = WKWebView(frame: .zero, configuration: configuration)
         webView.customUserAgent = Self.userAgent
         webView.allowsBackForwardNavigationGestures = true
@@ -63,8 +75,31 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
         bridge.tab = self
         citedBridge.tab = self
+        hoverBridge.tab = self
         webView.navigationDelegate = self
         observeWebView()
+    }
+
+    /// Registers (or clears) the shell-level listener that receives every
+    /// link-hover observation from this tab. The shell uses this to drive
+    /// the floating preview panel — a tab can only have one listener at a
+    /// time, which matches the "one active preview" UX.
+    func setLinkHoverListener(_ listener: LinkHoverListener?) {
+        linkHoverListener = listener
+    }
+
+    func applyLinkHover(_ info: LinkHoverInfo) {
+        linkHoverListener?(self, info)
+    }
+
+    /// Pushes the new enabled state into the live JS without reloading the
+    /// page. Other Hover Preview settings (modifier, delays) are baked into
+    /// the user script at tab creation; open new tabs to apply those.
+    func updateHoverPreviewEnabled(_ enabled: Bool) {
+        webView.evaluateJavaScript(
+            "window.__theBrowserHoverPreview && window.__theBrowserHoverPreview.setEnabled(\(enabled ? "true" : "false"));",
+            completionHandler: nil
+        )
     }
 
     func applySelectionInfo(_ info: TextSelectionInfo?) {
