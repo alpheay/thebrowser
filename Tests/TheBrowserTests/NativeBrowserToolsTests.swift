@@ -229,4 +229,16 @@ struct NativeBrowserToolsTests {
         let long = String(repeating: "a", count: 200)
         #expect(ArtifactStore.slug(from: long).count <= 60)
     }
+
+    @Test("BrowserTab.artifactAlias renders friendly URL-bar labels for artifacts")
+    func artifactAlias() {
+        let stamped = URL(fileURLWithPath: "/Users/test/.thebrowser/web_artifacts/2026-05-10_23-54-50_georgia-institute-of-technology-school.html")
+        #expect(BrowserTab.artifactAlias(for: stamped) == "Artifact · Georgia Institute Of Technology School")
+
+        let singleWord = URL(fileURLWithPath: "/tmp/2026-01-01_00-00-00_overview.html")
+        #expect(BrowserTab.artifactAlias(for: singleWord) == "Artifact · Overview")
+
+        let noTimestamp = URL(fileURLWithPath: "/tmp/loose-file.html")
+        #expect(BrowserTab.artifactAlias(for: noTimestamp) == "Artifact · Loose File")
+    }
 }
