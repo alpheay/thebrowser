@@ -136,7 +136,7 @@ struct AIAnswerView: View {
         }
     }
 
-    static func citedIndices(in text: String, max upperBound: Int) -> [Int] {
+    nonisolated static func citedIndices(in text: String, max upperBound: Int) -> [Int] {
         guard upperBound > 0 else { return [] }
         let pattern = #"\[(\d+)\]"#
         guard let regex = try? NSRegularExpression(pattern: pattern) else { return [] }
