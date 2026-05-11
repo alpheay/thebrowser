@@ -326,72 +326,6 @@ struct NativeBrowserToolExecutor {
             return await createArtifact(call)
         }
     }
-
-    private func open(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
-        guard let url = NativeBrowserToolURL.url(from: call.rawInput) else {
-            return NativeBrowserToolResult(call: call, succeeded: false, content: "Invalid URL: \(call.rawInput)")
-        }
-
-        await MainActor.run {
-            openURL(url)
-        }
-
-        return NativeBrowserToolResult(call: call, succeeded: true, content: "Opened \(url.absoluteString) in the current tab.")
-    }
-
-    private func search(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
-        let query = call.rawInput
-        do {
-            let response = try await SearchResultsClient.search(query: query)
-            return NativeBrowserToolResult(
-                call: call,
-                succeeded: true,
-                content: NativeBrowserToolFormatter.searchResults(response, query: query)
-            )
-        } catch {
-            return NativeBrowserToolResult(call: call, succeeded: false, content: "Search failed: \(error.localizedDescription)")
-        }
-    }
-
-    private func fetch(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
-        guard let url = NativeBrowserToolURL.url(from: call.rawInput) else {
-            return NativeBrowserToolResult(call: call, succeeded: false, content: "Invalid URL: \(call.rawInput)")
-        }
-
-        do {
-            let page = try await NativeBrowserFetcher.fetch(url: url)
-            return NativeBrowserToolResult(call: call, succeeded: true, content: page)
-        } catch {
-            return NativeBrowserToolResult(call: call, succeeded: false, content: "Fetch failed for \(url.absoluteString): \(error.localizedDescription)")
-        }
-    }
-
-    private func readTabs(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
-        let content = await readTabsContent(call.indices)
-        return NativeBrowserToolResult(call: call, succeeded: true, content: content)
-    }
-
-    private func createArtifact(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
-        guard let html = call.html, !html.isEmpty else {
-            return NativeBrowserToolResult(call: call, succeeded: false, content: "create_artifact requires an `html` field with the full document body.")
-        }
-        let title = call.title?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty ?? "Artifact"
-        do {
-            let url = try await saveAndOpenArtifact(title, html)
-            return NativeBrowserToolResult(
-                call: call,
-                succeeded: true,
-                content: "Artifact saved to \(url.path) and opened in a new tab.",
-                artifactURL: url
-            )
-        } catch {
-            return NativeBrowserToolResult(
-                call: call,
-                succeeded: false,
-                content: "Failed to save artifact: \(error.localizedDescription)"
-            )
-        }
-    }
 }
 
 enum NativeBrowserToolPrompt {
@@ -447,7 +381,7 @@ enum NativeBrowserToolPrompt {
     }
 }
 
-private enum NativeBrowserToolURL {
+enum NativeBrowserToolURL {
     static func url(from rawValue: String) -> URL? {
         guard let url = AddressResolver.url(for: rawValue),
               ["http", "https"].contains(url.scheme?.lowercased() ?? "")
@@ -458,167 +392,9 @@ private enum NativeBrowserToolURL {
     }
 }
 
-private enum NativeBrowserToolFormatter {
-    static func searchResults(_ response: SearchResponse, query: String) -> String {
-        var lines: [String] = []
-        lines.append("Query: \(query)")
-        lines.append("Provider: \(response.providerName)")
-
-        if let answer = response.instantAnswer {
-            lines.append("")
-            lines.append("Instant answer: \(answer.title)")
-            lines.append(answer.text)
-            if let url = answer.url {
-                lines.append("URL: \(url.absoluteString)")
-            }
-        }
-
-        let results = Array(response.results.prefix(6))
-        if results.isEmpty {
-            lines.append("")
-            lines.append("No search results found.")
-        } else {
-            lines.append("")
-            lines.append("Results:")
-            for (index, result) in results.enumerated() {
-                lines.append("\(index + 1). \(result.title)")
-                lines.append("URL: \(result.url.absoluteString)")
-                if !result.snippet.isEmpty {
-                    lines.append("Snippet: \(result.snippet)")
-                }
-            }
-        }
-
-        return lines.joined(separator: "\n")
-    }
-}
-
-private enum NativeBrowserFetcher {
-    static func fetch(url: URL) async throws -> String {
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 15
-        request.setValue("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Safari/605.1.15", forHTTPHeaderField: "User-Agent")
-        request.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5", forHTTPHeaderField: "Accept")
-
-        let (data, response) = try await URLSession.shared.data(for: request)
-        if let httpResponse = response as? HTTPURLResponse, !(200..<300).contains(httpResponse.statusCode) {
-            throw NativeBrowserFetchError.badStatus(httpResponse.statusCode)
-        }
-
-        let contentType = (response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") ?? ""
-        let raw = String(data: data, encoding: .utf8)
-            ?? String(data: data, encoding: .isoLatin1)
-            ?? ""
-
-        let text = NativeBrowserFetchText.text(from: raw, contentType: contentType)
-        guard !text.isEmpty else {
-            throw NativeBrowserFetchError.emptyText
-        }
-
-        return """
-        URL: \(url.absoluteString)
-        Content type: \(contentType.isEmpty ? "unknown" : contentType)
-        Text:
-        \(String(text.prefix(8_000)))
-        """
-    }
-}
-
-private enum NativeBrowserFetchError: LocalizedError {
-    case badStatus(Int)
-    case emptyText
-
-    var errorDescription: String? {
-        switch self {
-        case .badStatus(let status):
-            return "HTTP \(status)"
-        case .emptyText:
-            return "No readable text was found."
-        }
-    }
-}
-
-private enum NativeBrowserFetchText {
-    static func text(from raw: String, contentType: String) -> String {
-        if contentType.localizedCaseInsensitiveContains("html") || raw.localizedCaseInsensitiveContains("<html") {
-            return htmlText(from: raw)
-        }
-
-        return collapsedWhitespace(raw)
-    }
-
-    private static func htmlText(from html: String) -> String {
-        var output = html
-        output = output.replacingOccurrences(of: #"(?is)<script\b[^>]*>.*?</script>"#, with: " ", options: .regularExpression)
-        output = output.replacingOccurrences(of: #"(?is)<style\b[^>]*>.*?</style>"#, with: " ", options: .regularExpression)
-        output = output.replacingOccurrences(of: #"(?is)<noscript\b[^>]*>.*?</noscript>"#, with: " ", options: .regularExpression)
-        output = output.replacingOccurrences(of: #"(?i)<br\s*/?>"#, with: "\n", options: .regularExpression)
-        output = output.replacingOccurrences(of: #"(?i)</p>|</div>|</li>|</h[1-6]>"#, with: "\n", options: .regularExpression)
-        output = output.replacingOccurrences(of: #"<[^>]+>"#, with: " ", options: .regularExpression)
-        return collapsedWhitespace(htmlDecoded(output))
-    }
-
-    private static func collapsedWhitespace(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: #"[ \t\r\f]+"#, with: " ", options: .regularExpression)
-            .replacingOccurrences(of: #"\n\s*\n+"#, with: "\n\n", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    private static func htmlDecoded(_ value: String) -> String {
-        var output = value
-        let namedEntities = [
-            "&amp;": "&",
-            "&quot;": "\"",
-            "&#x27;": "'",
-            "&#39;": "'",
-            "&apos;": "'",
-            "&lt;": "<",
-            "&gt;": ">",
-            "&nbsp;": " "
-        ]
-
-        for (entity, replacement) in namedEntities {
-            output = output.replacingOccurrences(of: entity, with: replacement)
-        }
-
-        output = replacingNumericEntities(in: output, pattern: #"&#x([0-9A-Fa-f]+);"#, radix: 16)
-        output = replacingNumericEntities(in: output, pattern: #"&#([0-9]+);"#, radix: 10)
-        return output
-    }
-
-    private static func replacingNumericEntities(in value: String, pattern: String, radix: Int) -> String {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return value
-        }
-
-        var output = value
-        let matches = regex.matches(in: output, range: NSRange(output.startIndex..<output.endIndex, in: output))
-
-        for match in matches.reversed() {
-            guard
-                let entityRange = Range(match.range(at: 0), in: output),
-                let numberRange = Range(match.range(at: 1), in: output),
-                let value = UInt32(output[numberRange], radix: radix),
-                let scalar = UnicodeScalar(value)
-            else {
-                continue
-            }
-
-            output.replaceSubrange(entityRange, with: String(Character(scalar)))
-        }
-
-        return output
-    }
-}
-
 private extension Array where Element: Hashable {
     func removingDuplicates() -> [Element] {
         var seen = Set<Element>()
         return filter { seen.insert($0).inserted }
     }
-}
-
-private extension String {
-    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
