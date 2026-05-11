@@ -10,10 +10,22 @@ final class BrowserModel: ObservableObject {
     @Published var addressFocusToken = 0
     @Published var webControlStatus: WebControlStatus?
 
+    /// Cadence (seconds) at which the background sweep walks the tab list
+    /// and hibernates anything past the idle threshold. Sixty seconds is
+    /// short enough that a 30-minute setting feels exact and long enough
+    /// that the sweep itself is invisible.
+    private static let hibernationSweepInterval: UInt64 = 60_000_000_000
+    private var hibernationSweepTask: Task<Void, Never>?
+
     init() {
         let firstTab = BrowserTab()
         tabs = [firstTab]
         selectedTabID = firstTab.id
+        startHibernationSweep()
+    }
+
+    deinit {
+        hibernationSweepTask?.cancel()
     }
 
     var selectedTab: BrowserTab {
@@ -29,7 +41,20 @@ final class BrowserModel: ObservableObject {
     }
 
     func select(_ tab: BrowserTab) {
+        // Stamp the outgoing tab's last-active timestamp so the idle
+        // window starts now, not the moment it was first opened.
+        if let outgoing = tabs.first(where: { $0.id == selectedTabID }), outgoing.id != tab.id {
+            outgoing.lastActiveAt = Date()
+        }
         selectedTabID = tab.id
+        tab.lastActiveAt = Date()
+        if tab.isHibernated {
+            // `webView` is a lazy property — touching it rebuilds the
+            // stack and reloads the URL. We don't keep a reference; the
+            // BrowserTabContent that SwiftUI re-creates after this state
+            // change will fetch the fresh view.
+            _ = tab.webView
+        }
         addressDraft = tab.displayAddress
     }
 
@@ -213,6 +238,35 @@ final class BrowserModel: ObservableObject {
             sessionDirectory: sessionDirectory
         ) { [weak self] status in
             self?.webControlStatus = status
+        }
+    }
+
+    // MARK: - Tab hibernation
+
+    /// Drops the WKWebView for any background tab that's been idle longer
+    /// than the configured threshold. The tab row, its title/URL/favicon,
+    /// and its Smart Read card all survive — clicking the row resurrects
+    /// the tab and reloads the page. Selected, pinned-and-fresh, and
+    /// non-navigable tabs are skipped.
+    func hibernateIdleTabs(now: Date = Date()) {
+        let minutes = UserDefaults.standard.integer(forKey: PreferenceKey.tabHibernationMinutes)
+        guard minutes > 0 else { return }
+        let cutoff = now.addingTimeInterval(-Double(minutes) * 60)
+        for tab in tabs where tab.id != selectedTabID && !tab.isHibernated {
+            if tab.lastActiveAt < cutoff {
+                tab.hibernate()
+            }
+        }
+    }
+
+    private func startHibernationSweep() {
+        hibernationSweepTask?.cancel()
+        hibernationSweepTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: BrowserModel.hibernationSweepInterval)
+                guard !Task.isCancelled else { return }
+                self?.hibernateIdleTabs()
+            }
         }
     }
 }

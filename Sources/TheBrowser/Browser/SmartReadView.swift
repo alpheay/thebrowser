@@ -23,22 +23,55 @@ final class SmartReadModel: ObservableObject {
     @Published var phase: Phase = .idle
 
     private var task: Task<Void, Never>?
+    private weak var loadingTab: BrowserTab?
+    private weak var boundTab: BrowserTab?
+
+    /// Mirrors the model's published state to whichever tab is currently
+    /// selected. Called by the shell on every tab switch — the outgoing
+    /// tab's state was already mirrored on every mutation, so this only
+    /// has to *load* the incoming tab's saved Smart Read state. Pass nil
+    /// when no tab is selected (shouldn't happen in practice).
+    func bind(to tab: BrowserTab?) {
+        boundTab = tab
+        guard let tab else {
+            isPresented = false
+            phase = .idle
+            return
+        }
+        isPresented = tab.smartReadIsPresented
+        phase = tab.smartReadPhase
+    }
 
     func start(tab: BrowserTab) {
         guard tab.isSmartReadEligible else {
             return
         }
 
+        // Only one load at a time. If another tab was mid-load, reset it
+        // to idle so the user doesn't come back to a stuck spinner.
+        if let previous = loadingTab, previous !== tab,
+           case .loading = previous.smartReadPhase {
+            previous.smartReadIsPresented = false
+            previous.smartReadPhase = .idle
+        }
         task?.cancel()
+        loadingTab = tab
+        boundTab = tab
+
+        let loadingPhase = Phase.loading(title: tab.displayTitle)
+        tab.smartReadIsPresented = true
+        tab.smartReadPhase = loadingPhase
         isPresented = true
-        phase = .loading(title: tab.displayTitle)
+        phase = loadingPhase
 
         task = Task { [weak self, weak tab] in
             guard let self, let tab else { return }
             guard let page = await tab.extractReadablePage() else {
-                self.phase = .failed("This page does not expose enough readable text for Smart Read.")
+                guard !Task.isCancelled else { return }
+                self.apply(.failed("This page does not expose enough readable text for Smart Read."), to: tab)
                 return
             }
+            guard !Task.isCancelled else { return }
 
             let pageText = page.text
             let wordCount = page.wordCount
@@ -55,18 +88,33 @@ final class SmartReadModel: ObservableObject {
                     wordCount: wordCount
                 )
                 guard !Task.isCancelled else { return }
-                self.phase = .loaded(summary)
+                self.apply(.loaded(summary), to: tab)
             } catch {
                 guard !Task.isCancelled else { return }
                 let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                self.phase = .failed(message)
+                self.apply(.failed(message), to: tab)
             }
+        }
+    }
+
+    /// Writes a phase transition through to the tab — so it survives
+    /// hibernation and tab switches — and only updates the model's
+    /// surface if that tab is still the bound (currently selected) one.
+    private func apply(_ newPhase: Phase, to tab: BrowserTab) {
+        tab.smartReadPhase = newPhase
+        tab.smartReadIsPresented = true
+        if tab === boundTab {
+            phase = newPhase
+            isPresented = true
         }
     }
 
     func close() {
         task?.cancel()
         task = nil
+        loadingTab = nil
+        boundTab?.smartReadIsPresented = false
+        boundTab?.smartReadPhase = .idle
         isPresented = false
         phase = .idle
     }

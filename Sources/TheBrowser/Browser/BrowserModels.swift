@@ -23,12 +23,30 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// new navigation so HTML pages render through the WKWebView path.
     @Published var pdfDocument: PDFDocument?
 
-    let webView: WKWebView
+    /// True once the tab's WKWebView has been freed to reclaim memory. The
+    /// tab's metadata (title, URL, favicon) and Smart Read state survive,
+    /// so the rail row still renders. Accessing ``webView`` on a hibernated
+    /// tab transparently resurrects it and reloads the previous URL.
+    @Published private(set) var isHibernated = false
+
+    /// Smart Read state pinned to the tab so it survives hibernation. The
+    /// shell-level ``SmartReadModel`` mirrors these two properties for the
+    /// currently selected tab — see ``SmartReadModel/bind(to:)``.
+    @Published var smartReadIsPresented = false
+    @Published var smartReadPhase: SmartReadModel.Phase = .idle
+
+    /// Wall-clock timestamp of the last time the user interacted with this
+    /// tab (either selected it or had it selected when something else was
+    /// chosen). The hibernation scheduler in ``BrowserModel`` compares this
+    /// against the configured idle threshold.
+    var lastActiveAt = Date()
+
+    private var _webView: WKWebView?
     private var observations: [NSKeyValueObservation] = []
     private var searchBackStack: [BrowserSearchPage] = []
-    private let selectionBridge: TextSelectionBridge
-    private let citedClipboardBridge: CitedClipboardBridge
-    private let linkHoverBridge: LinkHoverBridge
+    private var selectionBridge: TextSelectionBridge?
+    private var citedClipboardBridge: CitedClipboardBridge?
+    private var linkHoverBridge: LinkHoverBridge?
     private var pdfLoadTask: Task<Void, Never>?
     /// True between the moment we cancel a PDF response and the moment our
     /// own URLSession fetch resolves. Lets ``didFailProvisionalNavigation``
@@ -59,6 +77,77 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15"
 
     override init() {
+        super.init()
+        mountWebViewStack()
+    }
+
+    /// Returns the active WKWebView, lazy-rebuilding it (and reloading the
+    /// previous URL) if the tab is currently hibernated. Side-effect-free
+    /// for active tabs. Callers that only want to *check* whether the
+    /// underlying view exists should read ``isHibernated`` instead — otherwise
+    /// reading state from the rail would unintentionally resurrect tabs.
+    var webView: WKWebView {
+        if let _webView { return _webView }
+        let view = mountWebViewStack()
+        if isHibernated {
+            isHibernated = false
+            if let url {
+                view.load(URLRequest(url: url))
+            }
+        }
+        return view
+    }
+
+    /// Tears down the tab's WKWebView, its bridges, and its KVO observers.
+    /// Metadata (title, URL, isPinned, smart-read state) stays put so the
+    /// rail row and saved Smart Read card survive. Accessing ``webView``
+    /// after this rebuilds the stack and reloads the URL — see ``webView``.
+    /// A no-op for tabs without a navigable URL (home/search), tabs in the
+    /// middle of a PDF fetch, and tabs that are already hibernated.
+    func hibernate() {
+        guard _webView != nil, !isHibernated else { return }
+        guard !isHome, searchPage == nil else { return }
+        guard pdfLoadTask == nil, !pdfLoadInProgress else { return }
+
+        for observation in observations { observation.invalidate() }
+        observations = []
+
+        if let webView = _webView {
+            webView.stopLoading()
+            webView.navigationDelegate = nil
+            let content = webView.configuration.userContentController
+            content.removeScriptMessageHandler(forName: TextSelectionBridge.messageName)
+            content.removeScriptMessageHandler(forName: CitedClipboardBridge.messageName)
+            content.removeScriptMessageHandler(forName: LinkHoverBridge.messageName)
+        }
+
+        selectionBridge?.tab = nil
+        citedClipboardBridge?.tab = nil
+        linkHoverBridge?.tab = nil
+        selectionBridge = nil
+        citedClipboardBridge = nil
+        linkHoverBridge = nil
+        _webView = nil
+
+        isLoading = false
+        estimatedProgress = 0
+        selectionInfo = nil
+        pdfDocument = nil
+
+        // A Smart Read summary mid-fetch references the WKWebView we're
+        // dropping — its task gets cancelled anyway when the model
+        // observes the hibernation. Loaded results stay so the card
+        // re-renders on resurrect; failed/idle stay as-is.
+        if case .loading = smartReadPhase {
+            smartReadIsPresented = false
+            smartReadPhase = .idle
+        }
+
+        isHibernated = true
+    }
+
+    @discardableResult
+    private func mountWebViewStack() -> WKWebView {
         let bridge = TextSelectionBridge()
         selectionBridge = bridge
         let citedBridge = CitedClipboardBridge()
@@ -77,19 +166,20 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         configuration.userContentController.add(bridge, name: TextSelectionBridge.messageName)
         configuration.userContentController.add(citedBridge, name: CitedClipboardBridge.messageName)
         configuration.userContentController.add(hoverBridge, name: LinkHoverBridge.messageName)
-        webView = WKWebView(frame: .zero, configuration: configuration)
-        webView.customUserAgent = Self.userAgent
-        webView.allowsBackForwardNavigationGestures = true
-        webView.appearance = NSAppearance(named: .darkAqua)
-        webView.underPageBackgroundColor = .black
 
-        super.init()
+        let view = WKWebView(frame: .zero, configuration: configuration)
+        view.customUserAgent = Self.userAgent
+        view.allowsBackForwardNavigationGestures = true
+        view.appearance = NSAppearance(named: .darkAqua)
+        view.underPageBackgroundColor = .black
 
         bridge.tab = self
         citedBridge.tab = self
         hoverBridge.tab = self
-        webView.navigationDelegate = self
+        view.navigationDelegate = self
+        _webView = view
         observeWebView()
+        return view
     }
 
     /// Registers (or clears) the shell-level listener that receives every
@@ -107,8 +197,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// Pushes the new enabled state into the live JS without reloading the
     /// page. Other Hover Preview settings (modifier, delays) are baked into
     /// the user script at tab creation; open new tabs to apply those.
+    /// Skipped for hibernated tabs — the script gets re-injected when they
+    /// resurrect with a fresh ``mountWebViewStack`` cycle.
     func updateHoverPreviewEnabled(_ enabled: Bool) {
-        webView.evaluateJavaScript(
+        guard let view = _webView else { return }
+        view.evaluateJavaScript(
             "window.__theBrowserHoverPreview && window.__theBrowserHoverPreview.setEnabled(\(enabled ? "true" : "false"));",
             completionHandler: nil
         )
@@ -284,13 +377,15 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// Extracts visible text content from the loaded page via JavaScript. Used
     /// by the AI chat's `read_tabs` tool to feed the model the user's open
     /// pages without a network round-trip. Returns nil for tabs without a
-    /// loaded document (home tabs, search-result tabs).
+    /// loaded document (home tabs, search-result tabs, hibernated tabs —
+    /// we don't silently resurrect a tab to feed the model).
     func extractVisibleText(maxBytes: Int = 6_000) async -> String? {
-        guard !isHome, searchPage == nil else { return nil }
+        guard !isHome, searchPage == nil, !isHibernated else { return nil }
+        guard let view = _webView else { return nil }
         let script = "document.body ? document.body.innerText : ''"
         let raw: Any?
         do {
-            raw = try await webView.evaluateJavaScript(script)
+            raw = try await view.evaluateJavaScript(script)
         } catch {
             return nil
         }
@@ -312,7 +407,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     }
 
     func extractReadablePage(maxBytes: Int = 24_000) async -> ReadablePageExtraction? {
-        guard isSmartReadEligible else { return nil }
+        guard isSmartReadEligible, !isHibernated, let view = _webView else { return nil }
         let script = """
         (() => {
             const selectors = [
@@ -344,7 +439,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         """
         let raw: Any?
         do {
-            raw = try await webView.evaluateJavaScript(script)
+            raw = try await view.evaluateJavaScript(script)
         } catch {
             guard let fallback = await extractVisibleText(maxBytes: maxBytes) else { return nil }
             return ReadablePageExtraction(
@@ -380,10 +475,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// as a small Markdown subset so SwiftUI can render it with
     /// `AttributedString(markdown:)`.
     func extractReaderArticle() async -> ReaderArticle? {
-        guard isSmartReadEligible else { return nil }
+        guard isSmartReadEligible, !isHibernated, let view = _webView else { return nil }
         let raw: Any?
         do {
-            raw = try await webView.evaluateJavaScript(Self.readerExtractionScript)
+            raw = try await view.evaluateJavaScript(Self.readerExtractionScript)
         } catch {
             return nil
         }
@@ -476,8 +571,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     }
 
     private func observeWebView() {
+        guard let view = _webView else { return }
         observations = [
-            webView.observe(\.title, options: [.new]) { [weak self] webView, _ in
+            view.observe(\.title, options: [.new]) { [weak self] webView, _ in
                 Task { @MainActor in
                     guard let self else { return }
                     if let title = webView.title, !title.isEmpty {
@@ -485,7 +581,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                     }
                 }
             },
-            webView.observe(\.url, options: [.new]) { [weak self] webView, _ in
+            view.observe(\.url, options: [.new]) { [weak self] webView, _ in
                 Task { @MainActor in
                     guard let self else { return }
                     if let url = webView.url {
@@ -493,12 +589,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                     }
                 }
             },
-            webView.observe(\.isLoading, options: [.new]) { [weak self] webView, _ in
+            view.observe(\.isLoading, options: [.new]) { [weak self] webView, _ in
                 Task { @MainActor in
                     self?.isLoading = webView.isLoading
                 }
             },
-            webView.observe(\.estimatedProgress, options: [.new]) { [weak self] webView, _ in
+            view.observe(\.estimatedProgress, options: [.new]) { [weak self] webView, _ in
                 Task { @MainActor in
                     self?.estimatedProgress = webView.estimatedProgress
                 }
