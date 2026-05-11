@@ -13,7 +13,8 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.newTabShortcut) private var newTabShortcut = "command+t"
     @AppStorage(PreferenceKey.closeTabShortcut) private var closeTabShortcut = "command+w"
     @AppStorage(PreferenceKey.focusAddressShortcut) private var focusAddressShortcut = "command+l"
-    @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "command+shift+r"
+    @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "shift+command+r"
+    @AppStorage(PreferenceKey.pasteWithCitationShortcut) private var pasteWithCitationShortcut = "shift+command+v"
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
     @AppStorage(PreferenceKey.hoverPreviewEnabled) private var hoverPreviewEnabled = true
     @AppStorage(PreferenceKey.hoverPreviewPrefetchBlocklist) private var hoverPreviewBlocklist = ""
@@ -21,6 +22,7 @@ struct BrowserShellView: View {
     @State private var isPeekingRail = false
     @State private var peekDismissTask: Task<Void, Never>? = nil
     @State private var isShowingMigrationPrompt = false
+    @State private var isClipboardPopoverPresented = false
 
     private var railOverlayVisible: Bool {
         model.isTabRailVisible || isPeekingRail
@@ -187,7 +189,8 @@ struct BrowserShellView: View {
                 model: model,
                 selectedTab: model.selectedTab,
                 reservesTrafficLightGutter: !model.isTabRailVisible,
-                onSmartRead: triggerSmartRead
+                onSmartRead: triggerSmartRead,
+                isClipboardPopoverPresented: $isClipboardPopoverPresented
             )
 
             ZStack {
@@ -381,7 +384,10 @@ struct BrowserShellView: View {
             focusAddressShortcut: {
                 model.focusAddress()
             },
-            smartReadShortcut: triggerSmartRead
+            smartReadShortcut: triggerSmartRead,
+            pasteWithCitationShortcut: {
+                isClipboardPopoverPresented.toggle()
+            }
         ]
     }
 }

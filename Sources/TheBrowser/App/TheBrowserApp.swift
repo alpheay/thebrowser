@@ -8,6 +8,9 @@ struct TheBrowserApp: App {
         NSApplication.shared.setActivationPolicy(.regular)
         DispatchQueue.main.async {
             NSApplication.shared.activate(ignoringOtherApps: true)
+            // Prime the cited-clipboard controller so its NSWorkspace
+            // activation observer is installed before the user's first copy.
+            _ = CitedClipboardController.shared
         }
     }
 
