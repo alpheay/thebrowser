@@ -148,16 +148,13 @@ enum DiscordTheme {
         background: #0A0A0A !important;
     }
 
-    /* ---- Hide redundant chrome ---- */
-    /* We render our own server rail in native SwiftUI; hiding Discord's
-       reduces visual noise and gives the message column more room. */
-    nav[aria-label*="Servers" i],
-    [class*="guilds_"][class*="container"],
-    [class*="wrapper_"] > [class*="guilds_"] {
-        display: none !important;
-    }
-
-    /* Hide upsell banners / promos so the embed feels native, not ad-laden. */
+    /* ---- Hide upsell banners only ---- */
+    /* We previously also hid Discord's own server rail to deduplicate with
+       ours, but Discord's flex layout is fragile: `display: none`-ing the
+       rail collapsed the DM sidebar and main content into a zero-height
+       black void on /channels/@me. The redundancy of two rails is the
+       lesser evil. Promo banners stay hidden — they're floating elements,
+       removing them doesn't cascade.                                       */
     [class*="upsellBanner"],
     [class*="nitroUpsell"],
     [class*="premiumBanner"],
