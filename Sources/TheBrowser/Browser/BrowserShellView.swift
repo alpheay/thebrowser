@@ -420,7 +420,7 @@ struct BrowserShellView: View {
             smartReadShortcut: triggerSmartRead,
             readerModeShortcut: triggerReaderMode,
             pasteWithCitationShortcut: {
-                isClipboardPopoverPresented.toggle()
+                CitedClipboardCursorPanelController.shared.toggle()
             }
         ]
     }
