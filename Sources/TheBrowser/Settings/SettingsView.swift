@@ -299,7 +299,7 @@ struct SettingsView: View {
                 }
 
                 row(label: "System prompt", help: "Replaces the provider's default prompt.") {
-                    MultilineField(text: $aiSystemPrompt, height: 108)
+                    MultilineField(text: $aiSystemPrompt, height: 108, isReadOnly: true)
                 }
 
                 if provider == .codex {
@@ -938,14 +938,16 @@ private struct NumericStepChip: View {
 private struct MultilineField: View {
     @Binding var text: String
     var height: CGFloat
+    var isReadOnly: Bool = false
     @FocusState private var focused: Bool
 
     var body: some View {
         TextEditor(text: $text)
             .scrollContentBackground(.hidden)
             .font(.system(size: 12, design: .monospaced))
-            .foregroundStyle(Palette.textPrimary)
+            .foregroundStyle(isReadOnly ? Palette.textSecondary : Palette.textPrimary)
             .focused($focused)
+            .disabled(isReadOnly)
             .frame(height: height)
             .padding(8)
             .background {
