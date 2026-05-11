@@ -20,8 +20,9 @@ struct SearchResultsView: View {
 
                 content
             }
-            .frame(maxWidth: 840, alignment: .leading)
-            .padding(.horizontal, 36)
+            .frame(maxWidth: Metrics.contentMaxWidth, alignment: .leading)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 20)
             .padding(.bottom, 44)
         }
         .background(Palette.bg)

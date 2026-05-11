@@ -67,6 +67,10 @@ enum Metrics {
     static let chatWidth: CGFloat = 360
     static let webviewInset: CGFloat = 8
     static let webviewRadius: CGFloat = 10
+    /// Shared max width for centered content: the URL bar in the toolbar and
+    /// the search results column align to this so their left/right edges
+    /// stack vertically.
+    static let contentMaxWidth: CGFloat = 760
 }
 
 struct IconButtonStyle: ButtonStyle {

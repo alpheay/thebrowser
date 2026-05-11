@@ -17,6 +17,7 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.smartReadShortcut) private var smartReadShortcut = "shift+command+r"
     @AppStorage(PreferenceKey.readerModeShortcut) private var readerModeShortcut = "command+r"
     @AppStorage(PreferenceKey.pasteWithCitationShortcut) private var pasteWithCitationShortcut = "shift+command+v"
+    @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
     @AppStorage(PreferenceKey.hoverPreviewEnabled) private var hoverPreviewEnabled = true
     @AppStorage(PreferenceKey.hoverPreviewPrefetchBlocklist) private var hoverPreviewBlocklist = ""
@@ -430,6 +431,9 @@ struct BrowserShellView: View {
             readerModeShortcut: triggerReaderMode,
             pasteWithCitationShortcut: {
                 CitedClipboardCursorPanelController.shared.toggle()
+            },
+            openDiscordShortcut: {
+                model.openOrFocusDiscord()
             }
         ]
     }

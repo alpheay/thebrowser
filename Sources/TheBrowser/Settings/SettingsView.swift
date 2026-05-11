@@ -40,6 +40,8 @@ struct SettingsView: View {
     @State private var selectedTab: SettingsTab = .general
     @State private var showClearAllConfirm = false
     @StateObject private var googleAccountStore = GoogleAccountStore.shared
+    @StateObject private var discordAccountStore = DiscordAccountStore.shared
+    @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
 
     var body: some View {
         HStack(spacing: 0) {
@@ -121,8 +123,23 @@ struct SettingsView: View {
 
     private var accountSettings: some View {
         VStack(alignment: .leading, spacing: 28) {
-            pageHeader(title: "Account", subtitle: "Sign in with Google to personalize The Browser.")
-            GoogleAccountView(store: googleAccountStore)
+            pageHeader(title: "Account", subtitle: "Sign in to personalize The Browser. Tokens stay in your macOS Keychain.")
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("GOOGLE")
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(1.8)
+                    .foregroundStyle(Palette.textFaint)
+                GoogleAccountView(store: googleAccountStore)
+            }
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("DISCORD")
+                    .font(.system(size: 10, weight: .semibold))
+                    .tracking(1.8)
+                    .foregroundStyle(Palette.textFaint)
+                DiscordAccountView(store: discordAccountStore)
+            }
         }
     }
 
@@ -366,6 +383,9 @@ struct SettingsView: View {
                 }
                 row(label: "Paste with citation", help: "Opens the clipboard history popover.") {
                     ShortcutRecorder(value: $pasteWithCitationShortcut)
+                }
+                row(label: "Open Discord", help: "Opens the themed Discord launcher window.") {
+                    ShortcutRecorder(value: $openDiscordShortcut)
                 }
             }
         }

@@ -7,6 +7,9 @@ enum KeychainError: Error {
 }
 
 enum KeychainStore {
+    /// Default keychain service. Predates the Discord integration — kept as
+    /// the default so Google tokens written with the old API path continue
+    /// to resolve. New callers pass an explicit `service:` (e.g. Discord).
     static let serviceName = "com.thebrowser.googleAccount"
 
     /// All queries opt into the modern "data protection" keychain. On macOS
@@ -15,17 +18,17 @@ enum KeychainStore {
     /// triggers a login-password prompt. The data protection keychain uses
     /// iOS-style access-group semantics derived from the app's signing
     /// identity instead, which does not prompt.
-    private static func baseQuery(account: String) -> [String: Any] {
+    private static func baseQuery(account: String, service: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: serviceName,
+            kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecUseDataProtectionKeychain as String: true
         ]
     }
 
-    static func save(_ data: Data, account: String) throws {
-        let query = baseQuery(account: account)
+    static func save(_ data: Data, account: String, service: String = serviceName) throws {
+        let query = baseQuery(account: account, service: service)
 
         let attributes: [String: Any] = [
             kSecValueData as String: data,
@@ -49,15 +52,15 @@ enum KeychainStore {
         }
     }
 
-    static func saveString(_ value: String, account: String) throws {
+    static func saveString(_ value: String, account: String, service: String = serviceName) throws {
         guard let data = value.data(using: .utf8) else {
             throw KeychainError.encoding
         }
-        try save(data, account: account)
+        try save(data, account: account, service: service)
     }
 
-    static func load(account: String) -> Data? {
-        var query = baseQuery(account: account)
+    static func load(account: String, service: String = serviceName) -> Data? {
+        var query = baseQuery(account: account, service: service)
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
 
@@ -69,14 +72,14 @@ enum KeychainStore {
         return item as? Data
     }
 
-    static func loadString(account: String) -> String? {
-        guard let data = load(account: account) else { return nil }
+    static func loadString(account: String, service: String = serviceName) -> String? {
+        guard let data = load(account: account, service: service) else { return nil }
         return String(data: data, encoding: .utf8)
     }
 
     @discardableResult
-    static func delete(account: String) -> Bool {
-        let status = SecItemDelete(baseQuery(account: account) as CFDictionary)
+    static func delete(account: String, service: String = serviceName) -> Bool {
+        let status = SecItemDelete(baseQuery(account: account, service: service) as CFDictionary)
         return status == errSecSuccess || status == errSecItemNotFound
     }
 }
