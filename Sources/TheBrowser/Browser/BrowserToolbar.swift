@@ -9,6 +9,15 @@ struct BrowserToolbar: View {
     var onReaderMode: () -> Void = {}
     @Binding var isClipboardPopoverPresented: Bool
 
+    @AppStorage(PreferenceKey.toolbarShowBack) private var showBack = true
+    @AppStorage(PreferenceKey.toolbarShowForward) private var showForward = true
+    @AppStorage(PreferenceKey.toolbarShowReload) private var showReload = true
+    @AppStorage(PreferenceKey.toolbarShowReaderMode) private var showReaderMode = true
+    @AppStorage(PreferenceKey.toolbarShowSmartRead) private var showSmartRead = true
+    @AppStorage(PreferenceKey.toolbarShowClipboard) private var showClipboard = true
+    @AppStorage(PreferenceKey.toolbarShowTabRailToggle) private var showTabRailToggle = true
+    @AppStorage(PreferenceKey.toolbarShowChatToggle) private var showChatToggle = true
+
     @FocusState private var addressFocused: Bool
     @State private var submitPulse = false
 
@@ -53,30 +62,36 @@ struct BrowserToolbar: View {
 
     private var navCluster: some View {
         HStack(spacing: 4) {
-            Button { selectedTab.goBack() } label: {
-                Image(systemName: "chevron.left")
-            }
-            .buttonStyle(IconButtonStyle(size: 28))
-            .help("Back")
-
-            Button { selectedTab.goForward() } label: {
-                Image(systemName: "chevron.right")
-            }
-            .buttonStyle(IconButtonStyle(size: 28))
-            .help("Forward")
-
-            Button {
-                if selectedTab.isLoading {
-                    selectedTab.stopLoading()
-                } else {
-                    selectedTab.reload()
+            if showBack {
+                Button { selectedTab.goBack() } label: {
+                    Image(systemName: "chevron.left")
                 }
-            } label: {
-                Image(systemName: selectedTab.isLoading ? "xmark" : "arrow.clockwise")
-                    .contentTransition(.symbolEffect(.replace))
+                .buttonStyle(IconButtonStyle(size: 28))
+                .help("Back")
             }
-            .buttonStyle(IconButtonStyle(size: 28))
-            .help(selectedTab.isLoading ? "Stop" : "Reload")
+
+            if showForward {
+                Button { selectedTab.goForward() } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .buttonStyle(IconButtonStyle(size: 28))
+                .help("Forward")
+            }
+
+            if showReload {
+                Button {
+                    if selectedTab.isLoading {
+                        selectedTab.stopLoading()
+                    } else {
+                        selectedTab.reload()
+                    }
+                } label: {
+                    Image(systemName: selectedTab.isLoading ? "xmark" : "arrow.clockwise")
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(IconButtonStyle(size: 28))
+                .help(selectedTab.isLoading ? "Stop" : "Reload")
+            }
         }
     }
 
@@ -165,45 +180,55 @@ struct BrowserToolbar: View {
     private var rightCluster: some View {
         HStack(spacing: 6) {
             if selectedTab.isSmartReadEligible {
-                Button(action: onReaderMode) {
-                    Image(systemName: "book.fill")
+                if showReaderMode {
+                    Button(action: onReaderMode) {
+                        Image(systemName: "book.fill")
+                    }
+                    .buttonStyle(IconButtonStyle(selected: readerActive, size: 28))
+                    .help("Reader Mode")
                 }
-                .buttonStyle(IconButtonStyle(selected: readerActive, size: 28))
-                .help("Reader Mode")
 
-                Button(action: onSmartRead) {
-                    Image(systemName: "text.magnifyingglass")
+                if showSmartRead {
+                    Button(action: onSmartRead) {
+                        Image(systemName: "text.magnifyingglass")
+                    }
+                    .buttonStyle(IconButtonStyle(size: 28))
+                    .help("Smart Read")
                 }
-                .buttonStyle(IconButtonStyle(size: 28))
-                .help("Smart Read")
             }
 
-            Button {
-                isClipboardPopoverPresented.toggle()
-            } label: {
-                Image(systemName: "doc.on.clipboard")
-            }
-            .buttonStyle(IconButtonStyle(selected: isClipboardPopoverPresented, size: 28))
-            .help("Paste with citation")
-            .popover(isPresented: $isClipboardPopoverPresented, arrowEdge: .bottom) {
-                CitedClipboardPopoverHost(isPresented: $isClipboardPopoverPresented)
+            if showClipboard {
+                Button {
+                    isClipboardPopoverPresented.toggle()
+                } label: {
+                    Image(systemName: "doc.on.clipboard")
+                }
+                .buttonStyle(IconButtonStyle(selected: isClipboardPopoverPresented, size: 28))
+                .help("Paste with citation")
+                .popover(isPresented: $isClipboardPopoverPresented, arrowEdge: .bottom) {
+                    CitedClipboardPopoverHost(isPresented: $isClipboardPopoverPresented)
+                }
             }
 
-            Button {
-                withAnimation(Motion.springSnap) { model.toggleTabs() }
-            } label: {
-                Image(systemName: "sidebar.left")
+            if showTabRailToggle {
+                Button {
+                    withAnimation(Motion.springSnap) { model.toggleTabs() }
+                } label: {
+                    Image(systemName: "sidebar.left")
+                }
+                .buttonStyle(IconButtonStyle(selected: model.isTabRailVisible, size: 28))
+                .help("Toggle side tabs")
             }
-            .buttonStyle(IconButtonStyle(selected: model.isTabRailVisible, size: 28))
-            .help("Toggle side tabs")
 
-            Button {
-                withAnimation(Motion.springSnap) { model.toggleChat() }
-            } label: {
-                Image(systemName: "sparkles")
+            if showChatToggle {
+                Button {
+                    withAnimation(Motion.springSnap) { model.toggleChat() }
+                } label: {
+                    Image(systemName: "sparkles")
+                }
+                .buttonStyle(IconButtonStyle(selected: model.isChatVisible, size: 28))
+                .help("Toggle AI chat")
             }
-            .buttonStyle(IconButtonStyle(selected: model.isChatVisible, size: 28))
-            .help("Toggle AI chat")
         }
     }
 }
