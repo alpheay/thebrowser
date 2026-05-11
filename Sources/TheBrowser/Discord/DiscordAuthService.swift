@@ -72,7 +72,7 @@ final class DiscordAuthService {
         do {
             return try JSONDecoder().decode(DiscordProfile.self, from: data)
         } catch {
-            throw DiscordAuthError.decodingFailed
+            throw DiscordAuthError.decodingFailed(decodingErrorSummary(error))
         }
     }
 
@@ -87,7 +87,7 @@ final class DiscordAuthService {
         do {
             return try JSONDecoder().decode([DiscordGuild].self, from: data)
         } catch {
-            throw DiscordAuthError.decodingFailed
+            throw DiscordAuthError.decodingFailed(decodingErrorSummary(error))
         }
     }
 
@@ -169,7 +169,7 @@ final class DiscordAuthService {
                 scope: decoded.scope
             )
         } catch {
-            throw DiscordAuthError.decodingFailed
+            throw DiscordAuthError.decodingFailed(decodingErrorSummary(error))
         }
     }
 
@@ -178,5 +178,30 @@ final class DiscordAuthService {
         components.queryItems = parameters.map { URLQueryItem(name: $0.key, value: $0.value) }
         let raw = components.percentEncodedQuery ?? ""
         return Data(raw.utf8)
+    }
+
+    /// Reduces a `DecodingError` to a short, human-readable string —
+    /// `typeMismatch on key permissions`, `valueNotFound on key id`, etc.
+    /// Strips the bulky `userInfo` payload so the message fits in our error
+    /// banner without leaking the raw JSON.
+    private func decodingErrorSummary(_ error: Error) -> String? {
+        guard let decoding = error as? DecodingError else {
+            return error.localizedDescription
+        }
+        func keyPath(_ context: DecodingError.Context) -> String {
+            context.codingPath.map(\.stringValue).joined(separator: ".")
+        }
+        switch decoding {
+        case .typeMismatch(let type, let context):
+            return "expected \(type) at \(keyPath(context))"
+        case .valueNotFound(let type, let context):
+            return "missing \(type) at \(keyPath(context))"
+        case .keyNotFound(let key, let context):
+            return "missing key \(key.stringValue) under \(keyPath(context))"
+        case .dataCorrupted(let context):
+            return "malformed JSON at \(keyPath(context))"
+        @unknown default:
+            return "unrecognized decoding error"
+        }
     }
 }

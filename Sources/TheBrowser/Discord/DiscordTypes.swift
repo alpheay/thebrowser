@@ -7,7 +7,7 @@ enum DiscordAuthError: LocalizedError {
     case missingCode
     case tokenRequestFailed(String)
     case profileRequestFailed(String)
-    case decodingFailed
+    case decodingFailed(String?)
 
     var errorDescription: String? {
         switch self {
@@ -23,7 +23,10 @@ enum DiscordAuthError: LocalizedError {
             return "Token exchange failed: \(message)"
         case .profileRequestFailed(let message):
             return "Couldn't fetch your Discord profile: \(message)"
-        case .decodingFailed:
+        case .decodingFailed(let detail):
+            if let detail, !detail.isEmpty {
+                return "Discord returned a response we couldn't read: \(detail)"
+            }
             return "Discord returned a response we couldn't read."
         }
     }
@@ -112,7 +115,6 @@ struct DiscordGuild: Codable, Equatable, Identifiable {
     var name: String
     var icon: String?
     var owner: Bool?
-    var permissions: String?
     var features: [String]?
     var approximateMemberCount: Int?
     var approximatePresenceCount: Int?
@@ -122,10 +124,35 @@ struct DiscordGuild: Codable, Equatable, Identifiable {
         case name
         case icon
         case owner
-        case permissions
         case features
         case approximateMemberCount = "approximate_member_count"
         case approximatePresenceCount = "approximate_presence_count"
+    }
+
+    /// Discord's `permissions` field has historically alternated between
+    /// integer and string forms; we don't render it in the launcher, so we
+    /// skip it entirely rather than risk a type-mismatch failure on the whole
+    /// guild list. Same idea for any other field Discord might add later:
+    /// extra JSON keys are ignored, missing optionals stay `nil`.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(String.self, forKey: .id)
+        name = try c.decode(String.self, forKey: .name)
+        icon = try c.decodeIfPresent(String.self, forKey: .icon)
+        owner = try c.decodeIfPresent(Bool.self, forKey: .owner)
+        features = try c.decodeIfPresent([String].self, forKey: .features)
+        approximateMemberCount = try c.decodeIfPresent(Int.self, forKey: .approximateMemberCount)
+        approximatePresenceCount = try c.decodeIfPresent(Int.self, forKey: .approximatePresenceCount)
+    }
+
+    init(id: String, name: String, icon: String? = nil, owner: Bool? = nil, features: [String]? = nil, approximateMemberCount: Int? = nil, approximatePresenceCount: Int? = nil) {
+        self.id = id
+        self.name = name
+        self.icon = icon
+        self.owner = owner
+        self.features = features
+        self.approximateMemberCount = approximateMemberCount
+        self.approximatePresenceCount = approximatePresenceCount
     }
 
     var iconURL: URL? {
