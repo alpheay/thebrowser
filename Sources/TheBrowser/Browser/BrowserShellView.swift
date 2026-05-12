@@ -143,6 +143,17 @@ struct BrowserShellView: View {
             .opacity(0)
             .allowsHitTesting(false)
 
+            // Find bar Esc monitor — covers the case where the user has
+            // clicked into the page after typing a query (text field has
+            // lost focus, but the find bar is still open).
+            FindBarEscapeMonitor(
+                isActive: model.selectedTab.findController.isVisible,
+                onEscape: { model.selectedTab.findController.hide() }
+            )
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .allowsHitTesting(false)
+
             // Hidden window chrome configurator (full-screen on green button)
             WindowFullScreenZoomConfigurator()
                 .frame(width: 0, height: 0)
@@ -241,6 +252,9 @@ struct BrowserShellView: View {
                                 model: hoverPreview,
                                 actions: hoverPreviewActions
                             )
+                        }
+                        .overlay(alignment: .topTrailing) {
+                            FindBarOverlay(controller: model.selectedTab.findController)
                         }
                         .overlay {
                             RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous)
@@ -439,8 +453,44 @@ struct BrowserShellView: View {
             },
             openDiscordShortcut: {
                 model.openOrFocusDiscord()
+            },
+            // Find in Page — fixed shortcuts, no Settings UI on purpose
+            // since every browser ships these unchanged.
+            "command+f": {
+                model.selectedTab.findController.show()
+            },
+            "command+g": {
+                model.selectedTab.findController.next()
+            },
+            "shift+command+g": {
+                model.selectedTab.findController.previous()
             }
         ]
+    }
+}
+
+/// Renders the find bar overlay only when the active tab has it open.
+/// Observes the controller directly so isVisible toggles trigger a
+/// re-render — the BrowserTab itself doesn't re-publish on
+/// findController changes. The selected-tab swap is handled at the
+/// parent level (the .overlay closure re-evaluates whenever
+/// `model.selectedTab` changes, picking up the new controller).
+private struct FindBarOverlay: View {
+    @ObservedObject var controller: FindController
+
+    var body: some View {
+        Group {
+            if controller.isVisible {
+                FindBarView(controller: controller)
+                    .padding(.top, 10)
+                    .padding(.trailing, 12)
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .offset(y: -8)),
+                        removal: .opacity.combined(with: .offset(y: -4))
+                    ))
+            }
+        }
+        .animation(Motion.springSnap, value: controller.isVisible)
     }
 }
 

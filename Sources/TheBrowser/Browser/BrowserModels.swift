@@ -36,6 +36,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     @Published var smartReadIsPresented = false
     @Published var smartReadPhase: SmartReadModel.Phase = .idle
 
+    /// Per-tab Find in Page state. Owning the controller on the tab is what
+    /// lets ⌘F preserve query/match state across tab switches.
+    let findController = FindController()
+
     /// Wall-clock timestamp of the last time the user interacted with this
     /// tab (either selected it or had it selected when something else was
     /// chosen). The hibernation scheduler in ``BrowserModel`` compares this
@@ -82,6 +86,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     override init() {
         super.init()
         mountWebViewStack()
+        // Point the find controller at this tab's live webview. Reads
+        // `_webView` directly so hibernated tabs don't get silently
+        // resurrected by a stray find call.
+        findController.webViewProvider = { [weak self] in
+            self?._webView
+        }
     }
 
     /// Returns the active WKWebView, lazy-rebuilding it (and reloading the
@@ -1296,6 +1306,10 @@ extension BrowserTab: WKNavigationDelegate {
             if let title = webView.title, !title.isEmpty {
                 self.title = title
             }
+            // Page content just changed under our feet — re-run the
+            // current find query so the counter and highlight match what
+            // the user can now see, without stealing focus.
+            self.findController.rerunForNavigation()
         }
     }
 
