@@ -40,9 +40,13 @@ struct SettingsView: View {
 
     @State private var selectedTab: SettingsTab = .general
     @State private var showClearAllConfirm = false
+    @State private var showClearHistoryConfirm = false
+    @State private var pendingHistoryClearRange: HistoryClearRange?
+    @State private var historyEntryCount = 0
     @StateObject private var googleAccountStore = GoogleAccountStore.shared
     @StateObject private var discordAccountStore = DiscordAccountStore.shared
     @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
+    @AppStorage(PreferenceKey.openHistoryShortcut) private var openHistoryShortcut = "command+y"
 
     var body: some View {
         HStack(spacing: 0) {
@@ -285,6 +289,38 @@ struct SettingsView: View {
                 }
             }
 
+            section("History") {
+                row(
+                    label: "Browsing history",
+                    help: "Stored locally in ~/.thebrowser/history.sqlite. Open the browser with \(AppShortcut.displayString(for: openHistoryShortcut))."
+                ) {
+                    HStack(spacing: 8) {
+                        Spacer()
+                        Text(historyCountLabel)
+                            .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Palette.textMuted)
+                        Menu {
+                            ForEach(HistoryClearRange.allCases) { option in
+                                Button(option.menuLabel) {
+                                    pendingHistoryClearRange = option
+                                    showClearHistoryConfirm = true
+                                }
+                            }
+                        } label: {
+                            HStack(spacing: 6) {
+                                Text("Clear history\u{2026}")
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 9, weight: .bold))
+                            }
+                        }
+                        .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .fixedSize()
+                        .buttonStyle(PillButtonStyle())
+                    }
+                }
+            }
+
             section("Data") {
                 row(label: "Chat history", help: "Removes every stored conversation from disk.") {
                     HStack {
@@ -296,12 +332,62 @@ struct SettingsView: View {
                 }
             }
         }
+        .onAppear { refreshHistoryCount() }
+        .onReceive(NotificationCenter.default.publisher(for: HistoryStore.didChangeNotification)) { _ in
+            refreshHistoryCount()
+        }
         .alert("Clear all chat history?", isPresented: $showClearAllConfirm) {
             Button("Cancel", role: .cancel) {}
             Button("Clear all", role: .destructive) { ChatSessionStore.shared.clearAll() }
         } message: {
             Text("This permanently deletes every saved conversation under ~/.thebrowser/sessions. Open chats stay until you start a new conversation.")
         }
+        .alert(historyAlertTitle, isPresented: $showClearHistoryConfirm) {
+            Button("Cancel", role: .cancel) { pendingHistoryClearRange = nil }
+            Button("Clear", role: .destructive) {
+                applyPendingHistoryClear()
+            }
+        } message: {
+            Text(historyAlertMessage)
+        }
+    }
+
+    private var historyCountLabel: String {
+        switch historyEntryCount {
+        case 0: return "Empty"
+        case 1: return "1 entry"
+        default: return "\(historyEntryCount) entries"
+        }
+    }
+
+    private var historyAlertTitle: String {
+        guard let range = pendingHistoryClearRange else { return "Clear history?" }
+        return "Clear \(range.alertNoun)?"
+    }
+
+    private var historyAlertMessage: String {
+        guard let range = pendingHistoryClearRange else { return "" }
+        return range.alertBody
+    }
+
+    private func applyPendingHistoryClear() {
+        guard let range = pendingHistoryClearRange else { return }
+        defer { pendingHistoryClearRange = nil }
+        let now = Date()
+        switch range {
+        case .lastHour:
+            HistoryStore.shared.deleteHistory(in: now.addingTimeInterval(-3_600)...now)
+        case .lastDay:
+            HistoryStore.shared.deleteHistory(in: now.addingTimeInterval(-86_400)...now)
+        case .lastWeek:
+            HistoryStore.shared.deleteHistory(in: now.addingTimeInterval(-604_800)...now)
+        case .allTime:
+            HistoryStore.shared.clearAll()
+        }
+    }
+
+    private func refreshHistoryCount() {
+        historyEntryCount = HistoryStore.shared.count()
     }
 
     // MARK: - AI
@@ -396,6 +482,9 @@ struct SettingsView: View {
                 }
                 row(label: "Open Discord", help: "Opens the themed Discord launcher window.") {
                     ShortcutRecorder(value: $openDiscordShortcut)
+                }
+                row(label: "Open history", help: "Browse and search every page you've visited.") {
+                    ShortcutRecorder(value: $openHistoryShortcut)
                 }
             }
         }
