@@ -36,6 +36,8 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.toolbarShowClipboard) private var toolbarShowClipboard = false
     @AppStorage(PreferenceKey.toolbarShowTabRailToggle) private var toolbarShowTabRailToggle = true
     @AppStorage(PreferenceKey.toolbarShowChatToggle) private var toolbarShowChatToggle = true
+    @AppStorage(PreferenceKey.toolbarShowBookmarkStar) private var toolbarShowBookmarkStar = true
+    @AppStorage(PreferenceKey.toolbarShowBookmarksToggle) private var toolbarShowBookmarksToggle = true
     @AppStorage(PreferenceKey.tabHibernationMinutes) private var tabHibernationMinutes = 30
 
     @State private var selectedTab: SettingsTab = .general
@@ -43,6 +45,9 @@ struct SettingsView: View {
     @StateObject private var googleAccountStore = GoogleAccountStore.shared
     @StateObject private var discordAccountStore = DiscordAccountStore.shared
     @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
+    @AppStorage(PreferenceKey.addBookmarkShortcut) private var addBookmarkShortcut = "option+command+d"
+    @AppStorage(PreferenceKey.toggleBookmarkBarShortcut) private var toggleBookmarkBarShortcut = "shift+command+b"
+    @AppStorage(PreferenceKey.openBookmarksPaneShortcut) private var openBookmarksPaneShortcut = "option+command+b"
 
     var body: some View {
         HStack(spacing: 0) {
@@ -111,6 +116,8 @@ struct SettingsView: View {
             toolbarSettings
         case .ai:
             aiSettings
+        case .bookmarks:
+            BookmarksSettingsContent()
         case .clipboard:
             CitedClipboardSettingsContent()
         case .keybindings:
@@ -212,6 +219,18 @@ struct SettingsView: View {
                     label: "AI chat",
                     help: "Toggle the AI chat panel.",
                     isOn: $toolbarShowChatToggle
+                )
+                ToolbarToggleRow(
+                    symbol: "star",
+                    label: "Bookmark star",
+                    help: "Star icon in the address bar that toggles a bookmark for the current tab.",
+                    isOn: $toolbarShowBookmarkStar
+                )
+                ToolbarToggleRow(
+                    symbol: "bookmark",
+                    label: "Bookmarks",
+                    help: "Toggle the full bookmarks browser pane.",
+                    isOn: $toolbarShowBookmarksToggle
                 )
             }
         }
@@ -397,6 +416,15 @@ struct SettingsView: View {
                 row(label: "Open Discord", help: "Opens the themed Discord launcher window.") {
                     ShortcutRecorder(value: $openDiscordShortcut)
                 }
+                row(label: "Add bookmark", help: "Saves the current tab. ⌘D is reserved for opening Discord.") {
+                    ShortcutRecorder(value: $addBookmarkShortcut)
+                }
+                row(label: "Toggle bookmark bar", help: "Show or hide the horizontal bookmark strip beneath the address bar.") {
+                    ShortcutRecorder(value: $toggleBookmarkBarShortcut)
+                }
+                row(label: "Open bookmarks pane", help: "Open or close the full bookmarks browser on the left.") {
+                    ShortcutRecorder(value: $openBookmarksPaneShortcut)
+                }
             }
         }
     }
@@ -483,6 +511,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case account
     case toolbar
     case ai
+    case bookmarks
     case clipboard
     case keybindings
     case migration
@@ -495,6 +524,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .account: "Account"
         case .toolbar: "Toolbar"
         case .ai: "AI Engine"
+        case .bookmarks: "Bookmarks"
         case .clipboard: "Clipboard"
         case .keybindings: "Keybindings"
         case .migration: "Migration"
@@ -507,6 +537,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .account: "person.crop.circle"
         case .toolbar: "square.topthird.inset.filled"
         case .ai: "sparkles"
+        case .bookmarks: "bookmark"
         case .clipboard: "doc.on.clipboard"
         case .keybindings: "keyboard"
         case .migration: "arrow.triangle.2.circlepath"
