@@ -8,6 +8,7 @@ struct BrowserToolbar: View {
     var onSmartRead: () -> Void = {}
     var onReaderMode: () -> Void = {}
     @Binding var isClipboardPopoverPresented: Bool
+    @Binding var isDownloadsPopoverPresented: Bool
 
     @AppStorage(PreferenceKey.toolbarShowBack) private var showBack = true
     @AppStorage(PreferenceKey.toolbarShowForward) private var showForward = true
@@ -15,8 +16,10 @@ struct BrowserToolbar: View {
     @AppStorage(PreferenceKey.toolbarShowReaderMode) private var showReaderMode = false
     @AppStorage(PreferenceKey.toolbarShowSmartRead) private var showSmartRead = false
     @AppStorage(PreferenceKey.toolbarShowClipboard) private var showClipboard = false
+    @AppStorage(PreferenceKey.toolbarShowDownloads) private var showDownloads = true
     @AppStorage(PreferenceKey.toolbarShowTabRailToggle) private var showTabRailToggle = true
     @AppStorage(PreferenceKey.toolbarShowChatToggle) private var showChatToggle = true
+    @ObservedObject private var downloadsController = DownloadController.shared
 
     @FocusState private var addressFocused: Bool
     @State private var submitPulse = false
@@ -225,6 +228,13 @@ struct BrowserToolbar: View {
                 }
             }
 
+            if showDownloads {
+                DownloadsToolbarButton(
+                    controller: downloadsController,
+                    isPresented: $isDownloadsPopoverPresented
+                )
+            }
+
             if showTabRailToggle {
                 Button {
                     withAnimation(Motion.springSnap) { model.toggleTabs() }
@@ -245,6 +255,74 @@ struct BrowserToolbar: View {
                 .help("Toggle AI chat")
             }
         }
+    }
+}
+
+/// Toolbar chip for the downloads manager. Overlays a small progress ring
+/// while downloads are in-flight and a numeric badge when more than one
+/// download is queued. Tapping toggles the ``DownloadsPopover``.
+struct DownloadsToolbarButton: View {
+    @ObservedObject var controller: DownloadController
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        Button {
+            isPresented.toggle()
+        } label: {
+            ZStack(alignment: .topTrailing) {
+                Image(systemName: "arrow.down.circle")
+                    .frame(width: 14, height: 14)
+
+                if controller.activeCount > 0 {
+                    progressRing
+                }
+            }
+            .frame(width: 28, height: 28)
+        }
+        .buttonStyle(IconButtonStyle(selected: isPresented, size: 28))
+        .help("Downloads")
+        .popover(isPresented: $isPresented, arrowEdge: .bottom) {
+            DownloadsPopover(controller: controller) {
+                isPresented = false
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var progressRing: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.white.opacity(0.18), lineWidth: 1.5)
+            if controller.aggregateProgress > 0 {
+                Circle()
+                    .trim(from: 0, to: CGFloat(max(0.04, controller.aggregateProgress)))
+                    .stroke(Color.white, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+                    .animation(.easeOut(duration: 0.25), value: controller.aggregateProgress)
+            } else {
+                // Indeterminate spinner while we don't know totals yet.
+                IndeterminateRingArc()
+            }
+        }
+        .frame(width: 14, height: 14)
+        .offset(x: 6, y: -4)
+    }
+}
+
+/// Small spinning arc shown for downloads with unknown total size.
+private struct IndeterminateRingArc: View {
+    @State private var spin = false
+
+    var body: some View {
+        Circle()
+            .trim(from: 0, to: 0.28)
+            .stroke(Color.white.opacity(0.85), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+            .rotationEffect(.degrees(spin ? 360 : 0))
+            .onAppear {
+                withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
+                    spin = true
+                }
+            }
     }
 }
 

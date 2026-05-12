@@ -36,7 +36,12 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.toolbarShowClipboard) private var toolbarShowClipboard = false
     @AppStorage(PreferenceKey.toolbarShowTabRailToggle) private var toolbarShowTabRailToggle = true
     @AppStorage(PreferenceKey.toolbarShowChatToggle) private var toolbarShowChatToggle = true
+    @AppStorage(PreferenceKey.toolbarShowDownloads) private var toolbarShowDownloads = true
     @AppStorage(PreferenceKey.tabHibernationMinutes) private var tabHibernationMinutes = 30
+    @AppStorage(PreferenceKey.downloadsFolderPath) private var downloadsFolderPath = AppDefaults.defaultDownloadsFolderPath()
+    @AppStorage(PreferenceKey.downloadsAskWhereToSave) private var downloadsAskWhereToSave = false
+    @AppStorage(PreferenceKey.downloadsClearOnQuit) private var downloadsClearOnQuit = false
+    @AppStorage(PreferenceKey.openDownloadsShortcut) private var openDownloadsShortcut = "shift+command+j"
 
     @State private var selectedTab: SettingsTab = .general
     @State private var showClearAllConfirm = false
@@ -109,6 +114,8 @@ struct SettingsView: View {
             accountSettings
         case .toolbar:
             toolbarSettings
+        case .downloads:
+            downloadsSettings
         case .ai:
             aiSettings
         case .clipboard:
@@ -157,6 +164,7 @@ struct SettingsView: View {
                 showReaderMode: toolbarShowReaderMode,
                 showSmartRead: toolbarShowSmartRead,
                 showClipboard: toolbarShowClipboard,
+                showDownloads: toolbarShowDownloads,
                 showTabRailToggle: toolbarShowTabRailToggle,
                 showChatToggle: toolbarShowChatToggle
             )
@@ -200,6 +208,12 @@ struct SettingsView: View {
                     label: "Paste with citation",
                     help: "Open the clipboard history popover.",
                     isOn: $toolbarShowClipboard
+                )
+                ToolbarToggleRow(
+                    symbol: "arrow.down.circle",
+                    label: "Downloads",
+                    help: "Toggle the downloads popover. Shows a progress ring while downloads are active.",
+                    isOn: $toolbarShowDownloads
                 )
                 ToolbarToggleRow(
                     symbol: "sidebar.left",
@@ -373,6 +387,48 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Downloads
+
+    private var downloadsSettings: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            pageHeader(title: "Downloads", subtitle: "Where files land and whether the app asks first.")
+
+            section("Destination") {
+                row(label: "Default folder", help: "New downloads land here unless you've asked for a save panel each time.") {
+                    DownloadsFolderPicker(path: $downloadsFolderPath)
+                }
+                row(label: "Ask where to save", help: "Show a save panel for every download so you can confirm the destination.") {
+                    HStack {
+                        Spacer()
+                        ToggleSwitch(isOn: $downloadsAskWhereToSave)
+                    }
+                }
+            }
+
+            section("History") {
+                row(label: "Clear on quit", help: "Wipe completed, failed, and cancelled rows when the browser exits.") {
+                    HStack {
+                        Spacer()
+                        ToggleSwitch(isOn: $downloadsClearOnQuit)
+                    }
+                }
+                row(label: "Open folder", help: "Reveal the current downloads folder in Finder.") {
+                    HStack {
+                        Spacer()
+                        Button("Reveal in Finder") {
+                            let folder = downloadsFolderPath.trimmingCharacters(in: .whitespacesAndNewlines)
+                            let url = folder.isEmpty
+                                ? URL(fileURLWithPath: AppDefaults.defaultDownloadsFolderPath())
+                                : URL(fileURLWithPath: (folder as NSString).expandingTildeInPath)
+                            NSWorkspace.shared.open(url)
+                        }
+                        .buttonStyle(PillButtonStyle())
+                    }
+                }
+            }
+        }
+    }
+
     // MARK: - Keybindings
 
     private var keybindingsSettings: some View {
@@ -396,6 +452,9 @@ struct SettingsView: View {
                 }
                 row(label: "Open Discord", help: "Opens the themed Discord launcher window.") {
                     ShortcutRecorder(value: $openDiscordShortcut)
+                }
+                row(label: "Open downloads", help: "Opens the downloads popover.") {
+                    ShortcutRecorder(value: $openDownloadsShortcut)
                 }
             }
         }
@@ -482,6 +541,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case account
     case toolbar
+    case downloads
     case ai
     case clipboard
     case keybindings
@@ -494,6 +554,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "General"
         case .account: "Account"
         case .toolbar: "Toolbar"
+        case .downloads: "Downloads"
         case .ai: "AI Engine"
         case .clipboard: "Clipboard"
         case .keybindings: "Keybindings"
@@ -506,6 +567,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .general: "slider.horizontal.3"
         case .account: "person.crop.circle"
         case .toolbar: "square.topthird.inset.filled"
+        case .downloads: "arrow.down.circle"
         case .ai: "sparkles"
         case .clipboard: "doc.on.clipboard"
         case .keybindings: "keyboard"
@@ -734,6 +796,7 @@ private struct ToolbarPreviewBar: View {
     let showReaderMode: Bool
     let showSmartRead: Bool
     let showClipboard: Bool
+    let showDownloads: Bool
     let showTabRailToggle: Bool
     let showChatToggle: Bool
 
@@ -758,6 +821,7 @@ private struct ToolbarPreviewBar: View {
                         if showReaderMode { previewChip("book.fill") }
                         if showSmartRead { previewChip("text.magnifyingglass") }
                         if showClipboard { previewChip("doc.on.clipboard") }
+                        if showDownloads { previewChip("arrow.down.circle") }
                         if showTabRailToggle { previewChip("sidebar.left") }
                         if showChatToggle { previewChip("sparkles") }
                     }
@@ -838,6 +902,7 @@ private struct ToolbarPreviewBar: View {
         if showClipboard { bits |= 1 << 5 }
         if showTabRailToggle { bits |= 1 << 6 }
         if showChatToggle { bits |= 1 << 7 }
+        if showDownloads { bits |= 1 << 8 }
         return bits
     }
 }
@@ -889,6 +954,73 @@ private struct MonoTextField: View {
                     .stroke(focused ? Palette.strokeStrong : Palette.stroke, lineWidth: 1)
             }
             .animation(Motion.hoverFade, value: focused)
+    }
+}
+
+/// Read-only display of the chosen downloads folder plus a "Choose…"
+/// button that opens an NSOpenPanel for directory selection. Stores the
+/// raw path string in `@AppStorage` so the same value can be read from
+/// the ``DownloadController`` at fetch time.
+private struct DownloadsFolderPicker: View {
+    @Binding var path: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "folder")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Palette.textMuted)
+                Text(displayPath)
+                    .font(.system(size: 12, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .frame(maxWidth: .infinity)
+            .background {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .fill(Palette.bgRaised)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .stroke(Palette.stroke, lineWidth: 1)
+            }
+
+            Button("Choose…") {
+                pickFolder()
+            }
+            .buttonStyle(PillButtonStyle())
+        }
+    }
+
+    private var displayPath: String {
+        let trimmed = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty { return AppDefaults.defaultDownloadsFolderPath() }
+        // Render `~` so the path stays readable for long ~/Downloads/Foo trees.
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        if trimmed.hasPrefix(home) {
+            return "~" + trimmed.dropFirst(home.count)
+        }
+        return trimmed
+    }
+
+    private func pickFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose"
+        let start = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !start.isEmpty {
+            panel.directoryURL = URL(fileURLWithPath: (start as NSString).expandingTildeInPath)
+        }
+        if panel.runModal() == .OK, let url = panel.url {
+            path = url.path
+        }
     }
 }
 

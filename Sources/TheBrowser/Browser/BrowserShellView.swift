@@ -18,6 +18,7 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.readerModeShortcut) private var readerModeShortcut = "command+r"
     @AppStorage(PreferenceKey.pasteWithCitationShortcut) private var pasteWithCitationShortcut = "shift+command+v"
     @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
+    @AppStorage(PreferenceKey.openDownloadsShortcut) private var openDownloadsShortcut = "shift+command+j"
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
     @AppStorage(PreferenceKey.hoverPreviewEnabled) private var hoverPreviewEnabled = true
     @AppStorage(PreferenceKey.hoverPreviewPrefetchBlocklist) private var hoverPreviewBlocklist = ""
@@ -26,6 +27,7 @@ struct BrowserShellView: View {
     @State private var peekDismissTask: Task<Void, Never>? = nil
     @State private var isShowingMigrationPrompt = false
     @State private var isClipboardPopoverPresented = false
+    @State private var isDownloadsPopoverPresented = false
 
     private var railOverlayVisible: Bool {
         model.isTabRailVisible || isPeekingRail
@@ -206,7 +208,8 @@ struct BrowserShellView: View {
                 readerActive: readerModel.isPresented,
                 onSmartRead: triggerSmartRead,
                 onReaderMode: triggerReaderMode,
-                isClipboardPopoverPresented: $isClipboardPopoverPresented
+                isClipboardPopoverPresented: $isClipboardPopoverPresented,
+                isDownloadsPopoverPresented: $isDownloadsPopoverPresented
             )
 
             ZStack {
@@ -439,6 +442,9 @@ struct BrowserShellView: View {
             },
             openDiscordShortcut: {
                 model.openOrFocusDiscord()
+            },
+            openDownloadsShortcut: {
+                isDownloadsPopoverPresented.toggle()
             }
         ]
     }
