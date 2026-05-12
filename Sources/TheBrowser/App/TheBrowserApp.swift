@@ -3,6 +3,8 @@ import SwiftUI
 
 @main
 struct TheBrowserApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     init() {
         AppDefaults.register()
         NSApplication.shared.setActivationPolicy(.regular)
@@ -11,6 +13,10 @@ struct TheBrowserApp: App {
             // Prime the cited-clipboard controller so its NSWorkspace
             // activation observer is installed before the user's first copy.
             _ = CitedClipboardController.shared
+            // Prime the downloads controller too: it migrates any
+            // "in-flight at last quit" rows into a failed state so the
+            // popover doesn't show ghost downloads.
+            _ = DownloadController.shared
         }
     }
 
@@ -30,5 +36,14 @@ struct TheBrowserApp: App {
                 .preferredColorScheme(.dark)
                 .background(Palette.bg)
         }
+    }
+}
+
+/// Lives only so we can run a few cleanup steps at quit time. Adding it via
+/// `@NSApplicationDelegateAdaptor` is the lightest way to hook into
+/// `applicationWillTerminate` from a SwiftUI app.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillTerminate(_ notification: Notification) {
+        DownloadController.shared.clearCompletedOnQuit()
     }
 }

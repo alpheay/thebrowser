@@ -1264,6 +1264,14 @@ extension BrowserTab: WKNavigationDelegate {
                 return
             }
 
+            // The HTML `download` attribute (or a JS-initiated download)
+            // sets this flag. Saying `.download` triggers the
+            // `navigationAction:didBecome:` callback below.
+            if navigationAction.shouldPerformDownload {
+                decisionHandler(.download)
+                return
+            }
+
             if navigationAction.targetFrame == nil,
                self.handleNewWindowRequest(navigationAction.request) {
                 decisionHandler(.cancel)
@@ -1342,12 +1350,42 @@ extension BrowserTab: WKNavigationDelegate {
             let pathLooksPDF = url?.pathExtension.lowercased() == "pdf"
             let isPDF = mime == "application/pdf" || (mime.isEmpty && pathLooksPDF)
 
-            guard isPDF, let pdfURL = url else {
-                decisionHandler(.allow)
+            if isPDF, let pdfURL = url {
+                decisionHandler(.cancel)
+                await self?.loadPDF(from: pdfURL)
                 return
             }
-            decisionHandler(.cancel)
-            await self?.loadPDF(from: pdfURL)
+
+            // Hand attachment responses (Content-Disposition: attachment, or
+            // MIME types WK doesn't render in-process) over to the
+            // ``DownloadController``. WK calls back into
+            // ``webView(_:navigationResponse:didBecome:)`` once we say
+            // `.download`, which wires the WKDownloadDelegate.
+            if navigationResponse.canShowMIMEType == false {
+                decisionHandler(.download)
+                return
+            }
+
+            decisionHandler(.allow)
+        }
+    }
+
+    nonisolated func webView(_ webView: WKWebView,
+                             navigationAction: WKNavigationAction,
+                             didBecome download: WKDownload) {
+        Task { @MainActor in
+            let url = navigationAction.request.url
+            DownloadController.shared.adopt(download, sourceURL: url, suggestedMIME: nil)
+        }
+    }
+
+    nonisolated func webView(_ webView: WKWebView,
+                             navigationResponse: WKNavigationResponse,
+                             didBecome download: WKDownload) {
+        Task { @MainActor in
+            let url = navigationResponse.response.url
+            let mime = navigationResponse.response.mimeType
+            DownloadController.shared.adopt(download, sourceURL: url, suggestedMIME: mime)
         }
     }
 }

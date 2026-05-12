@@ -54,11 +54,22 @@ enum PreferenceKey {
     static let toolbarShowClipboard = "toolbar.showClipboard"
     static let toolbarShowTabRailToggle = "toolbar.showTabRailToggle"
     static let toolbarShowChatToggle = "toolbar.showChatToggle"
+    static let toolbarShowDownloads = "toolbar.showDownloads"
     /// Minutes of background-tab idleness before the WKWebView is freed
     /// to reclaim memory. Tab metadata, favicon, and the Smart Read card
     /// survive; selecting the tab reloads the page. Set to zero to
     /// disable hibernation entirely.
     static let tabHibernationMinutes = "tabs.hibernationMinutes"
+
+    /// Bookmark-resolved or plain-path destination folder for new
+    /// downloads. Falls back to `~/Downloads` when empty.
+    static let downloadsFolderPath = "downloads.folderPath"
+    /// When on, show an NSSavePanel for each download so the user can
+    /// confirm the destination.
+    static let downloadsAskWhereToSave = "downloads.askWhereToSave"
+    /// When on, completed/failed/cancelled rows are wiped on quit.
+    static let downloadsClearOnQuit = "downloads.clearOnQuit"
+    static let openDownloadsShortcut = "shortcut.openDownloads"
 }
 
 /// Modifier choices for Hover Preview. Raw values are stored in
@@ -167,8 +178,20 @@ enum AppDefaults {
             PreferenceKey.toolbarShowClipboard: false,
             PreferenceKey.toolbarShowTabRailToggle: true,
             PreferenceKey.toolbarShowChatToggle: true,
-            PreferenceKey.tabHibernationMinutes: 30
+            PreferenceKey.toolbarShowDownloads: true,
+            PreferenceKey.tabHibernationMinutes: 30,
+            PreferenceKey.downloadsFolderPath: defaultDownloadsFolderPath(),
+            PreferenceKey.downloadsAskWhereToSave: false,
+            PreferenceKey.downloadsClearOnQuit: false,
+            PreferenceKey.openDownloadsShortcut: "shift+command+j"
         ])
+    }
+
+    static func defaultDownloadsFolderPath() -> String {
+        if let url = FileManager.default.urls(for: .downloadsDirectory, in: .userDomainMask).first {
+            return url.path
+        }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Downloads").path
     }
 
     static func defaultCodexCLIPath() -> String {
