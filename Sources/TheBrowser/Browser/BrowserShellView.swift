@@ -187,6 +187,10 @@ struct BrowserShellView: View {
             guard !migrationPromptCompleted else { return }
             isShowingMigrationPrompt = true
         }
+        .onReceive(NotificationCenter.default.publisher(for: CitedClipboardPopoverModel.draftRequestedNotification)) { note in
+            guard let clips = note.userInfo?[CitedClipboardPopoverModel.draftRequestedClipsKey] as? [CitedClip] else { return }
+            handleDraftRequest(clips: clips)
+        }
         .sheet(isPresented: $isShowingMigrationPrompt) {
             MigrationView(presentation: .firstRun) {
                 migrationPromptCompleted = true
@@ -319,6 +323,18 @@ struct BrowserShellView: View {
             chatModel.focusComposer()
         }
         model.selectedTab.clearSelectionInfo()
+    }
+
+    /// Hands off a set of clips from the cited clipboard popover to the
+    /// chat sidebar's draft mode: opens the chat if it's hidden, queues
+    /// the clips as attachments, and surfaces the preset chooser above
+    /// the composer.
+    private func handleDraftRequest(clips: [CitedClip]) {
+        guard !clips.isEmpty else { return }
+        if !model.isChatVisible {
+            withAnimation(Motion.springSnap) { model.toggleChat() }
+        }
+        chatModel.beginDraftFromClips(clips)
     }
 
     /// Kicks off a Smart Read summary and opens the AI chat sidebar so the
