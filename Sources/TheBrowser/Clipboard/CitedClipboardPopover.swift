@@ -1088,7 +1088,7 @@ private struct ErrorBanner: View {
 
 private struct DraftingView: View {
     @ObservedObject var model: CitedClipboardPopoverModel
-    @State private var phase: CGFloat = 0
+    @State private var phase: Double = 0
 
     var body: some View {
         VStack(spacing: 14) {
