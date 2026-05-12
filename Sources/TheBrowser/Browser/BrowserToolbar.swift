@@ -249,8 +249,8 @@ struct BrowserToolbar: View {
 }
 
 /// Thin wrapper that owns the popover model so the popover keeps its state
-/// across open/close cycles (the model resets `pickedClip` and search when
-/// the popover dismisses).
+/// across open/close cycles (the model resets its mode, search, selection,
+/// and any in-flight draft when the popover dismisses).
 private struct CitedClipboardPopoverHost: View {
     @Binding var isPresented: Bool
     @StateObject private var model = CitedClipboardPopoverModel()
