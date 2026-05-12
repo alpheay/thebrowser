@@ -59,6 +59,15 @@ enum PreferenceKey {
     /// survive; selecting the tab reloads the page. Set to zero to
     /// disable hibernation entirely.
     static let tabHibernationMinutes = "tabs.hibernationMinutes"
+    static let bookmarkBarVisible = "bookmarks.barVisible"
+    static let bookmarksAutoTagEnabled = "bookmarks.autoTagEnabled"
+    static let bookmarksTaggingModel = "bookmarks.taggingModel"
+    static let bookmarksAutoTagMigrationCompletedV1 = "bookmarks.autoTagMigrationCompleted_v1"
+    static let addBookmarkShortcut = "shortcut.addBookmark"
+    static let toggleBookmarkBarShortcut = "shortcut.toggleBookmarkBar"
+    static let openBookmarksPaneShortcut = "shortcut.openBookmarksPane"
+    static let toolbarShowBookmarkStar = "toolbar.showBookmarkStar"
+    static let toolbarShowBookmarksToggle = "toolbar.showBookmarksToggle"
 }
 
 /// Modifier choices for Hover Preview. Raw values are stored in
@@ -167,7 +176,16 @@ enum AppDefaults {
             PreferenceKey.toolbarShowClipboard: false,
             PreferenceKey.toolbarShowTabRailToggle: true,
             PreferenceKey.toolbarShowChatToggle: true,
-            PreferenceKey.tabHibernationMinutes: 30
+            PreferenceKey.tabHibernationMinutes: 30,
+            PreferenceKey.bookmarkBarVisible: false,
+            PreferenceKey.bookmarksAutoTagEnabled: true,
+            PreferenceKey.bookmarksTaggingModel: "",
+            PreferenceKey.bookmarksAutoTagMigrationCompletedV1: false,
+            PreferenceKey.addBookmarkShortcut: "option+command+d",
+            PreferenceKey.toggleBookmarkBarShortcut: "shift+command+b",
+            PreferenceKey.openBookmarksPaneShortcut: "option+command+b",
+            PreferenceKey.toolbarShowBookmarkStar: true,
+            PreferenceKey.toolbarShowBookmarksToggle: true
         ])
     }
 

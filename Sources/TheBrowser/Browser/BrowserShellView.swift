@@ -8,6 +8,7 @@ struct BrowserShellView: View {
     @StateObject private var smartReadModel = SmartReadModel()
     @StateObject private var readerModel = ReaderModeModel()
     @StateObject private var hoverPreview = HoverPreviewModel()
+    @ObservedObject private var bookmarksManager = BookmarksManager.shared
 
     @AppStorage(PreferenceKey.toggleChatShortcut) private var toggleChatShortcut = "command+j"
     @AppStorage(PreferenceKey.toggleTabsShortcut) private var toggleTabsShortcut = "command+b"
@@ -18,14 +19,19 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.readerModeShortcut) private var readerModeShortcut = "command+r"
     @AppStorage(PreferenceKey.pasteWithCitationShortcut) private var pasteWithCitationShortcut = "shift+command+v"
     @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
+    @AppStorage(PreferenceKey.addBookmarkShortcut) private var addBookmarkShortcut = "option+command+d"
+    @AppStorage(PreferenceKey.toggleBookmarkBarShortcut) private var toggleBookmarkBarShortcut = "shift+command+b"
+    @AppStorage(PreferenceKey.openBookmarksPaneShortcut) private var openBookmarksPaneShortcut = "option+command+b"
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
     @AppStorage(PreferenceKey.hoverPreviewEnabled) private var hoverPreviewEnabled = true
     @AppStorage(PreferenceKey.hoverPreviewPrefetchBlocklist) private var hoverPreviewBlocklist = ""
+    @AppStorage(PreferenceKey.bookmarkBarVisible) private var bookmarkBarVisible = false
 
     @State private var isPeekingRail = false
     @State private var peekDismissTask: Task<Void, Never>? = nil
     @State private var isShowingMigrationPrompt = false
     @State private var isClipboardPopoverPresented = false
+    @State private var isBookmarksPaneVisible = false
 
     private var railOverlayVisible: Bool {
         model.isTabRailVisible || isPeekingRail
@@ -37,10 +43,24 @@ struct BrowserShellView: View {
             Palette.bg
                 .ignoresSafeArea()
 
-            // Layer 1: main HStack — rail | center | chat, all full height
+            // Layer 1: main HStack — rail | bookmarks | center | chat, all full height
             HStack(spacing: 0) {
                 if model.isTabRailVisible {
                     TabRailView(model: model)
+                }
+
+                if isBookmarksPaneVisible {
+                    BookmarksSidebarView(
+                        manager: bookmarksManager,
+                        onOpen: { url in
+                            model.addressDraft = url
+                            model.navigateSelected(to: url)
+                        },
+                        onClose: {
+                            withAnimation(Motion.springSnap) { isBookmarksPaneVisible = false }
+                        }
+                    )
+                    .transition(.move(edge: .leading).combined(with: .opacity))
                 }
 
                 centerColumn
@@ -180,6 +200,11 @@ struct BrowserShellView: View {
             hoverPreview.prefetcher.updateBlocklist(hoverPreviewBlocklist)
             for tab in model.tabs { tab.updateHoverPreviewEnabled(hoverPreviewEnabled) }
             smartReadModel.bind(to: model.selectedTab)
+            // Pull any pre-existing migrated bookmarks into the SQLite
+            // store and kick off the AI tagging backfill. Both calls
+            // are idempotent — duplicates are dropped at the SQL layer
+            // and the backfill flag in UserDefaults guards re-runs.
+            bookmarksManager.importExistingMigratedBookmarksIfNeeded()
             guard !migrationPromptCompleted else { return }
             isShowingMigrationPrompt = true
         }
@@ -202,12 +227,29 @@ struct BrowserShellView: View {
             BrowserToolbar(
                 model: model,
                 selectedTab: model.selectedTab,
-                reservesTrafficLightGutter: !model.isTabRailVisible,
+                reservesTrafficLightGutter: !model.isTabRailVisible && !isBookmarksPaneVisible,
                 readerActive: readerModel.isPresented,
                 onSmartRead: triggerSmartRead,
                 onReaderMode: triggerReaderMode,
+                onToggleBookmark: toggleBookmarkForSelectedTab,
+                onToggleBookmarksPane: {
+                    withAnimation(Motion.springSnap) { isBookmarksPaneVisible.toggle() }
+                },
+                isBookmarked: isSelectedTabBookmarked,
+                isBookmarksPaneVisible: isBookmarksPaneVisible,
                 isClipboardPopoverPresented: $isClipboardPopoverPresented
             )
+
+            if bookmarkBarVisible {
+                BookmarkBarView(
+                    manager: bookmarksManager,
+                    onOpen: { url in
+                        model.addressDraft = url
+                        model.navigateSelected(to: url)
+                    }
+                )
+                .transition(.move(edge: .top).combined(with: .opacity))
+            }
 
             ZStack {
                 if model.selectedTab.isHome {
@@ -439,8 +481,66 @@ struct BrowserShellView: View {
             },
             openDiscordShortcut: {
                 model.openOrFocusDiscord()
+            },
+            addBookmarkShortcut: {
+                toggleBookmarkForSelectedTab()
+            },
+            toggleBookmarkBarShortcut: {
+                withAnimation(Motion.springSnap) { bookmarkBarVisible.toggle() }
+            },
+            openBookmarksPaneShortcut: {
+                withAnimation(Motion.springSnap) { isBookmarksPaneVisible.toggle() }
             }
         ]
+    }
+
+    // MARK: - Bookmark wiring
+
+    private var isSelectedTabBookmarked: Bool {
+        guard let url = model.selectedTab.url else { return false }
+        return bookmarksManager.isBookmarked(url: url.absoluteString)
+    }
+
+    /// ⌥⌘D / star icon: toggles the saved state of the current tab. On
+    /// add we kick off auto-tagging with the visible text excerpt so the
+    /// "tagging…" spinner has something to grind on. Toast confirms the
+    /// action and offers an immediate undo.
+    private func toggleBookmarkForSelectedTab() {
+        let tab = model.selectedTab
+        guard let url = tab.url, !tab.isHome else { return }
+        let urlString = url.absoluteString
+
+        if let existing = bookmarksManager.bookmark(forURL: urlString) {
+            bookmarksManager.removeBookmark(id: existing.id)
+            AppNotificationCenter.shared.post(
+                title: "Bookmark removed",
+                message: existing.title,
+                icon: "bookmark",
+                kind: .info,
+                duration: 3.0
+            )
+            return
+        }
+
+        Task { @MainActor in
+            let excerpt = await tab.extractVisibleText(maxBytes: 1_200)
+            let title = tab.displayTitle
+            let saved = bookmarksManager.addBookmark(
+                url: urlString,
+                title: title,
+                folder: BookmarkFolders.root,
+                excerpt: excerpt
+            )
+            if saved != nil {
+                AppNotificationCenter.shared.post(
+                    title: "Bookmark added",
+                    message: title,
+                    icon: "bookmark.fill",
+                    kind: .info,
+                    duration: 3.0
+                )
+            }
+        }
     }
 }
 

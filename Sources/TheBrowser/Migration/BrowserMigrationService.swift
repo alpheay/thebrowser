@@ -41,6 +41,10 @@ enum BrowserMigrationService {
         )
 
         MigrationImportStore.save(payload: payload, result: result)
+        let importedBookmarks = payload.bookmarks
+        await MainActor.run {
+            BookmarksManager.shared.ingestMigratedBookmarks(importedBookmarks)
+        }
         return result
     }
 

@@ -7,6 +7,10 @@ struct BrowserToolbar: View {
     var readerActive: Bool = false
     var onSmartRead: () -> Void = {}
     var onReaderMode: () -> Void = {}
+    var onToggleBookmark: () -> Void = {}
+    var onToggleBookmarksPane: () -> Void = {}
+    var isBookmarked: Bool = false
+    var isBookmarksPaneVisible: Bool = false
     @Binding var isClipboardPopoverPresented: Bool
 
     @AppStorage(PreferenceKey.toolbarShowBack) private var showBack = true
@@ -17,6 +21,8 @@ struct BrowserToolbar: View {
     @AppStorage(PreferenceKey.toolbarShowClipboard) private var showClipboard = false
     @AppStorage(PreferenceKey.toolbarShowTabRailToggle) private var showTabRailToggle = true
     @AppStorage(PreferenceKey.toolbarShowChatToggle) private var showChatToggle = true
+    @AppStorage(PreferenceKey.toolbarShowBookmarkStar) private var showBookmarkStar = true
+    @AppStorage(PreferenceKey.toolbarShowBookmarksToggle) private var showBookmarksToggle = true
 
     @FocusState private var addressFocused: Bool
     @State private var submitPulse = false
@@ -129,6 +135,17 @@ struct BrowserToolbar: View {
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(Palette.textMuted)
             }
+
+            if showBookmarkStar, selectedTab.url != nil, !selectedTab.isHome {
+                Button(action: onToggleBookmark) {
+                    Image(systemName: isBookmarked ? "star.fill" : "star")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(isBookmarked ? Color.white : Palette.textMuted)
+                        .contentTransition(.symbolEffect(.replace))
+                }
+                .buttonStyle(.plain)
+                .help(isBookmarked ? "Remove bookmark" : "Add bookmark (⌥⌘D)")
+            }
         }
         .padding(.horizontal, 12)
         .frame(height: 30)
@@ -233,6 +250,14 @@ struct BrowserToolbar: View {
                 }
                 .buttonStyle(IconButtonStyle(selected: model.isTabRailVisible, size: 28))
                 .help("Toggle side tabs")
+            }
+
+            if showBookmarksToggle {
+                Button(action: onToggleBookmarksPane) {
+                    Image(systemName: "bookmark")
+                }
+                .buttonStyle(IconButtonStyle(selected: isBookmarksPaneVisible, size: 28))
+                .help("Toggle bookmarks (⌥⌘B)")
             }
 
             if showChatToggle {
