@@ -18,7 +18,9 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.readerModeShortcut) private var readerModeShortcut = "command+r"
     @AppStorage(PreferenceKey.pasteWithCitationShortcut) private var pasteWithCitationShortcut = "shift+command+v"
     @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
+    @AppStorage(PreferenceKey.openHistoryShortcut) private var openHistoryShortcut = "command+y"
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
+    @AppStorage(PreferenceKey.historyImportBackfillCompleted) private var historyImportBackfillCompleted = false
     @AppStorage(PreferenceKey.hoverPreviewEnabled) private var hoverPreviewEnabled = true
     @AppStorage(PreferenceKey.hoverPreviewPrefetchBlocklist) private var hoverPreviewBlocklist = ""
 
@@ -26,6 +28,7 @@ struct BrowserShellView: View {
     @State private var peekDismissTask: Task<Void, Never>? = nil
     @State private var isShowingMigrationPrompt = false
     @State private var isClipboardPopoverPresented = false
+    @State private var isShowingHistoryModal = false
 
     private var railOverlayVisible: Bool {
         model.isTabRailVisible || isPeekingRail
@@ -180,6 +183,7 @@ struct BrowserShellView: View {
             hoverPreview.prefetcher.updateBlocklist(hoverPreviewBlocklist)
             for tab in model.tabs { tab.updateHoverPreviewEnabled(hoverPreviewEnabled) }
             smartReadModel.bind(to: model.selectedTab)
+            backfillImportedHistoryIfNeeded()
             guard !migrationPromptCompleted else { return }
             isShowingMigrationPrompt = true
         }
@@ -189,6 +193,26 @@ struct BrowserShellView: View {
                 isShowingMigrationPrompt = false
             }
             .frame(width: 740, height: 620)
+            .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $isShowingHistoryModal) {
+            HistoryModalView(
+                onClose: { isShowingHistoryModal = false },
+                onOpen: { url in
+                    isShowingHistoryModal = false
+                    model.addressDraft = url.absoluteString
+                    model.navigateSelected(to: url.absoluteString)
+                },
+                onOpenInBackgroundTab: { url in
+                    model.openInNewTab(url: url, background: true)
+                },
+                onOpenSearch: { query in
+                    isShowingHistoryModal = false
+                    model.addressDraft = query
+                    model.navigateSelected(to: query)
+                }
+            )
+            .frame(minWidth: 880, idealWidth: 1000, minHeight: 580, idealHeight: 680)
             .preferredColorScheme(.dark)
         }
         .animation(Motion.springSnap, value: model.isChatVisible)
@@ -326,6 +350,24 @@ struct BrowserShellView: View {
     /// even if `BrowserShellView` is reconstructed.
     private static var didPostWelcomeThisLaunch = false
 
+    /// One-time pull of the existing migration-imported history rows into
+    /// the SQLite ``HistoryStore``. Gated by a UserDefaults flag so the
+    /// next launch is a no-op. Subsequent migrations run their own import
+    /// directly via ``HistoryStore/importMigratedEntries``.
+    ///
+    /// Always touches ``HistoryStore/shared`` so the SQLite file is created
+    /// at app start, not the first time someone records a visit — keeps the
+    /// first navigation free of an unexpected file-system roundtrip.
+    private func backfillImportedHistoryIfNeeded() {
+        _ = HistoryStore.shared.count()
+        guard !historyImportBackfillCompleted else { return }
+        let imported = MigrationImportStore.importedHistory(limit: 5_000)
+        if !imported.isEmpty {
+            HistoryStore.shared.importMigratedEntries(imported)
+        }
+        historyImportBackfillCompleted = true
+    }
+
     private func postWelcomeNotificationIfNeeded() {
         guard !Self.didPostWelcomeThisLaunch else { return }
         Self.didPostWelcomeThisLaunch = true
@@ -409,9 +451,14 @@ struct BrowserShellView: View {
 
     // MARK: - Shortcut bindings
 
+    /// Built imperatively (rather than from a `[Key: Value]` literal) because
+    /// users can rebind any chord, so two preferences may legitimately end up
+    /// holding the same string — a literal would fatal-error. Earlier rows in
+    /// the list below take precedence when two preferences collide.
     private var shortcutBindings: [String: () -> Void] {
-        [
-            toggleChatShortcut: {
+        var bindings: [String: () -> Void] = [:]
+        let pairs: [(String, () -> Void)] = [
+            (toggleChatShortcut, {
                 let willBeVisible = !model.isChatVisible
                 withAnimation(Motion.springSnap) { model.toggleChat() }
                 if willBeVisible {
@@ -419,28 +466,21 @@ struct BrowserShellView: View {
                         chatModel.focusComposer()
                     }
                 }
-            },
-            toggleTabsShortcut: {
-                withAnimation(Motion.springSnap) { model.toggleTabs() }
-            },
-            newTabShortcut: {
-                model.addTab()
-            },
-            closeTabShortcut: {
-                model.closeSelected()
-            },
-            focusAddressShortcut: {
-                model.focusAddress()
-            },
-            smartReadShortcut: triggerSmartRead,
-            readerModeShortcut: triggerReaderMode,
-            pasteWithCitationShortcut: {
-                CitedClipboardCursorPanelController.shared.toggle()
-            },
-            openDiscordShortcut: {
-                model.openOrFocusDiscord()
-            }
+            }),
+            (toggleTabsShortcut, { withAnimation(Motion.springSnap) { model.toggleTabs() } }),
+            (newTabShortcut, { model.addTab() }),
+            (closeTabShortcut, { model.closeSelected() }),
+            (focusAddressShortcut, { model.focusAddress() }),
+            (smartReadShortcut, triggerSmartRead),
+            (readerModeShortcut, triggerReaderMode),
+            (pasteWithCitationShortcut, { CitedClipboardCursorPanelController.shared.toggle() }),
+            (openDiscordShortcut, { model.openOrFocusDiscord() }),
+            (openHistoryShortcut, { isShowingHistoryModal.toggle() })
         ]
+        for (key, action) in pairs where bindings[key] == nil {
+            bindings[key] = action
+        }
+        return bindings
     }
 }
 

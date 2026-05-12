@@ -33,6 +33,11 @@ enum PreferenceKey {
     static let googleOAuthClientID = "google.oauth.clientID"
     static let discordOAuthClientID = "discord.oauth.clientID"
     static let openDiscordShortcut = "shortcut.openDiscord"
+    static let openHistoryShortcut = "shortcut.openHistory"
+    /// Set true after the first-launch backfill of imported history into
+    /// the SQLite ``HistoryStore``. Mirrors the bookmarks one-time flag
+    /// pattern (see ``migrationPromptCompleted``).
+    static let historyImportBackfillCompleted = "history.importBackfillCompleted"
     static let clipboardEnabled = "clipboard.enabled"
     static let clipboardSmartPasteEnabled = "clipboard.smartPasteEnabled"
     static let clipboardMarkdownStyle = "clipboard.markdownStyle"
@@ -146,6 +151,8 @@ enum AppDefaults {
             PreferenceKey.googleOAuthClientID: "",
             PreferenceKey.discordOAuthClientID: "",
             PreferenceKey.openDiscordShortcut: "command+d",
+            PreferenceKey.openHistoryShortcut: "command+y",
+            PreferenceKey.historyImportBackfillCompleted: false,
             PreferenceKey.clipboardEnabled: true,
             PreferenceKey.clipboardSmartPasteEnabled: true,
             PreferenceKey.clipboardMarkdownStyle: CitedMarkdownStyle.blockquote.rawValue,
