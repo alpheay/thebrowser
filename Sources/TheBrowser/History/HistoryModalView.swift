@@ -276,11 +276,30 @@ struct HistoryModalView: View {
                 .padding(.top, 14)
             }
             .scrollIndicators(.automatic)
+            .mask {
+                // Soft top fade so scrolled content slides under the
+                // hero divider instead of clipping hard against it.
+                VStack(spacing: 0) {
+                    LinearGradient(
+                        colors: [Color.black.opacity(0), Color.black],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    )
+                    .frame(height: 16)
+                    Rectangle().fill(Color.black)
+                }
+            }
         }
     }
 
     private func sectionHeader(_ section: HistoryTimelineSection) -> some View {
         HStack(spacing: 10) {
+            if let symbol = section.symbolName {
+                Image(systemName: symbol)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Palette.textMuted)
+                    .frame(width: 12)
+            }
             Text(section.title.uppercased())
                 .font(.system(size: 10, weight: .semibold))
                 .tracking(1.8)
@@ -433,7 +452,12 @@ struct HistoryModalView: View {
         guard !visible.isEmpty else { return [] }
 
         if !trimmedQuery.isEmpty {
-            return [HistoryTimelineSection(id: "search", title: "Best matches", entries: visible)]
+            return [HistoryTimelineSection(
+                id: "search",
+                title: "Best matches",
+                symbolName: nil,
+                entries: visible
+            )]
         }
         return HistoryTimelineSectioner.sections(for: visible, in: selectedGroup)
     }
@@ -555,10 +579,13 @@ enum HistoryKindFilter: String, CaseIterable, Identifiable, Hashable {
 
 // MARK: - Timeline sections
 
-/// A heading + the rows that sit under it inside the timeline.
+/// A heading + the rows that sit under it inside the timeline. `symbolName`
+/// is optional so the synthetic "Best matches" search section can omit a
+/// glyph while time / weekday / month sections each get a tasteful one.
 struct HistoryTimelineSection: Identifiable {
     let id: String
     let title: String
+    let symbolName: String?
     let entries: [HistoryEntry]
 }
 
@@ -595,7 +622,12 @@ enum HistoryTimelineSectioner {
         }
         return buckets.compactMap { bucket, items in
             guard !items.isEmpty else { return nil }
-            return HistoryTimelineSection(id: bucket.rawValue, title: bucket.title, entries: items)
+            return HistoryTimelineSection(
+                id: bucket.rawValue,
+                title: bucket.title,
+                symbolName: bucket.symbolName,
+                entries: items
+            )
         }
     }
 
@@ -622,6 +654,7 @@ enum HistoryTimelineSectioner {
             HistoryTimelineSection(
                 id: key,
                 title: titleByKey[key] ?? key,
+                symbolName: "calendar",
                 entries: byKey[key, default: []]
             )
         }
@@ -650,6 +683,7 @@ enum HistoryTimelineSectioner {
             HistoryTimelineSection(
                 id: key,
                 title: titleByKey[key] ?? key,
+                symbolName: "archivebox",
                 entries: byKey[key, default: []]
             )
         }
@@ -667,6 +701,15 @@ enum HistoryTimelineSectioner {
             case .morning: "Morning"
             case .afternoon: "Afternoon"
             case .evening: "Evening"
+            }
+        }
+
+        var symbolName: String {
+            switch self {
+            case .lateNight: "moon.stars"
+            case .morning: "sunrise"
+            case .afternoon: "sun.max"
+            case .evening: "sunset"
             }
         }
 
