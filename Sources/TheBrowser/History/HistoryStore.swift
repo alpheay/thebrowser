@@ -61,18 +61,74 @@ final class HistoryStore {
         now: Date = Date()
     ) -> Bool {
         guard Self.shouldRecord(url: url) else { return false }
+        return insertOrBump(
+            url: url.absoluteString,
+            title: title ?? "",
+            kind: .visit,
+            tabID: tabID,
+            sessionID: sessionID,
+            now: now
+        )
+    }
+
+    /// Records an in-app search the user typed into the URL bar. Searches
+    /// never trigger an outbound navigation in TheBrowser — they render a
+    /// local `SearchResultsView` — so the URL stored here is synthesized
+    /// from the configured engine and used purely as a stable dedup key
+    /// (same query + same engine → bumps `visit_count`, doesn't add a row).
+    /// The raw query is kept in `title` so the modal can display it and
+    /// re-run it via ``BrowserTab/navigate(to:)``.
+    @discardableResult
+    func recordSearch(
+        query: String,
+        engine: String,
+        tabID: String? = nil,
+        sessionID: String? = nil,
+        now: Date = Date()
+    ) -> Bool {
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let key = Self.searchURLKey(query: trimmed, engine: engine)
+        return insertOrBump(
+            url: key,
+            title: trimmed,
+            kind: .search,
+            tabID: tabID,
+            sessionID: sessionID,
+            now: now
+        )
+    }
+
+    /// Synthesizes a stable storage key for a search row. Lowercases the
+    /// query so "swift" and "Swift" share a row, and includes the engine so
+    /// the same query against two different engines stays distinct in case
+    /// the user changes their default later.
+    static func searchURLKey(query: String, engine: String) -> String {
+        let normalizedQuery = query.lowercased()
+        let encoded = normalizedQuery
+            .addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? normalizedQuery
+        return "thebrowser-search://\(engine.lowercased())?q=\(encoded)"
+    }
+
+    private func insertOrBump(
+        url: String,
+        title: String,
+        kind: HistoryEntryKind,
+        tabID: String?,
+        sessionID: String?,
+        now: Date
+    ) -> Bool {
         guard let db else { return false }
 
-        let normalized = url.absoluteString
-        let cleanTitle = (title ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanTitle = title.trimmingCharacters(in: .whitespacesAndNewlines)
         let timestamp = Self.iso8601Formatter.string(from: now)
 
         let sql = """
         INSERT INTO history (
             url, title, favicon_path, visited_at, visit_count,
-            last_visited_at, tab_id, session_id, summary, embedding
+            last_visited_at, tab_id, session_id, summary, embedding, kind
         )
-        VALUES (?, ?, NULL, ?, 1, ?, ?, ?, NULL, NULL)
+        VALUES (?, ?, NULL, ?, 1, ?, ?, ?, NULL, NULL, ?)
         ON CONFLICT(url) DO UPDATE SET
             visit_count = history.visit_count + 1,
             last_visited_at = excluded.last_visited_at,
@@ -88,12 +144,13 @@ final class HistoryStore {
             return false
         }
 
-        bindString(statement, 1, normalized)
+        bindString(statement, 1, url)
         bindString(statement, 2, cleanTitle)
         bindString(statement, 3, timestamp)
         bindString(statement, 4, timestamp)
         bindOptionalString(statement, 5, tabID)
         bindOptionalString(statement, 6, sessionID)
+        bindString(statement, 7, kind.rawValue)
 
         guard sqlite3_step(statement) == SQLITE_DONE else {
             logSQLiteError(context: "step insert")
@@ -155,9 +212,9 @@ final class HistoryStore {
         let sql = """
         INSERT INTO history (
             url, title, favicon_path, visited_at, visit_count,
-            last_visited_at, tab_id, session_id, summary, embedding
+            last_visited_at, tab_id, session_id, summary, embedding, kind
         )
-        VALUES (?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, NULL)
+        VALUES (?, ?, NULL, ?, ?, ?, NULL, NULL, NULL, NULL, 'visit')
         ON CONFLICT(url) DO UPDATE SET
             title = CASE WHEN excluded.title <> '' THEN excluded.title ELSE history.title END,
             visit_count = history.visit_count + excluded.visit_count,
@@ -200,7 +257,7 @@ final class HistoryStore {
 
         var sql = """
         SELECT id, url, title, favicon_path, visited_at, visit_count,
-               last_visited_at, tab_id, session_id, summary
+               last_visited_at, tab_id, session_id, summary, kind
         FROM history
         """
         if range != nil {
@@ -238,7 +295,7 @@ final class HistoryStore {
 
         let sql = """
         SELECT id, url, title, favicon_path, visited_at, visit_count,
-               last_visited_at, tab_id, session_id, summary
+               last_visited_at, tab_id, session_id, summary, kind
         FROM history
         WHERE url LIKE ? COLLATE NOCASE OR title LIKE ? COLLATE NOCASE
         ORDER BY last_visited_at DESC
@@ -391,12 +448,43 @@ final class HistoryStore {
             tab_id TEXT,
             session_id TEXT,
             summary TEXT,
-            embedding BLOB
+            embedding BLOB,
+            kind TEXT NOT NULL DEFAULT 'visit'
         );
         CREATE INDEX IF NOT EXISTS history_last_visited ON history (last_visited_at DESC);
         CREATE INDEX IF NOT EXISTS history_url ON history (url);
+        CREATE INDEX IF NOT EXISTS history_kind ON history (kind);
         """
         sqlite3_exec(handle, schema, nil, nil, nil)
+
+        // Migrate existing databases that predate the `kind` column.
+        // `ALTER TABLE` is idempotent only if the column is missing — we
+        // probe `PRAGMA table_info` rather than swallowing the error.
+        if !columnExists("kind", on: "history") {
+            sqlite3_exec(
+                handle,
+                "ALTER TABLE history ADD COLUMN kind TEXT NOT NULL DEFAULT 'visit';",
+                nil, nil, nil
+            )
+            sqlite3_exec(
+                handle,
+                "CREATE INDEX IF NOT EXISTS history_kind ON history (kind);",
+                nil, nil, nil
+            )
+        }
+    }
+
+    private func columnExists(_ column: String, on table: String) -> Bool {
+        guard let db else { return false }
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        let sql = "PRAGMA table_info(\(table));"
+        guard sqlite3_prepare_v2(db, sql, -1, &statement, nil) == SQLITE_OK else { return false }
+        while sqlite3_step(statement) == SQLITE_ROW {
+            // Column 1 of `PRAGMA table_info` is the column name.
+            if readString(statement, 1) == column { return true }
+        }
+        return false
     }
 
     private func readEntries(from statement: OpaquePointer?) -> [HistoryEntry] {
@@ -413,6 +501,7 @@ final class HistoryStore {
             let tabID = readOptionalString(statement, 7)
             let sessionID = readOptionalString(statement, 8)
             let summary = readOptionalString(statement, 9)
+            let kind = HistoryEntryKind(rawValue: readString(statement, 10)) ?? .visit
             results.append(HistoryEntry(
                 id: id,
                 url: url,
@@ -423,7 +512,8 @@ final class HistoryStore {
                 lastVisitedAt: lastVisitedAt,
                 tabID: tabID,
                 sessionID: sessionID,
-                summary: summary
+                summary: summary,
+                kind: kind
             ))
         }
         return results
@@ -498,6 +588,15 @@ final class HistoryStore {
 
 // MARK: - Domain types
 
+/// Type of history row. `visit` is a page the user navigated to; `search`
+/// is a query they typed into the URL bar that surfaced TheBrowser's local
+/// `SearchResultsView`. Stored as a column so the modal can filter, group,
+/// and style the two cases differently.
+enum HistoryEntryKind: String, CaseIterable, Hashable, Sendable {
+    case visit
+    case search
+}
+
 struct HistoryEntry: Identifiable, Hashable, Sendable {
     let id: Int64
     let url: URL
@@ -509,6 +608,7 @@ struct HistoryEntry: Identifiable, Hashable, Sendable {
     let tabID: String?
     let sessionID: String?
     let summary: String?
+    let kind: HistoryEntryKind
 
     /// Title to render — falls back to the URL host (or the full URL string
     /// when there's no host) so a row never appears blank in the modal.
@@ -521,6 +621,19 @@ struct HistoryEntry: Identifiable, Hashable, Sendable {
 
     var host: String? {
         url.host(percentEncoded: false)
+    }
+
+    /// True for searches the user typed into the URL bar. Drives the
+    /// alternate row presentation in the modal (search-glyph chip,
+    /// "Search · Engine" subtitle, click re-runs the query).
+    var isSearch: Bool { kind == .search }
+
+    /// Engine name pulled from the synthetic search URL — only meaningful
+    /// when ``isSearch`` is true. Falls back to "Search" if the URL doesn't
+    /// match the synthesizer's format.
+    var searchEngineLabel: String? {
+        guard isSearch, url.scheme == "thebrowser-search" else { return nil }
+        return url.host?.capitalized
     }
 }
 

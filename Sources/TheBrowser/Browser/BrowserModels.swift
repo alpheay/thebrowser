@@ -379,6 +379,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             url = nil
             title = query
             clearPDFState()
+            HistoryStore.shared.recordSearch(
+                query: query,
+                engine: SearchEngine.selected.rawValue,
+                tabID: id.uuidString
+            )
         }
     }
 

@@ -205,6 +205,11 @@ struct BrowserShellView: View {
                 },
                 onOpenInBackgroundTab: { url in
                     model.openInNewTab(url: url, background: true)
+                },
+                onOpenSearch: { query in
+                    isShowingHistoryModal = false
+                    model.addressDraft = query
+                    model.navigateSelected(to: query)
                 }
             )
             .frame(minWidth: 880, idealWidth: 1000, minHeight: 580, idealHeight: 680)

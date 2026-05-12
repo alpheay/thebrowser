@@ -36,6 +36,7 @@ struct HistoryStoreTests {
         #expect(first.url.absoluteString == "https://example.com/page")
         #expect(first.title == "Example")
         #expect(first.visitCount == 1)
+        #expect(first.kind == .visit)
         #expect(abs(first.lastVisitedAt.timeIntervalSince(when)) < 1)
     }
 
@@ -177,6 +178,59 @@ struct HistoryStoreTests {
         let entries = store.listHistory()
         #expect(entries.count == 1)
         #expect(entries.first?.visitCount == 8)
+    }
+
+    @Test("recordSearch inserts a row with kind=search and the query as title")
+    func recordsSearch() {
+        let (store, dir) = Self.makeIsolatedStore()
+        defer { Self.cleanup(dir) }
+
+        let inserted = store.recordSearch(query: "swift concurrency", engine: "brave")
+        #expect(inserted)
+
+        let entries = store.listHistory()
+        #expect(entries.count == 1)
+        let first = try! #require(entries.first)
+        #expect(first.kind == .search)
+        #expect(first.isSearch)
+        #expect(first.title == "swift concurrency")
+        #expect(first.searchEngineLabel == "Brave")
+    }
+
+    @Test("Same search query collapses into one row with a bumped count")
+    func searchDedupesByQuery() {
+        let (store, dir) = Self.makeIsolatedStore()
+        defer { Self.cleanup(dir) }
+
+        store.recordSearch(query: "swift", engine: "brave")
+        store.recordSearch(query: "Swift", engine: "brave")
+        store.recordSearch(query: "swift", engine: "brave")
+
+        let entries = store.listHistory()
+        #expect(entries.count == 1)
+        #expect(entries.first?.visitCount == 3)
+    }
+
+    @Test("Same query against different engines stays distinct")
+    func searchKeepsEnginesDistinct() {
+        let (store, dir) = Self.makeIsolatedStore()
+        defer { Self.cleanup(dir) }
+
+        store.recordSearch(query: "swift", engine: "brave")
+        store.recordSearch(query: "swift", engine: "google")
+
+        let entries = store.listHistory()
+        #expect(entries.count == 2)
+    }
+
+    @Test("recordSearch ignores empty / whitespace-only queries")
+    func searchRejectsEmpty() {
+        let (store, dir) = Self.makeIsolatedStore()
+        defer { Self.cleanup(dir) }
+
+        #expect(!store.recordSearch(query: "", engine: "brave"))
+        #expect(!store.recordSearch(query: "   ", engine: "brave"))
+        #expect(store.count() == 0)
     }
 
     @Test("HistoryDateGroup.contains classifies dates into the right buckets")
