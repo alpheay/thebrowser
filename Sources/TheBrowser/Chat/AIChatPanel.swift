@@ -86,6 +86,11 @@ final class ChatViewModel: ObservableObject {
     @Published var isSending = false
     @Published var focusComposerToken = 0
     @Published var pendingAttachments: [ChatAttachment] = []
+    /// When non-nil, the composer is in "draft from clips" mode: a row of
+    /// preset tiles is shown above the field, and `send` prepends the
+    /// preset's drafting rubric to the prompt sent to the model. Cleared
+    /// after a successful send or when the user dismisses the bar.
+    @Published var draftPreset: CitedClipDraftPreset?
     @Published private(set) var sessionID: String
 
     private let client = AIProviderClient()
@@ -93,6 +98,34 @@ final class ChatViewModel: ObservableObject {
 
     init() {
         self.sessionID = ChatSessionStore.shared.newSessionID()
+    }
+
+    /// Switches the composer into draft mode with the supplied clips queued
+    /// as first-class attachments. Each clip becomes a `ChatAttachment`
+    /// (deduplicated against anything the user already has pending), the
+    /// `Note` preset is selected by default, and the composer is focused.
+    func beginDraftFromClips(_ clips: [CitedClip]) {
+        for clip in clips {
+            let trimmed = clip.text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { continue }
+            let already = pendingAttachments.contains { existing in
+                existing.text == trimmed && existing.pageURL == clip.sourceURL
+            }
+            guard !already else { continue }
+            pendingAttachments.append(ChatAttachment(
+                text: trimmed,
+                pageTitle: clip.sourceTitle,
+                pageURL: clip.sourceURL
+            ))
+        }
+        if draftPreset == nil {
+            draftPreset = .note
+        }
+        focusComposer()
+    }
+
+    func cancelDraftMode() {
+        draftPreset = nil
     }
 
     /// Flattens every attachment ever sent in this conversation into a
@@ -197,6 +230,11 @@ final class ChatViewModel: ObservableObject {
         smartReadActive: Bool = false
     ) {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        let activePreset = draftPreset
+        // Custom preset needs an explicit instruction — its rubric is empty.
+        if activePreset == .custom, trimmed.isEmpty {
+            return
+        }
         // Allow sending when there's an attached highlight even if the text
         // box is empty — the attachment carries the question's subject.
         guard (!trimmed.isEmpty || !pendingAttachments.isEmpty), !isSending else {
@@ -206,12 +244,38 @@ final class ChatViewModel: ObservableObject {
         let attachmentsForTurn = pendingAttachments
         pendingAttachments.removeAll()
 
-        // If the composer was empty but the user attached highlights, treat
-        // the send as an implicit "summarize / discuss these passages".
-        let userText = trimmed.isEmpty ? "What can you tell me about the highlighted passage?" : trimmed
+        // The visible user bubble is what the user typed; for a draft turn
+        // with no typed text, fall back to a "Draft <preset>" label so the
+        // history row isn't blank. The prompt sent to the model is built
+        // separately below and carries the full preset rubric.
+        let userText: String
+        if let preset = activePreset {
+            userText = trimmed.isEmpty
+                ? "Draft a \(preset.displayName.lowercased()) from \(attachmentsForTurn.count) source\(attachmentsForTurn.count == 1 ? "" : "s")."
+                : trimmed
+        } else {
+            userText = trimmed.isEmpty ? "What can you tell me about the highlighted passage?" : trimmed
+        }
+
+        let promptText: String
+        if let preset = activePreset {
+            var pieces: [String] = []
+            pieces.append("Drafting task — format: \(preset.displayName).")
+            if !preset.instruction.isEmpty {
+                pieces.append(preset.instruction)
+            }
+            pieces.append("Use the highlighted passages above as your source material and cite each one inline with its bracketed index.")
+            if !trimmed.isEmpty {
+                pieces.append("Additional instructions from the user: \(trimmed)")
+            }
+            promptText = pieces.joined(separator: "\n\n")
+        } else {
+            promptText = userText
+        }
 
         messages.append(ChatMessage(role: .user, text: userText, attachments: attachmentsForTurn))
         draft = ""
+        draftPreset = nil
         isSending = true
         persist(context: context)
 
@@ -219,7 +283,7 @@ final class ChatViewModel: ObservableObject {
         let history = messages
         let configuration = AIHarnessConfiguration.current()
         let prompt = AIProviderClient.prompt(
-            for: userText,
+            for: promptText,
             context: context,
             history: history,
             configuration: configuration,
@@ -251,6 +315,8 @@ final class ChatViewModel: ObservableObject {
     func clear() {
         messages.removeAll()
         draft = ""
+        draftPreset = nil
+        pendingAttachments.removeAll()
         sessionID = store.newSessionID()
     }
 
@@ -514,6 +580,23 @@ struct AIChatPanel: View {
 
     private var composer: some View {
         VStack(spacing: 8) {
+            if viewModel.draftPreset != nil {
+                DraftPresetBar(
+                    selected: viewModel.draftPreset ?? .note,
+                    onPick: { preset in
+                        withAnimation(Motion.springSnap) {
+                            viewModel.draftPreset = preset
+                        }
+                    },
+                    onDismiss: {
+                        withAnimation(Motion.springSnap) {
+                            viewModel.cancelDraftMode()
+                        }
+                    }
+                )
+                .transition(.opacity.combined(with: .offset(y: 4)))
+            }
+
             if !viewModel.pendingAttachments.isEmpty {
                 pendingAttachmentsList
                     .transition(.opacity.combined(with: .offset(y: 4)))
@@ -548,6 +631,7 @@ struct AIChatPanel: View {
         .padding(14)
         .padding(.bottom, 4)
         .animation(Motion.springSnap, value: viewModel.pendingAttachments.map(\.id))
+        .animation(Motion.springSnap, value: viewModel.draftPreset)
     }
 
     /// Stack of queued highlights shown above the composer. Capped at three
@@ -604,6 +688,14 @@ struct AIChatPanel: View {
     }
 
     private var composerPlaceholder: String {
+        if let preset = viewModel.draftPreset {
+            switch preset {
+            case .custom:
+                return "Describe the draft you want…"
+            default:
+                return "Add notes for the \(preset.displayName.lowercased()) (or press send)…"
+            }
+        }
         if !viewModel.pendingAttachments.isEmpty {
             return "Ask about the highlight…"
         }
@@ -625,6 +717,8 @@ struct AIChatPanel: View {
     private var canSend: Bool {
         if viewModel.isSending { return false }
         let hasText = !viewModel.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        // .custom needs an explicit instruction — the rubric is empty.
+        if viewModel.draftPreset == .custom { return hasText }
         return hasText || !viewModel.pendingAttachments.isEmpty
     }
 
@@ -1355,5 +1449,93 @@ private struct SpinnerArc: View {
                     angle = 360
                 }
             }
+    }
+}
+
+// MARK: - Draft preset bar
+
+/// Horizontal row of preset chips shown above the composer once the user
+/// has hit "Draft" in the cited clipboard popover. Picking a chip stages
+/// the preset's drafting rubric for the next send; the X chip exits draft
+/// mode without sending.
+private struct DraftPresetBar: View {
+    let selected: CitedClipDraftPreset
+    var onPick: (CitedClipDraftPreset) -> Void
+    var onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: "sparkles")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Palette.textMuted)
+                Text("Drafting")
+                    .font(.system(size: 9, weight: .semibold))
+                    .tracking(1.2)
+                    .foregroundStyle(Palette.textFaint)
+                Spacer(minLength: 0)
+                Button(action: onDismiss) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(Palette.textMuted)
+                        .frame(width: 18, height: 18)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Exit draft mode")
+            }
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(CitedClipDraftPreset.allCases) { preset in
+                        DraftPresetChip(
+                            preset: preset,
+                            isSelected: preset == selected,
+                            action: { onPick(preset) }
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct DraftPresetChip: View {
+    let preset: CitedClipDraftPreset
+    let isSelected: Bool
+    var action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: preset.symbolName)
+                    .font(.system(size: 10.5, weight: .semibold))
+                Text(preset.displayName)
+                    .font(.system(size: 11.5, weight: .semibold))
+            }
+            .foregroundStyle(isSelected ? Palette.bg : Palette.textPrimary)
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background {
+                Capsule().fill(chipFill)
+            }
+            .overlay {
+                Capsule().stroke(isSelected ? Palette.accent : Palette.stroke, lineWidth: 1)
+            }
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(Motion.hoverFade) { isHovering = hovering }
+        }
+        .help(preset.subtitle)
+    }
+
+    private var chipFill: Color {
+        if isSelected { return Palette.accent }
+        if isHovering { return Palette.surfaceHover }
+        return Palette.surface
     }
 }
