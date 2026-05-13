@@ -65,6 +65,16 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// incognito flag. When incognito ships, flip this off for those tabs.
     var allowsClipboardCapture: Bool { true }
 
+    /// URL + timestamp of this tab's last history insert. The check on this
+    /// pair enforces the ~1 minute dedupe window the spec calls for: a page
+    /// that fires multiple `didFinish` notifications during a single load
+    /// (subresource finishes, redirect chains, pushState replays) records
+    /// one visit. After the window elapses or the URL changes, the next
+    /// call falls through to the store and ``HistoryStore/recordVisit``
+    /// bumps the existing row's count via ON CONFLICT.
+    private var lastRecordedHistoryURL: URL?
+    private var lastRecordedHistoryAt: Date = .distantPast
+
     /// Subscribers (the shell-level ``HoverPreviewModel``) get every hover
     /// observation from this tab's web content. Weakly referenced — the
     /// shell owns the model.
@@ -379,6 +389,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             url = nil
             title = query
             clearPDFState()
+            HistoryStore.shared.recordSearch(
+                query: query,
+                engine: SearchEngine.selected.rawValue,
+                tabID: id.uuidString
+            )
         }
     }
 
@@ -650,6 +665,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                     guard let self else { return }
                     if let title = webView.title, !title.isEmpty {
                         self.title = title
+                        // Once a real title arrives, write it back into the
+                        // history row written by `didFinish` so the modal
+                        // doesn't show the host fallback.
+                        self.refreshHistoryTitleIfNeeded()
                     }
                 }
             },
@@ -672,6 +691,43 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 }
             }
         ]
+    }
+
+    /// Records the tab's currently loaded page in the global ``HistoryStore``
+    /// log. Skipped when the URL hasn't changed since the last record (within
+    /// the dedupe window), when the tab is showing home/search, or when the
+    /// URL fails the store's scheme/host filter (data:, about:blank,
+    /// file://). Called from `didFinish` for HTML loads and from
+    /// ``loadPDF(from:)`` after a PDF document mounts.
+    func recordVisitToHistory(now: Date = Date()) {
+        guard !isHome, searchPage == nil else { return }
+        guard let target = url else { return }
+        guard HistoryStore.shouldRecord(url: target) else { return }
+        if let last = lastRecordedHistoryURL,
+           last == target,
+           now.timeIntervalSince(lastRecordedHistoryAt) <= HistoryStore.dedupeWindow {
+            return
+        }
+        lastRecordedHistoryURL = target
+        lastRecordedHistoryAt = now
+        HistoryStore.shared.recordVisit(
+            url: target,
+            title: title,
+            tabID: id.uuidString,
+            now: now
+        )
+    }
+
+    /// Pushes the latest title into the most recent history row for this URL
+    /// once the WKWebView title KVO fires. Skipped when the URL has changed
+    /// since we last recorded — that case will be picked up by `didFinish`
+    /// for the new URL.
+    fileprivate func refreshHistoryTitleIfNeeded() {
+        guard !isHome, searchPage == nil else { return }
+        guard let target = url else { return }
+        guard target == lastRecordedHistoryURL else { return }
+        guard HistoryStore.shouldRecord(url: target) else { return }
+        HistoryStore.shared.updateTitle(forURL: target, title: title)
     }
 
     private func applyNavigationFailure(_ error: Error, fallbackURL: URL?) {
@@ -1306,6 +1362,7 @@ extension BrowserTab: WKNavigationDelegate {
             if let title = webView.title, !title.isEmpty {
                 self.title = title
             }
+            self.recordVisitToHistory()
             // Page content just changed under our feet — re-run the
             // current find query so the counter and highlight match what
             // the user can now see, without stealing focus.
@@ -1425,6 +1482,7 @@ extension BrowserTab {
                 } else if trimmed.isEmpty || trimmed == "New Space" {
                     self.title = pdfURL.lastPathComponent
                 }
+                self.recordVisitToHistory()
             } catch is CancellationError {
                 return
             } catch {

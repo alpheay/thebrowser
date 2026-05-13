@@ -41,6 +41,16 @@ enum BrowserMigrationService {
         )
 
         MigrationImportStore.save(payload: payload, result: result)
+
+        // Mirror the imported history into the SQLite ``HistoryStore`` so
+        // entries surface in the History modal immediately. Hopping to the
+        // main actor because the store is `@MainActor`-isolated; the rest
+        // of this method runs off-main per the caller's `Task.detached`.
+        let importedHistory = payload.history
+        await MainActor.run {
+            _ = HistoryStore.shared.importMigratedEntries(importedHistory)
+        }
+
         return result
     }
 
