@@ -297,10 +297,22 @@ final class BrowserModel: ObservableObject {
             self.openInNewTab(url: url, background: sourceTab.id != self.selectedTabID)
         }
 
-        tabChangeCancellables[tab.id] = tab.objectWillChange.sink { [weak self] _ in
+        let tabSink = tab.objectWillChange.sink { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.objectWillChange.send()
             }
+        }
+        // The find controller is a separate ObservableObject — its
+        // publishes don't propagate through the tab, so the shell view
+        // can't see find-bar state changes without this second sink.
+        let findSink = tab.findController.objectWillChange.sink { [weak self] _ in
+            Task { @MainActor [weak self] in
+                self?.objectWillChange.send()
+            }
+        }
+        tabChangeCancellables[tab.id] = AnyCancellable {
+            tabSink.cancel()
+            findSink.cancel()
         }
     }
 
