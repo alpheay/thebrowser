@@ -2,3 +2,22 @@
 .swiftpm/
 DerivedData/
 *.xcuserdata/
+
+# Secrets — never commit. Real credentials live under
+# ~/Library/Application Support/TheBrowser/Integrations/<name>/credentials.json
+# (outside the repo). The patterns below catch accidental drops into the tree.
+**/credentials.json
+**/client_secret*.json
+**/client_secret*.apps.googleusercontent.com.json
+**/Credentials/credentials.json
+**/Credentials/*.local.*
+**/.env
+**/.env.*
+!**/credentials.example.json
+!**/.env.example
+
+# OAuth tokens / signing material that should never be checked in.
+*.pem
+*.p12
+*.key
+*.p8

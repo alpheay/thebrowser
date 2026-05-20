@@ -11,7 +11,12 @@ let package = Package(
         .executable(name: "TheBrowser", targets: ["TheBrowser"])
     ],
     targets: [
-        .executableTarget(name: "TheBrowser"),
+        .executableTarget(
+            name: "TheBrowser",
+            exclude: [
+                "Integrations/Gmail/credentials.example.json"
+            ]
+        ),
         .testTarget(name: "TheBrowserTests", dependencies: ["TheBrowser"])
     ]
 )

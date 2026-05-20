@@ -8,6 +8,7 @@ struct BrowserShellView: View {
     @StateObject private var smartReadModel = SmartReadModel()
     @StateObject private var readerModel = ReaderModeModel()
     @StateObject private var hoverPreview = HoverPreviewModel()
+    @StateObject private var integrations = IntegrationsModel()
 
     @AppStorage(PreferenceKey.toggleChatShortcut) private var toggleChatShortcut = "command+j"
     @AppStorage(PreferenceKey.toggleTabsShortcut) private var toggleTabsShortcut = "command+b"
@@ -19,6 +20,7 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.pasteWithCitationShortcut) private var pasteWithCitationShortcut = "shift+command+v"
     @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
     @AppStorage(PreferenceKey.openHistoryShortcut) private var openHistoryShortcut = "command+y"
+    @AppStorage(PreferenceKey.openIntegrationsShortcut) private var openIntegrationsShortcut = "shift+command+e"
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
     @AppStorage(PreferenceKey.historyImportBackfillCompleted) private var historyImportBackfillCompleted = false
     @AppStorage(PreferenceKey.hoverPreviewEnabled) private var hoverPreviewEnabled = true
@@ -163,10 +165,21 @@ struct BrowserShellView: View {
                 .opacity(0)
                 .allowsHitTesting(false)
 
+            // Integrations overlay (Gmail, future Slack/Calendar/…).
+            // Sits below the notification toasts so any incoming toast
+            // still surfaces above it.
+            if integrations.isPresented {
+                IntegrationsOverlay(model: integrations)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+                    .zIndex(1)
+            }
+
             // Top layer: app-wide notification toasts
             NotificationOverlay()
                 .ignoresSafeArea()
                 .allowsHitTesting(true)
+                .zIndex(2)
         }
         .background(Palette.bg)
         .onChange(of: model.selectedTabID) { _, _ in
@@ -232,6 +245,7 @@ struct BrowserShellView: View {
         }
         .animation(Motion.springSnap, value: model.isChatVisible)
         .animation(Motion.springSnap, value: model.isTabRailVisible)
+        .animation(Motion.springSnap, value: integrations.isPresented)
     }
 
     // MARK: - Center column (toolbar + content)
@@ -506,6 +520,7 @@ struct BrowserShellView: View {
             (pasteWithCitationShortcut, { CitedClipboardCursorPanelController.shared.toggle() }),
             (openDiscordShortcut, { model.openOrFocusDiscord() }),
             (openHistoryShortcut, { isShowingHistoryModal.toggle() }),
+            (openIntegrationsShortcut, { integrations.toggle() }),
             // Find in Page — fixed shortcuts, no Settings UI on purpose
             // since every browser ships these unchanged.
             ("command+f", { model.selectedTab.findController.show() }),
