@@ -15,13 +15,10 @@ struct IntegrationsOverlay: View {
                 .ignoresSafeArea()
                 .onTapGesture { model.close() }
 
-            VStack {
-                Spacer(minLength: 0)
-                content
-                Spacer(minLength: 0)
-            }
-            .padding(.vertical, 28)
-            .transition(.opacity.combined(with: .scale(scale: 0.97)))
+            content
+                .padding(.horizontal, 44)
+                .padding(.vertical, 44)
+                .transition(.opacity.combined(with: .scale(scale: 0.97)))
 
             // Naked-Esc handler — KeyboardShortcutHost ignores keystrokes
             // without modifiers.

@@ -36,7 +36,7 @@ struct GmailIntegrationView: View {
             }
         }
         .background(Palette.bg)
-        .frame(width: 880, height: 600)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 14, style: .continuous)
@@ -75,7 +75,7 @@ struct GmailIntegrationView: View {
             }
 
             searchField
-                .frame(maxWidth: 360)
+                .frame(maxWidth: 520)
 
             Spacer(minLength: 0)
 
@@ -153,7 +153,7 @@ struct GmailIntegrationView: View {
     private var signedInBody: some View {
         HStack(spacing: 0) {
             sidebar
-                .frame(width: 178)
+                .frame(width: 220)
             Rectangle().fill(Palette.stroke).frame(width: 1)
             pane
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
