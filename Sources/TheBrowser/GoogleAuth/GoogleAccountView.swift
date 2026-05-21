@@ -25,20 +25,15 @@ struct GoogleAccountView: View {
 
     private var signedInBody: some View {
         VStack(alignment: .leading, spacing: 18) {
-            ProfileCard(profile: store.profile!)
+            ProfileCard(profile: store.profile!) {
+                Task { await store.signOut() }
+            }
 
             if let error = store.lastError {
                 Text(error)
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(Color(red: 1.0, green: 0.55, blue: 0.55))
                     .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            HStack(spacing: 10) {
-                Spacer()
-                SignOutButton {
-                    Task { await store.signOut() }
-                }
             }
         }
     }
@@ -247,6 +242,7 @@ private struct StepList: View {
 
 private struct ProfileCard: View {
     let profile: GoogleProfile
+    let onSignOut: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 16) {
@@ -271,15 +267,7 @@ private struct ProfileCard: View {
 
             Spacer()
 
-            VStack(alignment: .trailing, spacing: 3) {
-                Text("Signed in")
-                    .font(.system(size: 10, weight: .semibold))
-                    .tracking(1.4)
-                    .foregroundStyle(Palette.textFaint)
-                Text("Google")
-                    .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(Palette.textSecondary)
-            }
+            SignOutButton(action: onSignOut)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 16)
@@ -399,7 +387,7 @@ private struct SignOutButton: View {
                 .frame(height: 30)
                 .background {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(isHovering ? Palette.surfaceHover : Palette.surface)
+                        .fill(isHovering ? Palette.surfaceHover : Palette.bgRaised)
                 }
                 .overlay {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)

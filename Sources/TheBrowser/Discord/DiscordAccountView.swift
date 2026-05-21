@@ -25,20 +25,15 @@ struct DiscordAccountView: View {
 
     private var signedInBody: some View {
         VStack(alignment: .leading, spacing: 18) {
-            DiscordProfileCard(profile: store.profile!, guildCount: store.guilds.count)
+            DiscordProfileCard(profile: store.profile!, guildCount: store.guilds.count) {
+                Task { await store.signOut() }
+            }
 
             if let error = store.lastError {
                 Text(error)
                     .font(.system(size: 11.5, weight: .medium))
                     .foregroundStyle(Color(red: 1.0, green: 0.55, blue: 0.55))
                     .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            HStack(spacing: 10) {
-                Spacer()
-                DiscordSecondaryButton(title: "Sign out") {
-                    Task { await store.signOut() }
-                }
             }
         }
     }
@@ -293,6 +288,7 @@ private struct DiscordStepList: View {
 private struct DiscordProfileCard: View {
     let profile: DiscordProfile
     let guildCount: Int
+    let onSignOut: () -> Void
 
     var body: some View {
         HStack(alignment: .center, spacing: 16) {
@@ -309,26 +305,26 @@ private struct DiscordProfileCard: View {
                             .foregroundStyle(Palette.textMuted)
                     }
                 }
-                Text("@\(profile.username)")
-                    .font(.system(size: 12, weight: .medium))
-                    .foregroundStyle(Palette.textSecondary)
+                HStack(spacing: 8) {
+                    Text("@\(profile.username)")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Palette.textSecondary)
+                    Text("·")
+                        .font(.system(size: 12, weight: .medium))
+                        .foregroundStyle(Palette.textFaint)
+                    HStack(spacing: 5) {
+                        DiscordGlyph()
+                            .frame(width: 10, height: 10)
+                        Text(guildCount == 1 ? "1 server" : "\(guildCount) servers")
+                            .font(.system(size: 12, weight: .medium))
+                            .foregroundStyle(Palette.textSecondary)
+                    }
+                }
             }
 
             Spacer()
 
-            VStack(alignment: .trailing, spacing: 3) {
-                Text("Signed in")
-                    .font(.system(size: 10, weight: .semibold))
-                    .tracking(1.4)
-                    .foregroundStyle(Palette.textFaint)
-                HStack(spacing: 5) {
-                    DiscordGlyph()
-                        .frame(width: 10, height: 10)
-                    Text(guildCount == 1 ? "1 server" : "\(guildCount) servers")
-                        .font(.system(size: 11.5, weight: .semibold))
-                        .foregroundStyle(Palette.textSecondary)
-                }
-            }
+            DiscordSecondaryButton(title: "Sign out", action: onSignOut)
         }
         .padding(.horizontal, 18)
         .padding(.vertical, 16)
@@ -400,7 +396,7 @@ private struct DiscordSecondaryButton: View {
                 .frame(height: 30)
                 .background {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .fill(isHovering ? Palette.surfaceHover : Palette.surface)
+                        .fill(isHovering ? Palette.surfaceHover : Palette.bgRaised)
                 }
                 .overlay {
                     RoundedRectangle(cornerRadius: 7, style: .continuous)
