@@ -585,52 +585,23 @@ private struct FindBarOverlay: View {
 
 private struct WebControlWorkingOverlay: View {
     var status: WebControlStatus
-    @State private var pulse = false
+    @State private var pulse: Bool = false
 
     var body: some View {
         ZStack {
-            edgeVignette
+            PixelEdgeDissolve()
+                .padding(.horizontal, Metrics.webviewInset)
+                .padding(.bottom, Metrics.webviewInset)
+                .allowsHitTesting(false)
 
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
-
-                HStack(spacing: 10) {
-                    ZStack {
-                        Circle()
-                            .stroke(Color.white.opacity(0.22), lineWidth: 1)
-                            .frame(width: 14, height: 14)
-                        Circle()
-                            .fill(Color.white.opacity(pulse ? 0.85 : 0.45))
-                            .frame(width: 6, height: 6)
-                    }
-
-                    VStack(alignment: .leading, spacing: 1) {
-                        Text("Agent is Working")
-                            .font(.system(size: 12.5, weight: .semibold))
-                            .foregroundStyle(Palette.textPrimary)
-                        Text(status.detail)
-                            .font(.system(size: 10.5, weight: .medium))
-                            .foregroundStyle(Palette.textMuted)
-                            .lineLimit(1)
-                    }
-                }
-                .padding(.horizontal, 14)
-                .padding(.vertical, 9)
-                .background {
-                    RoundedRectangle(cornerRadius: 999, style: .continuous)
-                        .fill(Palette.bgRaised)
-                }
-                .overlay {
-                    RoundedRectangle(cornerRadius: 999, style: .continuous)
-                        .stroke(Palette.stroke, lineWidth: 1)
-                }
-                .shadow(color: Color.black.opacity(0.35), radius: 20, x: 0, y: 10)
-                .padding(.bottom, 20)
+                statusChip
+                    .padding(.bottom, 22)
             }
+            .padding(.horizontal, Metrics.webviewInset)
+            .padding(.bottom, Metrics.webviewInset)
         }
-        .clipShape(RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous))
-        .padding(.horizontal, Metrics.webviewInset)
-        .padding(.bottom, Metrics.webviewInset)
         .allowsHitTesting(true)
         .onAppear {
             withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
@@ -639,22 +610,96 @@ private struct WebControlWorkingOverlay: View {
         }
     }
 
-    private var edgeVignette: some View {
-        ZStack {
-            Color.black.opacity(0.08)
+    private var statusChip: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(Color.white.opacity(pulse ? 0.95 : 0.40))
+                .frame(width: 5, height: 5)
 
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-                LinearGradient(
-                    colors: [Color.black.opacity(0), Color.black.opacity(0.42)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 110)
+            Text("Agent is working")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(Palette.textPrimary)
+
+            if !status.detail.isEmpty {
+                Text("·")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(Palette.textFaint)
+                Text(status.detail)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(Palette.textMuted)
+                    .lineLimit(1)
+                    .contentTransition(.opacity)
+                    .id(status.detail)
             }
-
-            RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous)
-                .stroke(Color.white.opacity(pulse ? 0.18 : 0.08), lineWidth: 1)
         }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background {
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.80))
+        }
+        .overlay {
+            Capsule(style: .continuous)
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.55), radius: 16, x: 0, y: 8)
+    }
+}
+
+/// A fine field of soft round dots traces the entire webview perimeter,
+/// coloured to match `Palette.bg` so the page looks like it's breaking
+/// into the surrounding chrome. Density falls off from any edge inward;
+/// per-pixel phase offsets let each dot fade in (small→big) and out
+/// independently — a quiet, ethereal shimmer rather than a hard twinkle.
+private struct PixelEdgeDissolve: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
+            Canvas(opaque: false, rendersAsynchronously: false) { gc, size in
+                let cell: CGFloat = 6
+                let maxRadius: CGFloat = 2.8
+                let extent: CGFloat = 90
+                let cycle: Double = 2.4
+                let t = context.date.timeIntervalSinceReferenceDate
+                let color = Palette.bg
+
+                let cols = Int(ceil(size.width / cell))
+                let rows = Int(ceil(size.height / cell))
+                let band = Int(extent / cell)
+                guard cols > 0, rows > 0, band > 0 else { return }
+                let bandD = Double(band)
+
+                for gx in 0..<cols {
+                    for gy in 0..<rows {
+                        let edgeDist = min(gx, cols - 1 - gx, gy, rows - 1 - gy)
+                        if edgeDist >= band { continue }
+
+                        let density = 1 - Double(edgeDist) / bandD
+                        let densityCurve = density * density
+
+                        if noise(gx, gy, 1.7) > densityCurve { continue }
+
+                        let phaseOffset = noise(gx, gy, 97.3)
+                        let phase = ((t / cycle) + phaseOffset).truncatingRemainder(dividingBy: 1.0)
+
+                        // Half the cycle invisible, half spent fading in then out.
+                        guard phase < 0.5 else { continue }
+                        let scale = sin(phase * 2 * .pi)
+
+                        let radius = maxRadius * CGFloat(densityCurve) * CGFloat(scale)
+                        if radius < 0.3 { continue }
+
+                        let cx = (CGFloat(gx) + 0.5) * cell
+                        let cy = (CGFloat(gy) + 0.5) * cell
+                        let rect = CGRect(x: cx - radius, y: cy - radius, width: radius * 2, height: radius * 2)
+                        gc.fill(Path(ellipseIn: rect), with: .color(color))
+                    }
+                }
+            }
+        }
+    }
+
+    private func noise(_ x: Int, _ y: Int, _ salt: Double) -> Double {
+        let v = sin(Double(x) * 12.9898 + Double(y) * 78.233 + salt * 1.7) * 43758.5453
+        return v - floor(v)
     }
 }

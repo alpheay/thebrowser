@@ -292,3 +292,4 @@ struct FaviconView: View {
         URL(string: "https://www.google.com/s2/favicons?domain=\(host)&sz=64")
     }
 }
+
