@@ -646,22 +646,34 @@ private struct WebControlWorkingOverlay: View {
     }
 }
 
-/// Each of the four webview corners dissolves into chunky black pixels
-/// whose density falls off with distance from the corner. A new noise seed
-/// every ~150ms gives a quiet, deliberate twinkle — the corners look like
-/// they're being eaten by static.
+/// Each of the four webview corners dissolves into a fine field of soft
+/// round dots, coloured to match `Palette.bg` so the page looks like it's
+/// breaking into the surrounding chrome. Per-pixel phase offsets let each
+/// dot fade in (small→big) and out independently — a quiet, ethereal
+/// shimmer rather than a hard twinkle.
 private struct PixelCornerDissolve: View {
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 8.0, paused: false)) { context in
+        TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
             Canvas(opaque: false, rendersAsynchronously: false) { gc, size in
-                let pixel: CGFloat = 6
-                let extent: CGFloat = 120
-                let seed = floor(context.date.timeIntervalSinceReferenceDate * 6)
+                let cell: CGFloat = 6
+                let maxRadius: CGFloat = 2.8
+                let extent: CGFloat = 140
+                let cycle: Double = 2.4
+                let t = context.date.timeIntervalSinceReferenceDate
+                let color = Palette.bg
 
-                draw(gc, size: size, anchor: .topLeading,     pixel: pixel, extent: extent, seed: seed +  1.7)
-                draw(gc, size: size, anchor: .topTrailing,    pixel: pixel, extent: extent, seed: seed + 13.1)
-                draw(gc, size: size, anchor: .bottomLeading,  pixel: pixel, extent: extent, seed: seed + 29.9)
-                draw(gc, size: size, anchor: .bottomTrailing, pixel: pixel, extent: extent, seed: seed + 53.3)
+                draw(gc, size: size, anchor: .topLeading,
+                     cell: cell, maxRadius: maxRadius, extent: extent,
+                     t: t, cycle: cycle, color: color, salt:  1.7)
+                draw(gc, size: size, anchor: .topTrailing,
+                     cell: cell, maxRadius: maxRadius, extent: extent,
+                     t: t, cycle: cycle, color: color, salt: 13.1)
+                draw(gc, size: size, anchor: .bottomLeading,
+                     cell: cell, maxRadius: maxRadius, extent: extent,
+                     t: t, cycle: cycle, color: color, salt: 29.9)
+                draw(gc, size: size, anchor: .bottomTrailing,
+                     cell: cell, maxRadius: maxRadius, extent: extent,
+                     t: t, cycle: cycle, color: color, salt: 53.3)
             }
         }
     }
@@ -672,12 +684,17 @@ private struct PixelCornerDissolve: View {
         _ gc: GraphicsContext,
         size: CGSize,
         anchor: CornerAnchor,
-        pixel: CGFloat,
+        cell: CGFloat,
+        maxRadius: CGFloat,
         extent: CGFloat,
-        seed: Double
+        t: Double,
+        cycle: Double,
+        color: Color,
+        salt: Double
     ) {
-        let count = Int(extent / pixel)
+        let count = Int(extent / cell)
         let countD = Double(count)
+
         for gx in 0..<count {
             for gy in 0..<count {
                 let dx = Double(gx)
@@ -686,30 +703,43 @@ private struct PixelCornerDissolve: View {
                 if dist >= 1 { continue }
 
                 let density = 1 - dist
-                let threshold = density * density * density
-                if noise(gx, gy, seed) >= threshold { continue }
+                let densityCurve = density * density
 
-                let fx = CGFloat(gx) * pixel
-                let fy = CGFloat(gy) * pixel
-                let x: CGFloat
-                let y: CGFloat
+                if noise(gx, gy, salt) > densityCurve { continue }
+
+                let phaseOffset = noise(gx, gy, salt + 97)
+                let phase = ((t / cycle) + phaseOffset).truncatingRemainder(dividingBy: 1.0)
+
+                // Half the cycle invisible, half spent fading in then out.
+                guard phase < 0.5 else { continue }
+                let scale = sin(phase * 2 * .pi)
+
+                let radius = maxRadius * CGFloat(densityCurve) * CGFloat(scale)
+                if radius < 0.3 { continue }
+
+                let fx = (CGFloat(gx) + 0.5) * cell
+                let fy = (CGFloat(gy) + 0.5) * cell
+                let cx: CGFloat
+                let cy: CGFloat
                 switch anchor {
                 case .topLeading:
-                    x = fx;                          y = fy
+                    cx = fx;                cy = fy
                 case .topTrailing:
-                    x = size.width - fx - pixel;     y = fy
+                    cx = size.width - fx;   cy = fy
                 case .bottomLeading:
-                    x = fx;                          y = size.height - fy - pixel
+                    cx = fx;                cy = size.height - fy
                 case .bottomTrailing:
-                    x = size.width - fx - pixel;    y = size.height - fy - pixel
+                    cx = size.width - fx;   cy = size.height - fy
                 }
-                gc.fill(Path(CGRect(x: x, y: y, width: pixel, height: pixel)), with: .color(.black))
+
+                let rect = CGRect(x: cx - radius, y: cy - radius, width: radius * 2, height: radius * 2)
+                gc.fill(Path(ellipseIn: rect), with: .color(color))
             }
         }
     }
 
-    private func noise(_ x: Int, _ y: Int, _ seed: Double) -> Double {
-        let v = sin(Double(x) * 12.9898 + Double(y) * 78.233 + seed * 1.7) * 43758.5453
+    private func noise(_ x: Int, _ y: Int, _ salt: Double) -> Double {
+        let v = sin(Double(x) * 12.9898 + Double(y) * 78.233 + salt * 1.7) * 43758.5453
         return v - floor(v)
     }
 }
