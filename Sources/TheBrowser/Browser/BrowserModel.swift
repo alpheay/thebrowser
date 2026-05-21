@@ -5,8 +5,8 @@ import Foundation
 final class BrowserModel: ObservableObject {
     @Published var tabs: [BrowserTab]
     @Published var selectedTabID: BrowserTab.ID
-    @Published var isTabRailVisible = true
-    @Published var isChatVisible = true
+    @Published var isTabRailVisible = false
+    @Published var isChatVisible = false
     @Published var addressDraft = ""
     @Published var addressFocusToken = 0
     @Published var webControlStatus: WebControlStatus?

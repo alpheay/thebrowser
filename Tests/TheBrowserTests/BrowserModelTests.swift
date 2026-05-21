@@ -6,6 +6,15 @@ import Testing
 @Suite("Browser model")
 struct BrowserModelTests {
     @MainActor
+    @Test("Model starts with AI and tab sidebars closed")
+    func modelStartsWithSidebarsClosed() {
+        let model = BrowserModel()
+
+        #expect(!model.isChatVisible)
+        #expect(!model.isTabRailVisible)
+    }
+
+    @MainActor
     @Test("Model forwards selected tab state changes")
     func modelForwardsTabChanges() async {
         let model = BrowserModel()
