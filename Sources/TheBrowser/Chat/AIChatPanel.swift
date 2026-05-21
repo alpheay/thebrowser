@@ -1540,17 +1540,20 @@ private struct AssistantMessage: View {
     }
 }
 
-/// In-flight version of `AssistantMessage`: same tool chain styling, but
-/// with a footer status row that shimmer-shows the current activity ("Thinking…",
-/// "Reading inbox…", …) and suppresses the copy button while the turn is
-/// still producing output.
+/// In-flight version of `AssistantMessage`: same tool chain styling,
+/// plus a footer shimmer that appears only when no tool is actively
+/// running. A spinning tool row already telegraphs "the agent is
+/// doing something" — duplicating it with a shimmer below felt noisy
+/// and pulled the eye in two directions at once. Between CLI calls
+/// (or before any tool is invoked) the shimmer comes back as the
+/// quiet "still here, still thinking" affordance.
 private struct LiveAssistantMessage: View {
     var message: ChatMessage
     var showToolChain: Bool
     var onOpenArtifact: (URL) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             if showToolChain && !message.toolChain.isEmpty {
                 ToolChainView(
                     invocations: message.toolChain,
@@ -1562,16 +1565,31 @@ private struct LiveAssistantMessage: View {
                 MarkdownView(text: message.text)
             }
 
-            // Footer row sits below whatever the assistant has produced
-            // so it tracks the bottom of the conversation: tools above,
-            // status shimmer beneath.
-            HStack(spacing: 6) {
-                StreamingCursor()
-                ShimmerText(message.statusLabel ?? AgentStatusLabel.thinking)
+            if showsFooterShimmer {
+                HStack(spacing: 6) {
+                    StreamingCursor()
+                    ShimmerText(footerLabel)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .transition(.opacity)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .animation(Motion.springSnap, value: showsFooterShimmer)
+    }
+
+    /// Only one in-progress indicator at a time. If the last tool row
+    /// is spinning, we let that carry the story.
+    private var showsFooterShimmer: Bool {
+        message.toolChain.last?.status != .running
+    }
+
+    /// Quiet, generic label — the per-row spinner above already says
+    /// what we're doing when it matters. Falling back to the message's
+    /// own status label keeps the door open for callers that want to
+    /// override it for non-tool flows.
+    private var footerLabel: String {
+        message.statusLabel ?? AgentStatusLabel.thinking
     }
 }
 
@@ -1597,38 +1615,33 @@ private struct StreamingCursor: View {
 
 // MARK: - Tool chain
 
-/// Vertical stack of native browser tool calls the model fired off for
-/// an assistant turn. Each call renders as an expandable card showing
-/// the tool name, input, current status (spinner / check / x), and —
-/// when expanded — the full captured output. Replaces the older compact
-/// chip row so the user can audit what the agent did without having to
-/// hover individual chips for tooltips.
+/// Vertical list of native browser tool calls the model fired off for
+/// an assistant turn. Rendered as a quiet log of single-line rows —
+/// status glyph, lowercase verb, faded argument. No card chrome, no
+/// hover fills; the goal is to communicate "the agent is just doing
+/// it" without grabbing visual focus away from the model's answer.
+/// Tapping a row reveals an indented detail panel with the captured
+/// input and output for that step.
 private struct ToolChainView: View {
     let invocations: [ChatMessage.ToolInvocation]
     var onOpenArtifact: (URL) -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(invocations.enumerated()), id: \.offset) { index, invocation in
-                ToolCallCard(
-                    invocation: invocation,
-                    index: index + 1,
-                    isLast: index == invocations.count - 1,
-                    onOpenArtifact: onOpenArtifact
-                )
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(Array(invocations.enumerated()), id: \.offset) { _, invocation in
+                ToolCallRow(invocation: invocation, onOpenArtifact: onOpenArtifact)
             }
         }
     }
 }
 
-/// Expandable card for a single tool call. Header is always visible —
-/// icon, label, compact input, status indicator. Tapping the header
-/// toggles a detail panel that shows the full raw input and the
-/// captured output text (truncated upstream in NativeBrowserToolResult).
-private struct ToolCallCard: View {
+/// One row in the quiet tool log. Layout is intentionally text-first:
+/// a small status glyph on the left, then `verb · arg` like a shell
+/// trace. Tap to expand an indented detail panel that mirrors the old
+/// card view (INPUT / OUTPUT sections), so power users can still
+/// audit the full I/O when they care.
+private struct ToolCallRow: View {
     let invocation: ChatMessage.ToolInvocation
-    let index: Int
-    let isLast: Bool
     var onOpenArtifact: (URL) -> Void
 
     @State private var expanded = false
@@ -1636,10 +1649,10 @@ private struct ToolCallCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            header
+            row
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    if isArtifactCard {
+                    if isArtifactRow {
                         if let artifactURL = invocation.artifactURL {
                             onOpenArtifact(artifactURL)
                         }
@@ -1647,76 +1660,75 @@ private struct ToolCallCard: View {
                         withAnimation(Motion.springSnap) { expanded.toggle() }
                     }
                 }
+                .onHover { hovering in
+                    withAnimation(Motion.hoverFade) { isHovering = hovering }
+                    if hovering && (isArtifactRow || canExpand) {
+                        NSCursor.pointingHand.push()
+                    } else {
+                        NSCursor.pop()
+                    }
+                }
+                .help(helpText)
 
             if expanded {
                 detailPanel
                     .transition(.asymmetric(
-                        insertion: .opacity.combined(with: .offset(y: -4)),
+                        insertion: .opacity.combined(with: .offset(y: -2)),
                         removal: .opacity
                     ))
             }
         }
-        .background {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .fill(isHovering ? Palette.surfaceHover : Palette.surface)
-        }
-        .overlay {
-            RoundedRectangle(cornerRadius: 10, style: .continuous)
-                .stroke(isLast && invocation.status == .running ? Palette.strokeStrong : Palette.stroke, lineWidth: 1)
-        }
-        .onHover { hovering in
-            withAnimation(Motion.hoverFade) { isHovering = hovering }
-        }
-        .help(helpText)
     }
 
-    private var header: some View {
-        HStack(spacing: 8) {
-            ToolStatusBadge(status: invocation.status)
+    private var row: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 7) {
+            ToolStatusGlyph(status: invocation.status)
+                // Push the glyph down a hair so it visually sits on the
+                // text baseline instead of riding above the cap height.
+                .alignmentGuide(.firstTextBaseline) { _ in 8.5 }
 
-            Image(systemName: iconName)
-                .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(Palette.textSecondary)
-                .frame(width: 14)
+            Text(label)
+                .font(.system(size: 11.5, weight: .regular))
+                .foregroundStyle(textColor)
 
-            VStack(alignment: .leading, spacing: 1) {
-                HStack(spacing: 6) {
-                    Text(label)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(Palette.textPrimary)
-                    if !displayInput.isEmpty {
-                        Text(displayInput)
-                            .font(.system(size: 11.5, weight: .regular, design: .monospaced))
-                            .foregroundStyle(Palette.textMuted)
-                            .lineLimit(1)
-                            .truncationMode(.middle)
-                    }
-                }
+            if !displayInput.isEmpty {
+                Text("·")
+                    .font(.system(size: 11.5))
+                    .foregroundStyle(Palette.textFaint)
+                Text(displayInput)
+                    .font(.system(size: 11, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.textFaint)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
             }
 
             Spacer(minLength: 4)
 
-            if isArtifactCard {
-                Image(systemName: "arrow.up.right.square")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(Palette.textMuted)
-            } else if canExpand {
-                Image(systemName: expanded ? "chevron.up" : "chevron.down")
-                    .font(.system(size: 9.5, weight: .bold))
-                    .foregroundStyle(Palette.textMuted)
+            if isArtifactRow {
+                Image(systemName: "arrow.up.right")
+                    .font(.system(size: 9, weight: .semibold))
+                    .foregroundStyle(Palette.textFaint)
+                    .opacity(isHovering ? 1 : 0.55)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 7)
+        .padding(.vertical, 2)
+    }
+
+    /// Active rows pop slightly brighter so the eye finds the current
+    /// step. Completed rows fade to the same muted tone so the older
+    /// chain stays in the background.
+    private var textColor: Color {
+        switch invocation.status {
+        case .running:
+            return Palette.textSecondary
+        case .completed, .failed:
+            return Palette.textMuted
+        }
     }
 
     @ViewBuilder
     private var detailPanel: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Rectangle()
-                .fill(Palette.stroke)
-                .frame(height: 1)
-
             if !invocation.input.isEmpty {
                 detailSection(title: "INPUT", body: invocation.input, monospaced: true)
             }
@@ -1725,79 +1737,63 @@ private struct ToolCallCard: View {
                 detailSection(title: outputSectionTitle, body: output, monospaced: false)
             } else if invocation.status == .running {
                 Text("Running…")
-                    .font(.system(size: 11.5, weight: .regular, design: .monospaced))
+                    .font(.system(size: 11, weight: .regular, design: .monospaced))
                     .foregroundStyle(Palette.textFaint)
-                    .padding(.horizontal, 10)
-                    .padding(.bottom, 8)
             }
+        }
+        .padding(.leading, 16)
+        .padding(.top, 4)
+        .padding(.bottom, 4)
+        // Hairline thread on the left so the panel reads as a sub-item
+        // of its row rather than a free-floating block.
+        .overlay(alignment: .leading) {
+            Rectangle()
+                .fill(Palette.stroke)
+                .frame(width: 1)
+                .padding(.leading, 4)
+                .padding(.vertical, 4)
         }
     }
 
     private func detailSection(title: String, body: String, monospaced: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: 3) {
             Text(title)
-                .font(.system(size: 9, weight: .semibold))
+                .font(.system(size: 8.5, weight: .semibold))
                 .tracking(1.2)
                 .foregroundStyle(Palette.textFaint)
 
             Text(body)
                 .font(.system(
-                    size: 11.5,
+                    size: 11,
                     weight: .regular,
                     design: monospaced ? .monospaced : .default
                 ))
-                .foregroundStyle(Palette.textSecondary)
+                .foregroundStyle(Palette.textMuted)
                 .textSelection(.enabled)
                 .lineLimit(20)
                 .multilineTextAlignment(.leading)
                 .fixedSize(horizontal: false, vertical: true)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 6)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background {
-            RoundedRectangle(cornerRadius: 6, style: .continuous)
-                .fill(Palette.bgSunken)
-        }
-        .padding(.horizontal, 10)
-        .padding(.bottom, 8)
     }
 
     private var outputSectionTitle: String {
         switch invocation.status {
-        case .running: return "PARTIAL OUTPUT"
+        case .running: return "PARTIAL"
         case .completed: return "OUTPUT"
         case .failed: return "ERROR"
         }
     }
 
-    private var isArtifactCard: Bool {
+    private var isArtifactRow: Bool {
         invocation.tool == "create_artifact"
             && invocation.status == .completed
             && invocation.artifactURL != nil
     }
 
     private var canExpand: Bool {
-        if isArtifactCard { return false }
+        if isArtifactRow { return false }
         if invocation.status == .running { return true }
         return !(invocation.output?.isEmpty ?? true) || !invocation.input.isEmpty
-    }
-
-    private var iconName: String {
-        switch invocation.tool {
-        case "open": return "safari"
-        case "search": return "magnifyingglass"
-        case "fetch": return "arrow.down.doc"
-        case "read_tabs": return "rectangle.on.rectangle"
-        case "read_highlights": return "quote.opening"
-        case "read_smart_read": return "doc.text.magnifyingglass"
-        case "mail_search": return "envelope.badge"
-        case "mail_read_thread": return "envelope.open"
-        case "mail_draft_reply": return "arrowshape.turn.up.left"
-        case "create_artifact": return "doc.richtext"
-        case "web_control": return "cursorarrow.click"
-        default: return "wrench"
-        }
     }
 
     private var label: String {
@@ -1807,13 +1803,13 @@ private struct ToolCallCard: View {
         case "fetch": return "fetch"
         case "read_tabs": return "read tabs"
         case "read_highlights": return "read highlights"
-        case "read_smart_read": return "smart read"
+        case "read_smart_read": return "read smart read"
         case "mail_search": return "mail search"
         case "mail_read_thread": return "mail read"
         case "mail_draft_reply": return "mail draft"
         case "create_artifact": return "artifact"
         case "web_control": return "web control"
-        default: return invocation.tool
+        default: return invocation.tool.replacingOccurrences(of: "_", with: " ")
         }
     }
 
@@ -1845,35 +1841,31 @@ private struct ToolCallCard: View {
     }
 }
 
-/// Tiny leading badge that tells the user the lifecycle of a tool call at
-/// a glance: a spinning arc while running, a soft check when done, a
-/// muted slash when failed. All three live in the same 14×14 footprint so
-/// the card header doesn't shift width as the status changes.
-private struct ToolStatusBadge: View {
+/// Bare-bones status indicator for the quiet tool log: a tiny spinner
+/// while running, a muted check when done, a faint slash when failed.
+/// All three live in the same 9×9 footprint so the row doesn't reflow
+/// width as the status changes.
+private struct ToolStatusGlyph: View {
     let status: ChatMessage.ToolInvocation.Status
 
     var body: some View {
         ZStack {
-            Circle()
-                .stroke(Palette.stroke, lineWidth: 1)
-                .frame(width: 14, height: 14)
-
             switch status {
             case .running:
                 ToolSpinner()
             case .completed:
                 Image(systemName: "checkmark")
-                    .font(.system(size: 8, weight: .heavy))
-                    .foregroundStyle(Palette.textPrimary)
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Palette.textMuted)
                     .transition(.opacity.combined(with: .scale(scale: 0.6)))
             case .failed:
                 Image(systemName: "xmark")
-                    .font(.system(size: 8, weight: .heavy))
-                    .foregroundStyle(Palette.textMuted)
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Palette.textFaint)
                     .transition(.opacity.combined(with: .scale(scale: 0.6)))
             }
         }
-        .frame(width: 14, height: 14)
+        .frame(width: 9, height: 9)
     }
 }
 
@@ -1883,11 +1875,11 @@ private struct ToolSpinner: View {
     var body: some View {
         Circle()
             .trim(from: 0.0, to: 0.72)
-            .stroke(Palette.textPrimary, style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
-            .frame(width: 10, height: 10)
+            .stroke(Palette.textSecondary, style: StrokeStyle(lineWidth: 1.2, lineCap: .round))
+            .frame(width: 9, height: 9)
             .rotationEffect(.degrees(angle))
             .onAppear {
-                withAnimation(.linear(duration: 0.85).repeatForever(autoreverses: false)) {
+                withAnimation(.linear(duration: 0.9).repeatForever(autoreverses: false)) {
                     angle = 360
                 }
             }
