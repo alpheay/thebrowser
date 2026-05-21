@@ -54,12 +54,17 @@ struct BrowserToolbar: View {
             .padding(.horizontal, 10)
             .frame(height: Metrics.toolbarHeight)
 
-            // Loading hairline
+            // Loading / Agent hairline
             ZStack(alignment: .leading) {
                 Rectangle()
                     .fill(Color.clear)
-                    .frame(height: 1.5)
-                if selectedTab.isLoading {
+                    .frame(height: ribbonHeight)
+
+                if model.webControlStatus != nil {
+                    AgentRibbon()
+                        .frame(height: ribbonHeight)
+                        .transition(.opacity)
+                } else if selectedTab.isLoading {
                     GeometryReader { proxy in
                         Rectangle()
                             .fill(Palette.accent)
@@ -70,9 +75,14 @@ struct BrowserToolbar: View {
                     .transition(.opacity)
                 }
             }
-            .frame(height: 1.5)
+            .frame(height: ribbonHeight)
+            .animation(.easeInOut(duration: 0.2), value: model.webControlStatus != nil)
         }
         .background(Palette.bg)
+    }
+
+    private var ribbonHeight: CGFloat {
+        model.webControlStatus != nil ? 2.5 : 1.5
     }
 
     private var navCluster: some View {
@@ -290,5 +300,51 @@ struct FaviconView: View {
 
     private var faviconURL: URL? {
         URL(string: "https://www.google.com/s2/favicons?domain=\(host)&sz=64")
+    }
+}
+
+/// Replaces the loading hairline whenever a web-control agent is acting.
+/// A bright white scan drifts across a matte black base — pure black/white,
+/// no color, ethereal motion.
+private struct AgentRibbon: View {
+    @State private var sweep: CGFloat = -0.6
+    @State private var glow: Bool = false
+
+    var body: some View {
+        GeometryReader { proxy in
+            let w = proxy.size.width
+            ZStack(alignment: .leading) {
+                Rectangle().fill(Color.black.opacity(0.95))
+
+                Rectangle()
+                    .fill(Color.white.opacity(0.06))
+
+                LinearGradient(
+                    colors: [
+                        .clear,
+                        Color.white.opacity(0.45),
+                        Color.white.opacity(0.95),
+                        Color.white.opacity(0.45),
+                        .clear
+                    ],
+                    startPoint: .leading,
+                    endPoint: .trailing
+                )
+                .frame(width: w * 0.40)
+                .blur(radius: glow ? 1.4 : 0.5)
+                .offset(x: w * sweep)
+                .shadow(color: Color.white.opacity(0.55), radius: 8, x: 0, y: 0)
+            }
+            .clipped()
+        }
+        .onAppear {
+            sweep = -0.6
+            withAnimation(.linear(duration: 2.8).repeatForever(autoreverses: false)) {
+                sweep = 1.2
+            }
+            withAnimation(.easeInOut(duration: 1.5).repeatForever(autoreverses: true)) {
+                glow = true
+            }
+        }
     }
 }
