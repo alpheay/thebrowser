@@ -23,6 +23,7 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
     @AppStorage(PreferenceKey.openHistoryShortcut) private var openHistoryShortcut = "command+y"
     @AppStorage(PreferenceKey.openIntegrationsShortcut) private var openIntegrationsShortcut = "shift+command+e"
+    @AppStorage(PreferenceKey.aiFavoriteModels) private var aiFavoriteModelsRaw = ""
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
     @AppStorage(PreferenceKey.historyImportBackfillCompleted) private var historyImportBackfillCompleted = false
     @AppStorage(PreferenceKey.hoverPreviewEnabled) private var hoverPreviewEnabled = true
@@ -554,6 +555,28 @@ struct BrowserShellView: View {
         for (key, action) in pairs where bindings[key] == nil {
             bindings[key] = action
         }
+
+        // ⌘1…⌘9 jump to the favorited models the picker shows in its
+        // Favorites section, in the same order. Only registered while the
+        // chat panel is visible so we don't hijack ⌘1–9 globally — and only
+        // for indices that actually have a favorite, so unused digits fall
+        // through to the system (rather than silently absorbing the event).
+        if model.isChatVisible {
+            let favoriteIDs = aiFavoriteModelsRaw
+                .split(separator: ",")
+                .map { String($0).trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+            for (idx, favoriteID) in favoriteIDs.prefix(9).enumerated() {
+                guard let option = AIModelOption.find(id: favoriteID) else { continue }
+                let key = "command+\(idx + 1)"
+                guard bindings[key] == nil else { continue }
+                bindings[key] = {
+                    UserDefaults.standard.set(option.provider.rawValue, forKey: PreferenceKey.aiProvider)
+                    UserDefaults.standard.set(option.modelID, forKey: PreferenceKey.aiModel)
+                }
+            }
+        }
+
         return bindings
     }
 }

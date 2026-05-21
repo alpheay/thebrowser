@@ -26,11 +26,19 @@ struct ModelPickerPopover: View {
         .onAppear {
             highlightedID = currentSelectionRowID ?? flatVisibleRowIDs.first
         }
+        .onChange(of: selectionKey) { _, _ in
+            // Picks from inside (pick()) already call onPicked themselves, but
+            // ⌘1–9 fires through the shell-level keyboard host without our
+            // knowing — close the popover so it matches the click-to-pick UX.
+            onPicked()
+        }
         .task {
             try? await Task.sleep(nanoseconds: 60_000_000)
             searchFocused = true
         }
     }
+
+    private var selectionKey: String { "\(aiProvider):\(aiModel)" }
 
     // MARK: - Search
 
