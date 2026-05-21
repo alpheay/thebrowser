@@ -100,15 +100,30 @@ struct GmailAPIService {
 
     // MARK: - Get full
 
-    func fetchMessage(id: String) async throws -> GmailMessage {
-        let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(id)?format=full")!
+    /// Wire format requested from Gmail's REST API. `full` includes parsed
+    /// body parts, `metadata` only headers — much cheaper when the caller
+    /// just needs envelope info (e.g. headers-only batch reads).
+    enum MessageFormat {
+        case full
+        case metadata
+
+        fileprivate var query: String {
+            switch self {
+            case .full: return "full"
+            case .metadata: return "metadata&metadataHeaders=From&metadataHeaders=To&metadataHeaders=Cc&metadataHeaders=Subject&metadataHeaders=Date"
+            }
+        }
+    }
+
+    func fetchMessage(id: String, format: MessageFormat = .full) async throws -> GmailMessage {
+        let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/\(id)?format=\(format.query)")!
         let envelope: RawMessage = try await get(url)
         return envelope.toFullMessage()
     }
 
-    func fetchThread(id: String) async throws -> [GmailMessage] {
+    func fetchThread(id: String, format: MessageFormat = .full) async throws -> [GmailMessage] {
         let safeID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
-        let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/threads/\(safeID)?format=full")!
+        let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/threads/\(safeID)?format=\(format.query)")!
         let envelope: RawThread = try await get(url)
         return envelope.messages
             .map { $0.toFullMessage() }

@@ -192,11 +192,7 @@ final class GmailStore: ObservableObject {
         }
     }
 
-    func searchForTool(
-        query: String,
-        mailbox: GmailMailbox?,
-        maxResults: Int
-    ) async throws -> [GmailMessageSummary] {
+    func searchForTool(options: MailSearchOptions) async throws -> [GmailMessageSummary] {
         guard account.isSignedIn else { throw GmailAuthError.notSignedIn }
         guard let token = await account.currentAccessToken() else { throw GmailAuthError.notSignedIn }
 
@@ -204,15 +200,16 @@ final class GmailStore: ObservableObject {
         defer { phase = .idle }
 
         let api = GmailAPIService(accessToken: token)
-        let resolvedMailbox = mailbox ?? .all
+        let resolvedMailbox = options.mailbox ?? .all
+        let assembledQuery = options.gmailQueryString()
         let result = try await api.listMessages(
             mailbox: resolvedMailbox,
-            query: query,
-            maxResults: maxResults
+            query: assembledQuery.isEmpty ? nil : assembledQuery,
+            maxResults: options.maxResults
         )
 
         selectedMailbox = resolvedMailbox
-        self.query = query
+        self.query = assembledQuery
         messages = result.summaries
         openMessage = nil
         paneMode = .list
@@ -220,7 +217,13 @@ final class GmailStore: ObservableObject {
         return result.summaries
     }
 
-    func readThreadForTool(identifier: MailToolMessageIdentifier) async throws -> [GmailMessage] {
+    /// Reads one or more threads in parallel for the mail_read_thread tool.
+    /// Threads come back in the same order as the requested identifiers so
+    /// the formatter can pair each input with its output. When
+    /// `includeBody` is false we ask Gmail for `format=metadata`, which
+    /// skips body decoding on the server and shrinks the response to just
+    /// the headers we actually render.
+    func readForTool(options: MailReadOptions) async throws -> [[GmailMessage]] {
         guard account.isSignedIn else { throw GmailAuthError.notSignedIn }
         guard let token = await account.currentAccessToken() else { throw GmailAuthError.notSignedIn }
 
@@ -228,26 +231,60 @@ final class GmailStore: ObservableObject {
         defer { phase = .idle }
 
         let api = GmailAPIService(accessToken: token)
-        let thread: [GmailMessage]
-        switch identifier.kind {
-        case .message:
-            let message = try await api.fetchMessage(id: identifier.value)
-            thread = try await api.fetchThread(id: message.threadId)
-        case .thread:
-            thread = try await api.fetchThread(id: identifier.value)
+        let identifiers = options.identifiers
+        let wireFormat: GmailAPIService.MessageFormat = options.includeBody ? .full : .metadata
+
+        let threads = try await withThrowingTaskGroup(of: (Int, [GmailMessage]).self) { group in
+            for (index, identifier) in identifiers.enumerated() {
+                group.addTask {
+                    let messages = try await Self.fetchThread(api: api, identifier: identifier, format: wireFormat)
+                    return (index, messages)
+                }
+            }
+            var slots: [(Int, [GmailMessage])] = []
+            slots.reserveCapacity(identifiers.count)
+            for try await slot in group {
+                slots.append(slot)
+            }
+            slots.sort { $0.0 < $1.0 }
+            return slots.map(\.1)
         }
 
-        if let focused = thread.last ?? thread.first {
+        if let focused = threads.last?.last ?? threads.first?.last ?? threads.first?.first {
             openMessage = focused
             paneMode = .reading(messageID: focused.id)
         }
         lastError = nil
-        return thread
+        return threads
+    }
+
+    private static func fetchThread(
+        api: GmailAPIService,
+        identifier: MailToolMessageIdentifier,
+        format: GmailAPIService.MessageFormat
+    ) async throws -> [GmailMessage] {
+        switch identifier.kind {
+        case .message:
+            // The `metadata` fetch returns the same threadId field we need —
+            // skip the body payload by routing the thread-id lookup through
+            // the cheap format too, even when the caller wants full bodies
+            // on the subsequent thread fetch.
+            let message = try await api.fetchMessage(id: identifier.value, format: .metadata)
+            return try await api.fetchThread(id: message.threadId, format: format)
+        case .thread:
+            return try await api.fetchThread(id: identifier.value, format: format)
+        }
     }
 
     @discardableResult
     func draftReplyForTool(identifier: MailToolMessageIdentifier, body: String) async throws -> GmailMessage {
-        let thread = try await readThreadForTool(identifier: identifier)
+        let options = MailReadOptions(
+            identifiers: [identifier],
+            includeBody: true,
+            maxBodyChars: MailReadOptions.defaultBodyChars
+        )
+        let threads = try await readForTool(options: options)
+        let thread = threads.first ?? []
         guard let target = thread.last ?? thread.first else {
             throw GmailAPIError.decoding("Thread did not contain any messages.")
         }

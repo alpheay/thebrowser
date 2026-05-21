@@ -77,15 +77,11 @@ struct BrowserShellView: View {
                                     integrations.open(.gmail)
                                 }
                             },
-                            searchMail: { query, mailbox, maxResults in
-                                try await gmailStore.searchForTool(
-                                    query: query,
-                                    mailbox: mailbox,
-                                    maxResults: maxResults
-                                )
+                            searchMail: { options in
+                                try await gmailStore.searchForTool(options: options)
                             },
-                            readMailThread: { identifier in
-                                try await gmailStore.readThreadForTool(identifier: identifier)
+                            readMail: { options in
+                                try await gmailStore.readForTool(options: options)
                             },
                             draftMailReply: { identifier, body in
                                 try await gmailStore.draftReplyForTool(identifier: identifier, body: body)
