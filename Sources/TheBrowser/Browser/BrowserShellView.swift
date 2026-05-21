@@ -27,12 +27,14 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.historyImportBackfillCompleted) private var historyImportBackfillCompleted = false
     @AppStorage(PreferenceKey.hoverPreviewEnabled) private var hoverPreviewEnabled = true
     @AppStorage(PreferenceKey.hoverPreviewPrefetchBlocklist) private var hoverPreviewBlocklist = ""
+    @SceneStorage("TheBrowser.windowSceneID") private var windowSceneID = ""
 
     @State private var isPeekingRail = false
     @State private var peekDismissTask: Task<Void, Never>? = nil
     @State private var isShowingMigrationPrompt = false
     @State private var isClipboardPopoverPresented = false
     @State private var isShowingHistoryModal = false
+    @State private var scratchDirectoryURL: URL?
 
     private var railOverlayVisible: Bool {
         model.isTabRailVisible || isPeekingRail
@@ -52,7 +54,7 @@ struct BrowserShellView: View {
 
                 centerColumn
 
-                if model.isChatVisible {
+                if model.isChatVisible, let scratchDirectoryURL {
                     AIChatPanel(
                         viewModel: chatModel,
                         smartReadModel: smartReadModel,
@@ -96,9 +98,10 @@ struct BrowserShellView: View {
                                 return url
                             },
                             runWebControl: { task in
-                                await model.runWebControl(task: task, sessionDirectory: chatModel.sessionDirectory)
+                                await model.runWebControl(task: task, sessionDirectory: scratchDirectoryURL)
                             }
                         ),
+                        scratchDirectory: scratchDirectoryURL,
                         onOpenArtifact: { url in
                             model.openOrFocusArtifact(at: url)
                         },
@@ -226,6 +229,7 @@ struct BrowserShellView: View {
             hoverPreview.prefetcher.updateBlocklist(newValue)
         }
         .onAppear {
+            configureScratchDirectory()
             postWelcomeNotificationIfNeeded()
             installLinkHoverListener()
             hoverPreview.prefetcher.updateBlocklist(hoverPreviewBlocklist)
@@ -270,6 +274,18 @@ struct BrowserShellView: View {
         .animation(Motion.springSnap, value: model.isChatVisible)
         .animation(Motion.springSnap, value: model.isTabRailVisible)
         .animation(Motion.springSnap, value: integrations.isPresented)
+    }
+
+    private func configureScratchDirectory() {
+        if windowSceneID.isEmpty {
+            windowSceneID = UUID().uuidString
+        }
+
+        do {
+            scratchDirectoryURL = try ScratchDirectory.shared.ensureExists(forWindow: windowSceneID)
+        } catch {
+            scratchDirectoryURL = ScratchDirectory.shared.url(forWindow: windowSceneID)
+        }
     }
 
     // MARK: - Center column (toolbar + content)

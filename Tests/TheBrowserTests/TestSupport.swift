@@ -14,7 +14,8 @@ enum TestSupport {
         disallowedTools: String = "",
         mcpConfigPath: String = "",
         extraArguments: String = "",
-        reasoningEffort: String = ""
+        reasoningEffort: String = "",
+        scopedFilesystemRoot: String? = nil
     ) -> AIHarnessConfiguration {
         AIHarnessConfiguration(
             provider: provider,
@@ -28,7 +29,8 @@ enum TestSupport {
             disallowedTools: disallowedTools,
             mcpConfigPath: mcpConfigPath,
             extraArguments: extraArguments,
-            reasoningEffort: reasoningEffort
+            reasoningEffort: reasoningEffort,
+            scopedFilesystemRoot: scopedFilesystemRoot
         )
     }
 

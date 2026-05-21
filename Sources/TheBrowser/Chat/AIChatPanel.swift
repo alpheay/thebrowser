@@ -1,4 +1,5 @@
 import AppKit
+import Darwin
 import SwiftUI
 
 struct ChatMessage: Identifiable, Equatable {
@@ -227,6 +228,7 @@ final class ChatViewModel: ObservableObject {
         context: BrowserPageContext,
         tabs: [TabManifestEntry],
         nativeTools: NativeBrowserToolExecutor,
+        scratchDirectory: URL,
         smartReadActive: Bool = false
     ) {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -308,7 +310,7 @@ final class ChatViewModel: ObservableObject {
             return
         }
 
-        let directory = sessionDirectory
+        let directory = scratchDirectory
         let history = messages
         let configuration = AIHarnessConfiguration.current()
         let prompt = AIProviderClient.prompt(
@@ -433,7 +435,7 @@ final class ChatViewModel: ObservableObject {
             return true
         case .processFailed:
             return true
-        case .missingExecutable:
+        case .missingExecutable, .invalidMCPConfig:
             return false
         }
     }
@@ -445,6 +447,7 @@ struct AIChatPanel: View {
     var context: BrowserPageContext
     var tabs: [TabManifestEntry]
     var nativeTools: NativeBrowserToolExecutor
+    var scratchDirectory: URL
     var onOpenArtifact: (URL) -> Void
     var onClose: () -> Void
 
@@ -460,6 +463,7 @@ struct AIChatPanel: View {
             header
             content
             composer
+            ScratchWorkspacePane(rootURL: scratchDirectory)
         }
         .frame(width: Metrics.chatWidth)
         .frame(maxHeight: .infinity)
@@ -777,6 +781,7 @@ struct AIChatPanel: View {
             context: context,
             tabs: tabs,
             nativeTools: nativeTools,
+            scratchDirectory: scratchDirectory,
             smartReadActive: smartReadModel.isPresented
         )
     }
@@ -809,6 +814,508 @@ struct AIChatPanel: View {
         .overlay(Capsule().stroke(Palette.stroke, lineWidth: 1))
     }
 
+}
+
+// MARK: - Scratch workspace
+
+private struct ScratchWorkspacePane: View {
+    let rootURL: URL
+
+    @StateObject private var treeModel = ScratchFileTreeModel()
+    @State private var isExpanded = true
+
+    var body: some View {
+        VStack(spacing: 0) {
+            header
+
+            if isExpanded {
+                VStack(spacing: 8) {
+                    fileTree
+                    terminalPreview
+                }
+                .padding(.horizontal, 12)
+                .padding(.bottom, 12)
+                .transition(.opacity.combined(with: .move(edge: .bottom)))
+            }
+        }
+        .hairline(.top)
+        .onAppear {
+            treeModel.start(rootURL: rootURL)
+        }
+        .onChange(of: rootURL) { _, newValue in
+            treeModel.start(rootURL: newValue)
+        }
+        .onDisappear {
+            treeModel.stop()
+        }
+        .animation(Motion.springSnap, value: isExpanded)
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Button {
+                withAnimation(Motion.springSnap) {
+                    isExpanded.toggle()
+                }
+            } label: {
+                HStack(spacing: 7) {
+                    Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                        .font(.system(size: 9, weight: .bold))
+                        .frame(width: 10)
+                    Image(systemName: "folder")
+                        .font(.system(size: 11, weight: .semibold))
+                    Text("Scratch")
+                        .font(.system(size: 11.5, weight: .semibold))
+                        .foregroundStyle(Palette.textPrimary)
+                }
+                .foregroundStyle(Palette.textSecondary)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help(isExpanded ? "Collapse scratch workspace" : "Expand scratch workspace")
+
+            Text(rootURL.lastPathComponent)
+                .font(.system(size: 10.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.textMuted)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 0)
+
+            Button(action: openInTerminal) {
+                Image(systemName: "terminal")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Palette.textSecondary)
+                    .frame(width: 24, height: 24)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .help("Open in Terminal.app")
+        }
+        .padding(.horizontal, 12)
+        .frame(height: 36)
+    }
+
+    private var fileTree: some View {
+        Group {
+            if let errorMessage = treeModel.errorMessage {
+                ScratchStatusRow(icon: "exclamationmark.triangle", text: errorMessage)
+            } else if treeModel.nodes.isEmpty {
+                ScratchStatusRow(
+                    icon: treeModel.isLoading ? "arrow.triangle.2.circlepath" : "doc",
+                    text: treeModel.isLoading ? "Loading..." : "No files yet"
+                )
+            } else {
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 1) {
+                        ForEach(treeModel.nodes) { node in
+                            ScratchFileNodeRow(node: node, depth: 0)
+                        }
+
+                        if treeModel.didTruncate {
+                            ScratchStatusRow(icon: "ellipsis", text: "More files omitted")
+                                .padding(.top, 4)
+                        }
+                    }
+                    .padding(6)
+                }
+                .scrollIndicators(.automatic)
+            }
+        }
+        .frame(height: 138)
+        .frame(maxWidth: .infinity)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Palette.bgSunken)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Palette.stroke, lineWidth: 1)
+        }
+    }
+
+    private var terminalPreview: some View {
+        HStack(spacing: 7) {
+            Image(systemName: "chevron.right")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundStyle(Palette.textFaint)
+
+            Text(shellCommand)
+                .font(.system(size: 10.5, weight: .regular, design: .monospaced))
+                .foregroundStyle(Palette.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.middle)
+
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 30)
+        .background {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .fill(Palette.surface)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .stroke(Palette.stroke, lineWidth: 1)
+        }
+    }
+
+    private var shellCommand: String {
+        "cd \(shellEscaped(rootURL.path))"
+    }
+
+    private func openInTerminal() {
+        let command = "\(shellCommand) && exec /bin/zsh"
+        let source = """
+        tell application "Terminal"
+            activate
+            do script \(appleScriptLiteral(command))
+        end tell
+        """
+        var error: NSDictionary?
+        NSAppleScript(source: source)?.executeAndReturnError(&error)
+    }
+}
+
+@MainActor
+private final class ScratchFileTreeModel: ObservableObject {
+    @Published private(set) var nodes: [ScratchFileNode] = []
+    @Published private(set) var isLoading = false
+    @Published private(set) var didTruncate = false
+    @Published private(set) var errorMessage: String?
+
+    private static let nodeLimit = 800
+    private var rootURL: URL?
+    private var watcher: ScratchDirectoryWatcher?
+    private var refreshTask: Task<Void, Never>?
+    private var debounceTask: Task<Void, Never>?
+    private var pollingTask: Task<Void, Never>?
+
+    func start(rootURL: URL) {
+        if self.rootURL == rootURL, watcher != nil {
+            scheduleRefresh()
+            return
+        }
+
+        stop()
+        self.rootURL = rootURL
+        do {
+            try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
+            startWatcher(rootURL: rootURL)
+            startPolling()
+            refresh()
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func stop() {
+        watcher?.cancel()
+        watcher = nil
+        refreshTask?.cancel()
+        refreshTask = nil
+        debounceTask?.cancel()
+        debounceTask = nil
+        pollingTask?.cancel()
+        pollingTask = nil
+    }
+
+    private func startWatcher(rootURL: URL) {
+        let watcher = ScratchDirectoryWatcher()
+        watcher.start(url: rootURL) { [weak self] in
+            Task { @MainActor [weak self] in
+                self?.scheduleRefresh()
+            }
+        }
+        self.watcher = watcher
+    }
+
+    private func startPolling() {
+        pollingTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 1_000_000_000)
+                self?.refresh()
+            }
+        }
+    }
+
+    private func scheduleRefresh() {
+        debounceTask?.cancel()
+        debounceTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 200_000_000)
+            self?.refresh()
+        }
+    }
+
+    private func refresh() {
+        guard let rootURL else { return }
+
+        refreshTask?.cancel()
+        isLoading = nodes.isEmpty
+        errorMessage = nil
+
+        refreshTask = Task { [weak self] in
+            do {
+                let limit = Self.nodeLimit
+                let snapshot = try await Task.detached(priority: .utility) {
+                    try ScratchFileSnapshot.load(rootURL: rootURL, limit: limit)
+                }.value
+
+                guard !Task.isCancelled else { return }
+                self?.nodes = snapshot.nodes
+                self?.didTruncate = snapshot.didTruncate
+                self?.isLoading = false
+            } catch {
+                guard !Task.isCancelled else { return }
+                self?.nodes = []
+                self?.didTruncate = false
+                self?.isLoading = false
+                self?.errorMessage = error.localizedDescription
+            }
+        }
+    }
+}
+
+private struct ScratchFileNode: Identifiable, Sendable {
+    let id: String
+    let name: String
+    let isDirectory: Bool
+    let children: [ScratchFileNode]
+}
+
+private struct ScratchFileSnapshot: Sendable {
+    let nodes: [ScratchFileNode]
+    let didTruncate: Bool
+
+    static func load(rootURL: URL, limit: Int) throws -> ScratchFileSnapshot {
+        var remaining = max(limit, 0)
+        var didTruncate = false
+        var result: Result<[ScratchFileNode], Error> = .success([])
+        var coordinationError: NSError?
+
+        let coordinator = NSFileCoordinator(filePresenter: nil)
+        coordinator.coordinate(readingItemAt: rootURL, options: [], error: &coordinationError) { coordinatedURL in
+            do {
+                result = .success(try loadChildren(
+                    in: coordinatedURL,
+                    rootURL: coordinatedURL,
+                    depth: 0,
+                    remaining: &remaining,
+                    didTruncate: &didTruncate
+                ))
+            } catch {
+                result = .failure(error)
+            }
+        }
+
+        if let coordinationError {
+            throw coordinationError
+        }
+
+        return ScratchFileSnapshot(nodes: try result.get(), didTruncate: didTruncate)
+    }
+
+    private static func loadChildren(
+        in directory: URL,
+        rootURL: URL,
+        depth: Int,
+        remaining: inout Int,
+        didTruncate: inout Bool
+    ) throws -> [ScratchFileNode] {
+        guard remaining > 0 else {
+            didTruncate = true
+            return []
+        }
+
+        let keys: [URLResourceKey] = [
+            .isDirectoryKey,
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+            .nameKey
+        ]
+        let urls = try FileManager.default.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: keys
+        )
+        let sorted = urls.sorted { lhs, rhs in
+            let lhsValues = try? lhs.resourceValues(forKeys: Set(keys))
+            let rhsValues = try? rhs.resourceValues(forKeys: Set(keys))
+            let lhsDirectory = lhsValues?.isDirectory == true && lhsValues?.isSymbolicLink != true
+            let rhsDirectory = rhsValues?.isDirectory == true && rhsValues?.isSymbolicLink != true
+            if lhsDirectory != rhsDirectory {
+                return lhsDirectory
+            }
+            return lhs.lastPathComponent.localizedStandardCompare(rhs.lastPathComponent) == .orderedAscending
+        }
+
+        var nodes: [ScratchFileNode] = []
+        for url in sorted {
+            guard remaining > 0 else {
+                didTruncate = true
+                break
+            }
+
+            let values = try? url.resourceValues(forKeys: Set(keys))
+            let isLink = values?.isSymbolicLink == true
+            let isDirectory = values?.isDirectory == true && !isLink
+            let isRegularFile = values?.isRegularFile == true
+            guard isDirectory || isRegularFile || isLink else { continue }
+
+            remaining -= 1
+            let children: [ScratchFileNode]
+            if isDirectory, depth < 8 {
+                children = try loadChildren(
+                    in: url,
+                    rootURL: rootURL,
+                    depth: depth + 1,
+                    remaining: &remaining,
+                    didTruncate: &didTruncate
+                )
+            } else {
+                if isDirectory {
+                    didTruncate = true
+                }
+                children = []
+            }
+
+            nodes.append(ScratchFileNode(
+                id: relativePath(for: url, rootURL: rootURL),
+                name: url.lastPathComponent,
+                isDirectory: isDirectory,
+                children: children
+            ))
+        }
+
+        return nodes
+    }
+
+    private static func relativePath(for url: URL, rootURL: URL) -> String {
+        let rootPath = rootURL.standardizedFileURL.path
+        let path = url.standardizedFileURL.path
+        guard path.hasPrefix(rootPath + "/") else {
+            return url.lastPathComponent
+        }
+        return String(path.dropFirst(rootPath.count + 1))
+    }
+}
+
+private final class ScratchDirectoryWatcher {
+    private let queue = DispatchQueue(label: "app.thebrowser.scratch-directory-watcher")
+    private var source: DispatchSourceFileSystemObject?
+
+    func start(url: URL, onChange: @escaping @Sendable () -> Void) {
+        cancel()
+
+        let descriptor = open(url.path, O_EVTONLY)
+        guard descriptor >= 0 else { return }
+
+        let source = DispatchSource.makeFileSystemObjectSource(
+            fileDescriptor: descriptor,
+            eventMask: [.write, .delete, .rename, .attrib, .link, .extend, .revoke],
+            queue: queue
+        )
+        source.setEventHandler(handler: onChange)
+        source.setCancelHandler {
+            close(descriptor)
+        }
+        self.source = source
+        source.resume()
+    }
+
+    func cancel() {
+        source?.cancel()
+        source = nil
+    }
+
+    deinit {
+        cancel()
+    }
+}
+
+private struct ScratchFileNodeRow: View {
+    let node: ScratchFileNode
+    let depth: Int
+
+    @State private var isExpanded = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            row
+
+            if node.isDirectory, isExpanded {
+                ForEach(node.children) { child in
+                    ScratchFileNodeRow(node: child, depth: depth + 1)
+                }
+            }
+        }
+    }
+
+    private var row: some View {
+        Button {
+            if node.isDirectory {
+                withAnimation(Motion.hoverFade) {
+                    isExpanded.toggle()
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Color.clear
+                    .frame(width: CGFloat(depth) * 12)
+
+                Image(systemName: node.isDirectory ? (isExpanded ? "chevron.down" : "chevron.right") : "doc")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .foregroundStyle(Palette.textFaint)
+                    .frame(width: 10)
+
+                Image(systemName: node.isDirectory ? "folder" : "doc.text")
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(Palette.textSecondary)
+                    .frame(width: 13)
+
+                Text(node.name)
+                    .font(.system(size: 11, weight: .regular))
+                    .foregroundStyle(Palette.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+
+                Spacer(minLength: 0)
+            }
+            .frame(height: 22)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+private struct ScratchStatusRow: View {
+    let icon: String
+    let text: String
+
+    var body: some View {
+        HStack(spacing: 7) {
+            Image(systemName: icon)
+                .font(.system(size: 10, weight: .semibold))
+            Text(text)
+                .font(.system(size: 11, weight: .medium))
+                .lineLimit(2)
+                .multilineTextAlignment(.leading)
+            Spacer(minLength: 0)
+        }
+        .foregroundStyle(Palette.textMuted)
+        .padding(.horizontal, 10)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+    }
+}
+
+private func shellEscaped(_ value: String) -> String {
+    "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
+}
+
+private func appleScriptLiteral(_ value: String) -> String {
+    let escaped = value
+        .replacingOccurrences(of: "\\", with: "\\\\")
+        .replacingOccurrences(of: "\"", with: "\\\"")
+    return "\"\(escaped)\""
 }
 
 // MARK: - Header icon button

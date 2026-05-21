@@ -177,6 +177,35 @@ struct CodexArgumentsTests {
         #expect(configOverrides(in: args).contains("model_reasoning_effort=\"medium\""))
     }
 
+    @Test("Filesystem MCP server is scoped to the workspace path")
+    func filesystemMCPServerIsScopedToWorkspace() {
+        let args = CLIArguments.codexArguments(
+            for: TestSupport.makeConfiguration(
+                provider: .codex,
+                workspacePath: "/tmp/work",
+                scopedFilesystemRoot: "/tmp/scratch dir"
+            ),
+            prompt: "p",
+            outputURL: TestSupport.outputURL
+        )
+        let overrides = configOverrides(in: args)
+
+        #expect(overrides.contains("mcp_servers.filesystem.command=\"npx\""))
+        #expect(overrides.contains(#"mcp_servers.filesystem.args=["-y", "@modelcontextprotocol/server-filesystem", "/tmp/scratch dir"]"#))
+    }
+
+    @Test("Filesystem MCP server is omitted without a scoped root")
+    func filesystemMCPServerOmittedWithoutScopedRoot() {
+        let args = CLIArguments.codexArguments(
+            for: TestSupport.makeConfiguration(provider: .codex, workspacePath: "/tmp/work"),
+            prompt: "p",
+            outputURL: TestSupport.outputURL
+        )
+        let overrides = configOverrides(in: args)
+
+        #expect(!overrides.contains(where: { $0.hasPrefix("mcp_servers.filesystem.") }))
+    }
+
     @Test("Codex never emits Claude-only flags")
     func codexNeverEmitsClaudeFlags() {
         let config = TestSupport.makeConfiguration(
@@ -228,6 +257,11 @@ struct CodexArgumentsTests {
     @Test("TOML string literals escape quotes and backslashes")
     func tomlStringEscapesPath() {
         #expect(CLIArguments.tomlStringLiteral(#"/tmp/a "quoted" \ path.md"#) == #""/tmp/a \"quoted\" \\ path.md""#)
+    }
+
+    @Test("TOML arrays escape each string literal")
+    func tomlArrayEscapesValues() {
+        #expect(CLIArguments.tomlArrayLiteral(["a", #"b "quoted""#]) == #"["a", "b \"quoted\""]"#)
     }
 
     private func configOverrides(in args: [String]) -> [String] {

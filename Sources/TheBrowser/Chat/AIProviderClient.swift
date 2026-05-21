@@ -82,6 +82,7 @@ enum AIProviderError: LocalizedError {
     case missingExecutable(provider: AIProviderKind, path: String)
     case processFailed(provider: AIProviderKind, status: Int32, output: String)
     case emptyResponse
+    case invalidMCPConfig(path: String, reason: String)
 
     var errorDescription: String? {
         switch self {
@@ -91,6 +92,8 @@ enum AIProviderError: LocalizedError {
             return "\(provider.displayName) exited with status \(status).\n\(output)"
         case .emptyResponse:
             return "The selected AI provider finished without returning a message."
+        case .invalidMCPConfig(let path, let reason):
+            return "The MCP config at \(path) could not be loaded: \(reason)"
         }
     }
 }
@@ -108,6 +111,7 @@ struct AIHarnessConfiguration: Sendable {
     var mcpConfigPath: String
     var extraArguments: String
     var reasoningEffort: String
+    var scopedFilesystemRoot: String?
 
     static func current(defaults: UserDefaults = .standard) -> AIHarnessConfiguration {
         let provider = AIProviderKind(rawValue: defaults.string(forKey: PreferenceKey.aiProvider) ?? "") ?? .codex
@@ -140,7 +144,8 @@ struct AIHarnessConfiguration: Sendable {
             disallowedTools: defaults.string(forKey: PreferenceKey.aiDisallowedTools) ?? "",
             mcpConfigPath: defaults.string(forKey: PreferenceKey.aiMCPConfigPath) ?? "",
             extraArguments: defaults.string(forKey: PreferenceKey.aiExtraArguments) ?? "",
-            reasoningEffort: ""
+            reasoningEffort: "",
+            scopedFilesystemRoot: nil
         )
     }
 }
@@ -202,9 +207,10 @@ struct AIProviderClient {
     ) async throws -> String {
         var configuration = AIHarnessConfiguration.current()
         if let sessionDirectory {
-            // Force chat CLI calls to run inside the session directory so
-            // each conversation is isolated under ~/.thebrowser/sessions/<id>.
+            // Force chat CLI calls into the supplied working directory and
+            // scope the MCP filesystem server to that same root.
             configuration.workspacePath = sessionDirectory.path
+            configuration.scopedFilesystemRoot = sessionDirectory.path
         }
         if let systemPromptOverride {
             configuration.systemPrompt = systemPromptOverride
@@ -370,16 +376,33 @@ private func runProvider(configuration: AIHarnessConfiguration, prompt: String) 
     }
 
     let tempDirectory = FileManager.default.temporaryDirectory
+    var runtimeConfiguration = configuration
+    let scopedMCPConfigURL: URL?
+    if configuration.provider == .claude, let scopedFilesystemRoot = configuration.scopedFilesystemRoot {
+        let scratchDirectory = URL(fileURLWithPath: scopedFilesystemRoot, isDirectory: true)
+        let generatedMCPConfigURL = try scopedMCPConfigFile(
+            for: configuration,
+            scratchDirectory: scratchDirectory,
+            in: tempDirectory
+        )
+        scopedMCPConfigURL = generatedMCPConfigURL
+        runtimeConfiguration.mcpConfigPath = generatedMCPConfigURL.path
+    } else {
+        scopedMCPConfigURL = nil
+    }
     let outputURL = tempDirectory.appendingPathComponent("thebrowser-\(configuration.provider.rawValue)-\(UUID().uuidString).txt")
     let stdoutURL = tempDirectory.appendingPathComponent("thebrowser-\(configuration.provider.rawValue)-stdout-\(UUID().uuidString).log")
     let stderrURL = tempDirectory.appendingPathComponent("thebrowser-\(configuration.provider.rawValue)-stderr-\(UUID().uuidString).log")
-    let systemPromptFileURL = try systemPromptFileIfNeeded(for: configuration, in: tempDirectory)
+    let systemPromptFileURL = try systemPromptFileIfNeeded(for: runtimeConfiguration, in: tempDirectory)
 
     _ = FileManager.default.createFile(atPath: stdoutURL.path, contents: nil)
     _ = FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
 
     defer {
         try? FileManager.default.removeItem(at: outputURL)
+        if let scopedMCPConfigURL {
+            try? FileManager.default.removeItem(at: scopedMCPConfigURL)
+        }
         if let systemPromptFileURL {
             try? FileManager.default.removeItem(at: systemPromptFileURL)
         }
@@ -391,17 +414,17 @@ private func runProvider(configuration: AIHarnessConfiguration, prompt: String) 
     let stderr = try FileHandle(forWritingTo: stderrURL)
 
     let process = Process()
-    process.executableURL = URL(fileURLWithPath: configuration.cliPath)
+    process.executableURL = URL(fileURLWithPath: runtimeConfiguration.cliPath)
     process.standardOutput = stdout
     process.standardError = stderr
-    let standardInputData = CLIArguments.standardInputData(for: configuration, prompt: prompt)
+    let standardInputData = CLIArguments.standardInputData(for: runtimeConfiguration, prompt: prompt)
     let stdin = standardInputData == nil ? nil : Pipe()
     if let stdin {
         process.standardInput = stdin
     }
-    process.currentDirectoryURL = URL(fileURLWithPath: configuration.workspacePath, isDirectory: true)
+    process.currentDirectoryURL = URL(fileURLWithPath: runtimeConfiguration.workspacePath, isDirectory: true)
     process.arguments = CLIArguments.arguments(
-        for: configuration,
+        for: runtimeConfiguration,
         prompt: prompt,
         outputURL: outputURL,
         systemPromptFileURL: systemPromptFileURL
@@ -424,7 +447,7 @@ private func runProvider(configuration: AIHarnessConfiguration, prompt: String) 
 
     guard process.terminationStatus == 0 else {
         let providerOutput: String
-        if configuration.provider == .claude,
+        if runtimeConfiguration.provider == .claude,
            let result = ClaudeJSONResponse.result(from: stdoutText) {
             providerOutput = [stderrText.trimmingCharacters(in: .whitespacesAndNewlines), result]
                 .filter { !$0.isEmpty }
@@ -432,16 +455,16 @@ private func runProvider(configuration: AIHarnessConfiguration, prompt: String) 
         } else {
             providerOutput = [stderrText, stdoutText].filter { !$0.isEmpty }.joined(separator: "\n")
         }
-        throw AIProviderError.processFailed(provider: configuration.provider, status: process.terminationStatus, output: providerOutput)
+        throw AIProviderError.processFailed(provider: runtimeConfiguration.provider, status: process.terminationStatus, output: providerOutput)
     }
 
-    if configuration.provider == .codex, let finalMessage, !finalMessage.isEmpty {
+    if runtimeConfiguration.provider == .codex, let finalMessage, !finalMessage.isEmpty {
         return finalMessage
     }
 
     let fallback = stdoutText.trimmingCharacters(in: .whitespacesAndNewlines)
     if !fallback.isEmpty {
-        if configuration.provider == .claude, let result = ClaudeJSONResponse.result(from: fallback) {
+        if runtimeConfiguration.provider == .claude, let result = ClaudeJSONResponse.result(from: fallback) {
             return result
         }
 
@@ -457,6 +480,70 @@ private func systemPromptFileIfNeeded(for configuration: AIHarnessConfiguration,
     let url = directory.appendingPathComponent("thebrowser-codex-system-\(UUID().uuidString).md")
     try CLIArguments.effectiveSystemPrompt(for: configuration).write(to: url, atomically: true, encoding: .utf8)
     return url
+}
+
+private func scopedMCPConfigFile(
+    for configuration: AIHarnessConfiguration,
+    scratchDirectory: URL,
+    in directory: URL
+) throws -> URL {
+    let url = directory.appendingPathComponent("thebrowser-mcp-\(configuration.provider.rawValue)-\(UUID().uuidString).json")
+    let data = try MCPConfigBuilder.claudeConfigData(
+        existingConfigPath: configuration.mcpConfigPath,
+        scratchDirectory: scratchDirectory
+    )
+    try data.write(to: url, options: .atomic)
+    return url
+}
+
+enum MCPFilesystemServer {
+    static let name = "filesystem"
+    static let command = "npx"
+    static let packageName = "@modelcontextprotocol/server-filesystem"
+
+    static func args(for scratchDirectory: URL) -> [String] {
+        ["-y", packageName, scratchDirectory.path]
+    }
+
+    static func dictionary(for scratchDirectory: URL) -> [String: Any] {
+        [
+            "command": command,
+            "args": args(for: scratchDirectory)
+        ]
+    }
+}
+
+enum MCPConfigBuilder {
+    static func claudeConfigData(existingConfigPath: String, scratchDirectory: URL) throws -> Data {
+        var root = try existingClaudeConfig(path: existingConfigPath)
+        var servers = root["mcpServers"] as? [String: Any] ?? [:]
+        servers[MCPFilesystemServer.name] = MCPFilesystemServer.dictionary(for: scratchDirectory)
+        root["mcpServers"] = servers
+
+        return try JSONSerialization.data(
+            withJSONObject: root,
+            options: [.prettyPrinted, .sortedKeys]
+        )
+    }
+
+    private static func existingClaudeConfig(path: String) throws -> [String: Any] {
+        let trimmedPath = CLIArguments.trimmed(path)
+        guard !trimmedPath.isEmpty else { return [:] }
+
+        let url = URL(fileURLWithPath: trimmedPath)
+        do {
+            let data = try Data(contentsOf: url)
+            let object = try JSONSerialization.jsonObject(with: data)
+            guard let dictionary = object as? [String: Any] else {
+                throw AIProviderError.invalidMCPConfig(path: trimmedPath, reason: "top-level JSON must be an object")
+            }
+            return dictionary
+        } catch let error as AIProviderError {
+            throw error
+        } catch {
+            throw AIProviderError.invalidMCPConfig(path: trimmedPath, reason: error.localizedDescription)
+        }
+    }
 }
 
 enum CLIArguments {
@@ -523,6 +610,7 @@ enum CLIArguments {
             appendConfigOverride("model_instructions_file", stringValue: systemPromptFileURL.path, to: &arguments)
         }
 
+        appendCodexFilesystemMCPServer(root: configuration.scopedFilesystemRoot, to: &arguments)
         appendConfigOverride("include_permissions_instructions", boolValue: false, to: &arguments)
         appendConfigOverride("include_apps_instructions", boolValue: false, to: &arguments)
         appendConfigOverride("include_environment_context", boolValue: false, to: &arguments)
@@ -593,6 +681,15 @@ enum CLIArguments {
         }
     }
 
+    static func appendCodexFilesystemMCPServer(root: String?, to arguments: inout [String]) {
+        let root = trimmed(root ?? "")
+        guard !root.isEmpty else { return }
+
+        let scratchDirectory = URL(fileURLWithPath: root, isDirectory: true)
+        appendConfigOverride("mcp_servers.filesystem.command", stringValue: MCPFilesystemServer.command, to: &arguments)
+        appendConfigOverride("mcp_servers.filesystem.args", arrayValue: MCPFilesystemServer.args(for: scratchDirectory), to: &arguments)
+    }
+
     static func appendOptionalFlag(_ flag: String, value: String, to arguments: inout [String]) {
         let value = trimmed(value)
         if !value.isEmpty {
@@ -608,11 +705,19 @@ enum CLIArguments {
         arguments.append(contentsOf: ["-c", "\(key)=\(tomlStringLiteral(stringValue))"])
     }
 
+    static func appendConfigOverride(_ key: String, arrayValue: [String], to arguments: inout [String]) {
+        arguments.append(contentsOf: ["-c", "\(key)=\(tomlArrayLiteral(arrayValue))"])
+    }
+
     static func tomlStringLiteral(_ value: String) -> String {
         let escaped = value
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "\"\(escaped)\""
+    }
+
+    static func tomlArrayLiteral(_ values: [String]) -> String {
+        "[\(values.map(tomlStringLiteral).joined(separator: ", "))]"
     }
 
     static func extraArguments(from value: String) -> [String] {

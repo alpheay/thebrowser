@@ -223,4 +223,42 @@ struct ClaudeArgumentsTests {
 
         #expect(CLIArguments.standardInputData(for: config, prompt: "p") == nil)
     }
+
+    @Test("Generated MCP config adds scoped filesystem server and preserves other servers")
+    func generatedMCPConfigScopesFilesystem() throws {
+        let existingConfig = FileManager.default.temporaryDirectory
+            .appendingPathComponent("thebrowser-existing-mcp-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: existingConfig) }
+        try """
+        {
+          "mcpServers": {
+            "browser": {
+              "command": "browser-mcp"
+            },
+            "filesystem": {
+              "command": "old",
+              "args": ["/"]
+            }
+          }
+        }
+        """.write(to: existingConfig, atomically: true, encoding: .utf8)
+
+        let scratch = URL(fileURLWithPath: "/tmp/window scratch", isDirectory: true)
+        let data = try MCPConfigBuilder.claudeConfigData(
+            existingConfigPath: existingConfig.path,
+            scratchDirectory: scratch
+        )
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let servers = try #require(object["mcpServers"] as? [String: Any])
+        let browser = try #require(servers["browser"] as? [String: Any])
+        let filesystem = try #require(servers["filesystem"] as? [String: Any])
+
+        #expect(browser["command"] as? String == "browser-mcp")
+        #expect(filesystem["command"] as? String == "npx")
+        #expect(filesystem["args"] as? [String] == [
+            "-y",
+            "@modelcontextprotocol/server-filesystem",
+            "/tmp/window scratch"
+        ])
+    }
 }
