@@ -83,6 +83,10 @@ enum AIProviderError: LocalizedError {
     case processFailed(provider: AIProviderKind, status: Int32, output: String)
     case emptyResponse
     case invalidMCPConfig(path: String, reason: String)
+    /// User pressed Stop. Distinguished from a generic failure so the
+    /// chat surface can render a quiet "Stopped" pill instead of an
+    /// error banner.
+    case cancelled
 
     var errorDescription: String? {
         switch self {
@@ -94,6 +98,8 @@ enum AIProviderError: LocalizedError {
             return "The selected AI provider finished without returning a message."
         case .invalidMCPConfig(let path, let reason):
             return "The MCP config at \(path) could not be loaded: \(reason)"
+        case .cancelled:
+            return "Stopped."
         }
     }
 }
@@ -112,6 +118,14 @@ struct AIHarnessConfiguration: Sendable {
     var extraArguments: String
     var reasoningEffort: String
     var scopedFilesystemRoot: String?
+
+    /// True when the configured provider+model combo supports the
+    /// stream-json event protocol the live chat loop uses for partial
+    /// text rendering. Codex's `exec` mode doesn't emit per-token deltas
+    /// over stdout, so we keep it on the legacy single-response path.
+    var supportsStreamingEvents: Bool {
+        provider == .claude
+    }
 
     static func current(defaults: UserDefaults = .standard) -> AIHarnessConfiguration {
         let provider = AIProviderKind(rawValue: defaults.string(forKey: PreferenceKey.aiProvider) ?? "") ?? .codex
@@ -193,17 +207,63 @@ struct AIProviderClient {
         return try await ask(prompt: prompt, sessionDirectory: sessionDirectory)
     }
 
+    /// Streams events from the provider CLI in real time. Claude emits
+    /// per-token text deltas; Codex (and any future non-stream provider)
+    /// folds into a single `.result` event at the end. The chat loop
+    /// consumes this stream to update the in-flight assistant bubble
+    /// character-by-character as text arrives.
+    func askStream(
+        prompt: String,
+        sessionDirectory: URL? = nil,
+        runHandle: AgentRunHandle? = nil
+    ) -> AsyncThrowingStream<HarnessEvent, Error> {
+        var configuration = AIHarnessConfiguration.current()
+        if let sessionDirectory {
+            configuration.workspacePath = sessionDirectory.path
+        }
+        let resolvedConfig = configuration
+
+        return AsyncThrowingStream { continuation in
+            let task = Task.detached(priority: .userInitiated) {
+                do {
+                    let text = try runProviderStreaming(
+                        configuration: resolvedConfig,
+                        prompt: prompt,
+                        runHandle: runHandle,
+                        onEvent: { event in
+                            continuation.yield(event)
+                        }
+                    )
+                    // Always end with a final `.result` so the consumer
+                    // can rely on a single authoritative payload (and
+                    // ignore the partial accumulated text if needed).
+                    continuation.yield(.result(text: text))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+
+            continuation.onTermination = { _ in
+                task.cancel()
+            }
+        }
+    }
+
     /// Single-shot CLI call with no chat history or session persistence. Used
     /// by ad-hoc features (e.g. inline AI answers above search results) that
     /// just need a prompt → response round trip. The optional overrides let
     /// callers swap the user's chat persona / model for a task-specific
-    /// choice without mutating saved settings.
+    /// choice without mutating saved settings. The optional `runHandle`
+    /// is what the live agent loop uses to terminate the CLI process if
+    /// the user presses Stop.
     func ask(
         prompt: String,
         sessionDirectory: URL? = nil,
         systemPromptOverride: String? = nil,
         modelOverride: String? = nil,
-        reasoningEffortOverride: String? = nil
+        reasoningEffortOverride: String? = nil,
+        runHandle: AgentRunHandle? = nil
     ) async throws -> String {
         var configuration = AIHarnessConfiguration.current()
         if let sessionDirectory {
@@ -224,7 +284,7 @@ struct AIProviderClient {
 
         let resolvedConfig = configuration
         return try await Task.detached(priority: .userInitiated) {
-            try runProvider(configuration: resolvedConfig, prompt: prompt)
+            try runProvider(configuration: resolvedConfig, prompt: prompt, runHandle: runHandle)
         }.value
     }
 
@@ -370,7 +430,127 @@ struct AIProviderClient {
     }
 }
 
-private func runProvider(configuration: AIHarnessConfiguration, prompt: String) throws -> String {
+/// Streaming counterpart to `runProvider`. For Claude this pipes stdout
+/// through an NDJSON parser and forwards text deltas + the final result.
+/// For Codex (no native streaming) it delegates to the legacy file-based
+/// runner and emits a single `.textDelta` containing the full body — the
+/// chat loop still gets a "result arrived" trigger but the bubble fills
+/// in one chunk.
+private func runProviderStreaming(
+    configuration: AIHarnessConfiguration,
+    prompt: String,
+    runHandle: AgentRunHandle?,
+    onEvent: @escaping @Sendable (HarnessEvent) -> Void
+) throws -> String {
+    switch configuration.provider {
+    case .claude:
+        return try runClaudeStreaming(
+            configuration: configuration,
+            prompt: prompt,
+            runHandle: runHandle,
+            onEvent: onEvent
+        )
+    case .codex:
+        // No native event stream — fall back to the legacy single-shot
+        // path. The final response surfaces in one `.textDelta` so the
+        // chat loop's accumulator picks it up exactly once.
+        let response = try runProvider(
+            configuration: configuration,
+            prompt: prompt,
+            runHandle: runHandle
+        )
+        if !response.isEmpty {
+            onEvent(.textDelta(response))
+        }
+        return response
+    }
+}
+
+/// Runs Claude with `--output-format stream-json --include-partial-messages`
+/// and parses each NDJSON line into a `HarnessEvent`. Text deltas are
+/// forwarded immediately; the final `result` event captures the
+/// authoritative full body. Cancellation kills the subprocess so the
+/// reader loop exits on its next read.
+private func runClaudeStreaming(
+    configuration: AIHarnessConfiguration,
+    prompt: String,
+    runHandle: AgentRunHandle?,
+    onEvent: @escaping @Sendable (HarnessEvent) -> Void
+) throws -> String {
+    guard FileManager.default.isExecutableFile(atPath: configuration.cliPath) else {
+        throw AIProviderError.missingExecutable(provider: .claude, path: configuration.cliPath)
+    }
+
+    let stdoutPipe = Pipe()
+    let stderrPipe = Pipe()
+    let stdinPipe = Pipe()
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: configuration.cliPath)
+    process.standardOutput = stdoutPipe
+    process.standardError = stderrPipe
+    process.standardInput = stdinPipe
+    process.currentDirectoryURL = URL(fileURLWithPath: configuration.workspacePath, isDirectory: true)
+    process.arguments = CLIArguments.claudeStreamingArguments(for: configuration)
+
+    let parser = ClaudeStreamParser(onEvent: onEvent)
+    let stdoutHandle = stdoutPipe.fileHandleForReading
+    stdoutHandle.readabilityHandler = { handle in
+        let data = handle.availableData
+        if data.isEmpty {
+            // EOF — the run loop will exit, parser keeps any pending
+            // tail-text for the final answer.
+            handle.readabilityHandler = nil
+            return
+        }
+        parser.append(data)
+    }
+
+    try process.run()
+    runHandle?.attach(process: process)
+
+    // Pipe the prompt into the subprocess and close stdin so Claude
+    // knows the user's turn is complete and starts producing output.
+    stdinPipe.fileHandleForWriting.write(Data(prompt.utf8))
+    try? stdinPipe.fileHandleForWriting.close()
+
+    process.waitUntilExit()
+    runHandle?.detach()
+
+    // Drain anything still sitting in the pipe after the process exits;
+    // the readability handler may not have fired on the trailing bytes.
+    stdoutHandle.readabilityHandler = nil
+    let trailingData = try? stdoutHandle.readToEnd()
+    if let trailingData, !trailingData.isEmpty {
+        parser.append(trailingData)
+    }
+    let stderrText = (try? stderrPipe.fileHandleForReading.readToEnd())
+        .flatMap { String(data: $0, encoding: .utf8) } ?? ""
+
+    if runHandle?.isCancelled == true {
+        throw AIProviderError.cancelled
+    }
+
+    guard process.terminationStatus == 0 else {
+        let detail = [stderrText, parser.accumulatedText]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: "\n")
+        throw AIProviderError.processFailed(provider: .claude, status: process.terminationStatus, output: detail)
+    }
+
+    let finalText = parser.finalText
+    if finalText.isEmpty {
+        throw AIProviderError.emptyResponse
+    }
+    return finalText
+}
+
+private func runProvider(
+    configuration: AIHarnessConfiguration,
+    prompt: String,
+    runHandle: AgentRunHandle? = nil
+) throws -> String {
     guard FileManager.default.isExecutableFile(atPath: configuration.cliPath) else {
         throw AIProviderError.missingExecutable(provider: configuration.provider, path: configuration.cliPath)
     }
@@ -431,14 +611,24 @@ private func runProvider(configuration: AIHarnessConfiguration, prompt: String) 
     )
 
     try process.run()
+    // Hand the run handle a reference to the subprocess immediately
+    // after spawn so a Stop press mid-call can terminate it. If the
+    // handle was already cancelled before we got here, `attach` will
+    // call `terminate()` synchronously and the wait below returns fast.
+    runHandle?.attach(process: process)
     if let standardInputData, let stdin {
         stdin.fileHandleForWriting.write(standardInputData)
         try? stdin.fileHandleForWriting.close()
     }
     process.waitUntilExit()
+    runHandle?.detach()
 
     try stdout.close()
     try stderr.close()
+
+    if runHandle?.isCancelled == true {
+        throw AIProviderError.cancelled
+    }
 
     let finalMessage = (try? String(contentsOf: outputURL, encoding: .utf8))?
         .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -651,6 +841,39 @@ enum CLIArguments {
         return arguments
     }
 
+    /// Same as `claudeArguments` but flips `--output-format` to
+    /// `stream-json` and enables partial-message events so the chat loop
+    /// can render text deltas in real time. `--verbose` is required for
+    /// stream-json to actually emit per-event records. The prompt itself
+    /// is delivered over stdin (same as the non-streaming path), so we
+    /// don't append it to the argument list.
+    static func claudeStreamingArguments(for configuration: AIHarnessConfiguration) -> [String] {
+        var arguments = [
+            "--print",
+            "--input-format", "text",
+            "--output-format", "stream-json",
+            "--include-partial-messages",
+            "--verbose",
+            "--no-session-persistence",
+            "--disable-slash-commands",
+            "--strict-mcp-config",
+            "--no-chrome"
+        ]
+
+        appendModel(configuration.model, to: &arguments)
+        appendOptionalFlag("--effort", value: configuration.reasoningEffort, to: &arguments)
+        arguments.append(contentsOf: extraArguments(from: configuration.extraArguments))
+
+        arguments.append(contentsOf: ["--system-prompt", effectiveSystemPrompt(for: configuration)])
+        arguments.append(contentsOf: ["--tools", trimmed(configuration.tools)])
+
+        appendOptionalFlag("--allowedTools", value: configuration.allowedTools, to: &arguments)
+        appendOptionalFlag("--disallowedTools", value: configuration.disallowedTools, to: &arguments)
+        appendOptionalFlag("--mcp-config", value: configuration.mcpConfigPath, to: &arguments)
+
+        return arguments
+    }
+
     static func standardInputData(for configuration: AIHarnessConfiguration, prompt: String) -> Data? {
         switch configuration.provider {
         case .claude:
@@ -745,6 +968,127 @@ struct ClaudeJSONResponse: Decodable {
         }
 
         return result
+    }
+}
+
+/// Stateful NDJSON parser for Claude's `--output-format stream-json`
+/// output. Maintains a rolling byte buffer; whenever a complete newline-
+/// terminated event arrives it's decoded as JSON and inspected for the
+/// two records the chat loop cares about:
+///   - `stream_event.content_block_delta` with a `text_delta` payload —
+///     yielded as a `.textDelta` so the live bubble fills in
+///     character-by-character.
+///   - `result.subtype=="success"` — captured as the authoritative final
+///     body; surfaces via `finalText`.
+///
+/// All other event types (system init, rate limits, tool use,
+/// message_start/stop, assistant aggregates) are intentionally ignored
+/// — we don't need them for our pseudo-tool architecture and surfacing
+/// them would bloat the harness without unlocking real UX.
+final class ClaudeStreamParser: @unchecked Sendable {
+    private let onEvent: @Sendable (HarnessEvent) -> Void
+    private let lock = NSLock()
+    private var buffer = Data()
+    private var _accumulatedText = ""
+    private var _finalResult: String?
+
+    init(onEvent: @escaping @Sendable (HarnessEvent) -> Void) {
+        self.onEvent = onEvent
+    }
+
+    /// Raw text we've seen pass through `text_delta` events so far. Used
+    /// as a fallback when the final `result` event is absent (e.g. when
+    /// Claude exits non-zero halfway through producing output).
+    var accumulatedText: String {
+        lock.lock(); defer { lock.unlock() }
+        return _accumulatedText
+    }
+
+    /// Authoritative final body: prefers `result.result` when seen,
+    /// otherwise falls back to the concatenation of streamed text
+    /// deltas. Trimmed of leading/trailing whitespace.
+    var finalText: String {
+        lock.lock(); defer { lock.unlock() }
+        let candidate = _finalResult ?? _accumulatedText
+        return candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Feeds more bytes into the parser. Splits the buffer on newlines
+    /// and decodes each complete line as an independent JSON object,
+    /// holding any trailing partial line for the next call.
+    func append(_ data: Data) {
+        lock.lock()
+        defer { lock.unlock() }
+        buffer.append(data)
+
+        while let newlineIndex = buffer.firstIndex(of: 0x0A) {
+            let lineData = buffer.subdata(in: 0..<newlineIndex)
+            buffer.removeSubrange(0...newlineIndex)
+            guard !lineData.isEmpty else { continue }
+            handleLine(lineData)
+        }
+    }
+
+    private func handleLine(_ data: Data) {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any]
+        else { return }
+
+        let type = dictionary["type"] as? String ?? ""
+
+        switch type {
+        case "stream_event":
+            handleStreamEvent(dictionary)
+        case "assistant":
+            // Final aggregated message — capture its text for the
+            // fallback path. We don't yield from here because the
+            // text_delta events already populated the live bubble.
+            captureAssistantMessage(dictionary)
+        case "result":
+            handleResult(dictionary)
+        default:
+            // `system`, `user`, `rate_limit_event`, …
+            break
+        }
+    }
+
+    private func handleStreamEvent(_ dictionary: [String: Any]) {
+        guard let event = dictionary["event"] as? [String: Any] else { return }
+        let eventType = event["type"] as? String ?? ""
+        guard eventType == "content_block_delta" else { return }
+        guard let delta = event["delta"] as? [String: Any] else { return }
+        let deltaType = delta["type"] as? String ?? ""
+        guard deltaType == "text_delta",
+              let text = delta["text"] as? String,
+              !text.isEmpty
+        else { return }
+
+        _accumulatedText += text
+        onEvent(.textDelta(text))
+    }
+
+    private func captureAssistantMessage(_ dictionary: [String: Any]) {
+        guard let message = dictionary["message"] as? [String: Any],
+              let content = message["content"] as? [[String: Any]]
+        else { return }
+
+        var aggregated = ""
+        for block in content {
+            if (block["type"] as? String) == "text",
+               let text = block["text"] as? String {
+                aggregated += text
+            }
+        }
+        if !aggregated.isEmpty && _finalResult == nil {
+            // Keep this as a fallback; result event takes precedence if
+            // it arrives later.
+            _finalResult = aggregated
+        }
+    }
+
+    private func handleResult(_ dictionary: [String: Any]) {
+        guard let result = dictionary["result"] as? String else { return }
+        _finalResult = result
     }
 }
 
