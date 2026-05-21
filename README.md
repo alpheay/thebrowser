@@ -31,6 +31,7 @@ Prefer to build it yourself? See [Build and run](#build-and-run) below.
 - **Tab rail** (`⌘B`) — collapsible vertical tab strip with hover-peek.
 - **Pluggable search engine** — pick your default in Settings.
 - **Browser migration** — import bookmarks and history from Chrome and Firefox.
+- **Local page archive** — each normal page load stores rendered DOM, a screenshot, and best-effort fetch/XHR/resource observations in `~/Library/Application Support/TheBrowser/archive/`.
 - **Google account** — optional Google OAuth sign-in stored in the macOS Keychain.
 - **Configurable keybindings** — every shortcut listed below can be rebound from Settings → Keybindings.
 
@@ -80,7 +81,7 @@ All configuration lives in the in-app **Settings** window (`⌘,`):
 - **Keybindings** — rebind any of the shortcuts above.
 - **Migration** — import bookmarks and history from Chrome or Firefox.
 
-No telemetry, no remote config, no account required to use the browser itself.
+No telemetry, no remote config, no account required to use the browser itself. The page archive is local-only, content-addressed on disk, and capped at 5 GB by default with least-recently-used pruning. It deliberately skips a v1 denylist of banking and healthcare domains, and future Settings UI will expose the archive cap and per-domain opt-outs.
 
 ## Releases
 

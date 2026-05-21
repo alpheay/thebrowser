@@ -60,6 +60,9 @@ enum PreferenceKey {
     static let toolbarShowClipboard = "toolbar.showClipboard"
     static let toolbarShowTabRailToggle = "toolbar.showTabRailToggle"
     static let toolbarShowChatToggle = "toolbar.showChatToggle"
+    static let pageArchiveEnabled = "pageArchive.enabled"
+    static let pageArchiveMaxBytes = "pageArchive.maxBytes"
+    static let pageArchiveDenylist = "pageArchive.denylist"
     /// Minutes of background-tab idleness before the WKWebView is freed
     /// to reclaim memory. Tab metadata, favicon, and the Smart Read card
     /// survive; selecting the tab reloads the page. Set to zero to
@@ -176,6 +179,9 @@ enum AppDefaults {
             PreferenceKey.toolbarShowClipboard: false,
             PreferenceKey.toolbarShowTabRailToggle: true,
             PreferenceKey.toolbarShowChatToggle: true,
+            PreferenceKey.pageArchiveEnabled: true,
+            PreferenceKey.pageArchiveMaxBytes: PageArchive.defaultMaxArchiveSizeBytes,
+            PreferenceKey.pageArchiveDenylist: "",
             PreferenceKey.tabHibernationMinutes: 30
         ])
     }

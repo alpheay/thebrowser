@@ -15,6 +15,9 @@ let package = Package(
             name: "TheBrowser",
             exclude: [
                 "Integrations/Gmail/credentials.example.json"
+            ],
+            resources: [
+                .process("NetworkLogScript.js")
             ]
         ),
         .testTarget(name: "TheBrowserTests", dependencies: ["TheBrowser"])

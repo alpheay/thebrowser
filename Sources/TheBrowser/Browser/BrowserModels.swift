@@ -52,6 +52,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private var selectionBridge: TextSelectionBridge?
     private var citedClipboardBridge: CitedClipboardBridge?
     private var linkHoverBridge: LinkHoverBridge?
+    private var pageArchiveBridge: PageArchiveNetworkBridge?
+    private let pageArchive: PageArchive
+    private var pendingArchiveNetworkEvents: [PageArchiveNetworkEvent] = []
+    private var currentArchiveVisitID: Int64?
+    private var currentArchiveVisitURL: URL?
     private var pdfLoadTask: Task<Void, Never>?
     /// True between the moment we cancel a PDF response and the moment our
     /// own URLSession fetch resolves. Lets ``didFailProvisionalNavigation``
@@ -82,6 +87,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private var linkHoverListener: LinkHoverListener?
     typealias NewWindowHandler = @MainActor (BrowserTab, URLRequest) -> Void
     private var newWindowHandler: NewWindowHandler?
+    private static let maxPendingArchiveNetworkEvents = 2_000
 
     /// User agent used for both browsing tabs and the in-app Google sign-in
     /// sheet. WKWebView's default UA omits the `Version/X Safari/Y` suffix,
@@ -93,7 +99,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     static let userAgent =
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15"
 
-    override init() {
+    init(pageArchive: PageArchive = .shared) {
+        self.pageArchive = pageArchive
         super.init()
         mountWebViewStack()
         // Point the find controller at this tab's live webview. Reads
@@ -143,14 +150,17 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             content.removeScriptMessageHandler(forName: TextSelectionBridge.messageName)
             content.removeScriptMessageHandler(forName: CitedClipboardBridge.messageName)
             content.removeScriptMessageHandler(forName: LinkHoverBridge.messageName)
+            content.removeScriptMessageHandler(forName: PageArchiveNetworkBridge.messageName)
         }
 
         selectionBridge?.tab = nil
         citedClipboardBridge?.tab = nil
         linkHoverBridge?.tab = nil
+        pageArchiveBridge?.tab = nil
         selectionBridge = nil
         citedClipboardBridge = nil
         linkHoverBridge = nil
+        pageArchiveBridge = nil
         _webView = nil
 
         isLoading = false
@@ -181,10 +191,13 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         citedClipboardBridge = citedBridge
         let hoverBridge = LinkHoverBridge()
         linkHoverBridge = hoverBridge
+        let archiveBridge = PageArchiveNetworkBridge()
+        pageArchiveBridge = archiveBridge
 
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
         configuration.websiteDataStore = .default()
+        configuration.userContentController.addUserScript(PageArchiveNetworkBridge.userScript)
         configuration.userContentController.addUserScript(Self.darkModeUserScript)
         configuration.userContentController.addUserScript(Self.unsupportedBrowserBannerKillerScript)
         configuration.userContentController.addUserScript(Self.textSelectionUserScript)
@@ -194,6 +207,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         configuration.userContentController.add(bridge, name: TextSelectionBridge.messageName)
         configuration.userContentController.add(citedBridge, name: CitedClipboardBridge.messageName)
         configuration.userContentController.add(hoverBridge, name: LinkHoverBridge.messageName)
+        configuration.userContentController.add(archiveBridge, name: PageArchiveNetworkBridge.messageName)
 
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.customUserAgent = Self.userAgent
@@ -204,6 +218,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         bridge.tab = self
         citedBridge.tab = self
         hoverBridge.tab = self
+        archiveBridge.tab = self
         view.navigationDelegate = self
         view.uiDelegate = self
         _webView = view
@@ -380,6 +395,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             }
 
             webView.stopLoading()
+            resetPageArchiveStateForNavigation()
             searchPage = BrowserSearchPage(query: query)
             searchReloadToken = 0
             isHome = false
@@ -399,6 +415,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     func goHome() {
         webView.stopLoading()
+        resetPageArchiveStateForNavigation()
         searchBackStack.removeAll()
         searchPage = nil
         isHome = true
@@ -427,6 +444,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// file:// scheme.
     func loadArtifact(at fileURL: URL) {
         webView.stopLoading()
+        resetPageArchiveStateForNavigation()
         searchBackStack.removeAll()
         searchPage = nil
         isHome = false
@@ -729,6 +747,125 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         guard HistoryStore.shouldRecord(url: target) else { return }
         HistoryStore.shared.updateTitle(forURL: target, title: title)
     }
+
+    func recordArchiveNetworkEvents(_ events: [PageArchiveNetworkEvent]) {
+        let relevantEvents: [PageArchiveNetworkEvent]
+        if let currentArchiveVisitURL {
+            relevantEvents = events.filter { Self.archiveEvent($0, matches: currentArchiveVisitURL) }
+        } else {
+            relevantEvents = events
+        }
+        guard !relevantEvents.isEmpty else { return }
+
+        if let currentArchiveVisitID {
+            pageArchive.record(networkEvents: relevantEvents, visitID: currentArchiveVisitID)
+            return
+        }
+
+        pendingArchiveNetworkEvents.append(contentsOf: relevantEvents)
+        if pendingArchiveNetworkEvents.count > Self.maxPendingArchiveNetworkEvents {
+            pendingArchiveNetworkEvents.removeFirst(
+                pendingArchiveNetworkEvents.count - Self.maxPendingArchiveNetworkEvents
+            )
+        }
+    }
+
+    private func resetPageArchiveStateForNavigation() {
+        pendingArchiveNetworkEvents.removeAll()
+        currentArchiveVisitID = nil
+        currentArchiveVisitURL = nil
+    }
+
+    private func capturePageArchive(from webView: WKWebView) async {
+        guard !isHome, searchPage == nil else {
+            pendingArchiveNetworkEvents.removeAll()
+            return
+        }
+        guard let target = archiveTargetURL(from: webView) else {
+            pendingArchiveNetworkEvents.removeAll()
+            return
+        }
+
+        await flushArchiveNetworkQueue(in: webView)
+        let domHTML = await renderedDOM(from: webView)
+        let screenshotData = await snapshotPNGData(from: webView)
+        let networkEvents = drainPendingArchiveNetworkEvents(matching: target)
+
+        let visit = pageArchive.record(
+            visit: PageArchiveVisitCapture(
+                url: target,
+                title: title,
+                domHTML: domHTML,
+                screenshotData: screenshotData,
+                networkEvents: networkEvents
+            )
+        )
+        currentArchiveVisitID = visit?.id
+        currentArchiveVisitURL = visit == nil ? nil : target
+    }
+
+    private func flushArchiveNetworkQueue(in webView: WKWebView) async {
+        _ = try? await webView.evaluateJavaScript(
+            "window.__theBrowserNetworkLog && window.__theBrowserNetworkLog.flushNow && window.__theBrowserNetworkLog.flushNow(); true;"
+        )
+        try? await Task.sleep(nanoseconds: 75_000_000)
+    }
+
+    private func archiveTargetURL(from webView: WKWebView) -> URL? {
+        if let candidate = webView.url, pageArchive.shouldArchive(url: candidate) {
+            return candidate
+        }
+        if let candidate = url, pageArchive.shouldArchive(url: candidate) {
+            return candidate
+        }
+        return nil
+    }
+
+    private func renderedDOM(from webView: WKWebView) async -> String {
+        let script = "document.documentElement ? document.documentElement.outerHTML : ''"
+        let raw = try? await webView.evaluateJavaScript(script)
+        return raw as? String ?? ""
+    }
+
+    private func snapshotPNGData(from webView: WKWebView) async -> Data {
+        let image = await withCheckedContinuation { continuation in
+            let configuration = WKSnapshotConfiguration()
+            webView.takeSnapshot(with: configuration) { image, _ in
+                continuation.resume(returning: image)
+            }
+        }
+        return image.flatMap(Self.pngData(from:)) ?? Self.fallbackSnapshotPNG
+    }
+
+    private func drainPendingArchiveNetworkEvents(matching target: URL) -> [PageArchiveNetworkEvent] {
+        let matching = pendingArchiveNetworkEvents.filter { Self.archiveEvent($0, matches: target) }
+        pendingArchiveNetworkEvents.removeAll()
+        return matching
+    }
+
+    private static func archiveEvent(_ event: PageArchiveNetworkEvent, matches target: URL) -> Bool {
+        guard let pageURL = event.pageURL,
+              let eventURL = URL(string: pageURL) else {
+            return true
+        }
+        return archivePageKey(for: eventURL) == archivePageKey(for: target)
+    }
+
+    private static func archivePageKey(for url: URL) -> String {
+        var components = URLComponents(url: url, resolvingAgainstBaseURL: false)
+        components?.fragment = nil
+        return components?.string ?? url.absoluteString
+    }
+
+    private static func pngData(from image: NSImage) -> Data? {
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff) else {
+            return nil
+        }
+        return bitmap.representation(using: .png, properties: [:])
+    }
+
+    private static let fallbackSnapshotPNG = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=") ?? Data()
 
     private func applyNavigationFailure(_ error: Error, fallbackURL: URL?) {
         isLoading = false
@@ -1346,6 +1483,7 @@ extension BrowserTab: WKNavigationDelegate {
             self.isLoading = true
             self.loadError = nil
             self.selectionInfo = nil
+            self.resetPageArchiveStateForNavigation()
             // Drop any displayed PDF — we're about to render either a fresh
             // HTML page or a fresh PDF (the latter loops back through
             // `loadPDF(from:)` after we cancel the WK response).
@@ -1363,6 +1501,7 @@ extension BrowserTab: WKNavigationDelegate {
                 self.title = title
             }
             self.recordVisitToHistory()
+            await self.capturePageArchive(from: webView)
             // Page content just changed under our feet — re-run the
             // current find query so the counter and highlight match what
             // the user can now see, without stealing focus.

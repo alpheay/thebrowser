@@ -12,6 +12,8 @@ enum NativeBrowserToolName: String, Equatable, Sendable {
     case mailDraftReply = "mail_draft_reply"
     case createArtifact = "create_artifact"
     case webControl = "web_control"
+    case archiveQuery = "archive.query"
+    case archiveGet = "archive.get"
 }
 
 struct MailToolMessageIdentifier: Equatable, Sendable {
@@ -44,6 +46,8 @@ struct NativeBrowserToolCall: Equatable, Sendable {
     var threadID: String? = nil
     var body: String? = nil
     var maxResults: Int? = nil
+    var visitID: Int64? = nil
+    var sinceTs: String? = nil
 
     static func parse(from text: String) -> NativeBrowserToolCall? {
         for candidate in jsonObjectCandidates(in: text) {
@@ -62,6 +66,19 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             return query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         case .webControl:
             return task?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        case .archiveQuery:
+            let rawPieces: [String?] = [
+                url?.trimmingCharacters(in: .whitespacesAndNewlines),
+                sinceTs?.trimmingCharacters(in: .whitespacesAndNewlines),
+                maxResults.map { "limit:\($0)" }
+            ]
+            let pieces = rawPieces.compactMap { value -> String? in
+                guard let value, !value.isEmpty else { return nil }
+                return value
+            }
+            return pieces.isEmpty ? "recent" : pieces.joined(separator: " | ")
+        case .archiveGet:
+            return visitID.map(String.init) ?? ""
         case .readTabs, .readHighlights:
             if let indices, !indices.isEmpty {
                 return indices.map(String.init).joined(separator: ",")
@@ -154,6 +171,12 @@ struct NativeBrowserToolCall: Equatable, Sendable {
         let maxResults = intValue(named: "max_results", in: dictionary, arguments: arguments)
             ?? intValue(named: "maxResults", in: dictionary, arguments: arguments)
             ?? intValue(named: "limit", in: dictionary, arguments: arguments)
+        let visitID = int64Value(named: "visit_id", in: dictionary, arguments: arguments)
+            ?? int64Value(named: "visitId", in: dictionary, arguments: arguments)
+            ?? int64Value(named: "id", in: dictionary, arguments: arguments)
+        let sinceTs = stringValue(named: "since_ts", in: dictionary, arguments: arguments)
+            ?? stringValue(named: "sinceTs", in: dictionary, arguments: arguments)
+            ?? stringValue(named: "since", in: dictionary, arguments: arguments)
 
         let call = NativeBrowserToolCall(
             name: name,
@@ -167,7 +190,9 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             messageID: messageID,
             threadID: threadID,
             body: body,
-            maxResults: maxResults
+            maxResults: maxResults,
+            visitID: visitID,
+            sinceTs: sinceTs
         )
 
         switch name {
@@ -183,6 +208,10 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             return call.mailIdentifier == nil || (body?.isEmpty ?? true) ? nil : call
         case .createArtifact:
             return (html?.isEmpty == false) ? call : nil
+        case .archiveQuery:
+            return call
+        case .archiveGet:
+            return visitID == nil ? nil : call
         }
     }
 
@@ -210,6 +239,17 @@ struct NativeBrowserToolCall: Equatable, Sendable {
         if let number = raw as? NSNumber { return number.intValue }
         if let string = raw as? String {
             return Int(string.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return nil
+    }
+
+    private static func int64Value(named key: String, in dictionary: [String: Any], arguments: [String: Any]) -> Int64? {
+        let raw = dictionary[key] ?? arguments[key]
+        if let int = raw as? Int64 { return int }
+        if let int = raw as? Int { return Int64(int) }
+        if let number = raw as? NSNumber { return number.int64Value }
+        if let string = raw as? String {
+            return Int64(string.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         return nil
     }
@@ -433,6 +473,8 @@ struct NativeBrowserToolExecutor {
     var draftMailReply: @MainActor (_ identifier: MailToolMessageIdentifier, _ body: String) async throws -> GmailMessage
     var saveAndOpenArtifact: @MainActor (_ title: String, _ html: String) async throws -> URL
     var runWebControl: @MainActor (_ task: String) async -> WebControlAgentOutcome
+    var queryArchive: @MainActor (_ url: String?, _ sinceTs: Date?, _ limit: Int) async -> [PageArchiveVisit]
+    var getArchiveVisit: @MainActor (_ visitID: Int64) async -> PageArchiveVisitDetails?
 
     init(
         openURL: @escaping @MainActor (URL) -> Void,
@@ -456,6 +498,12 @@ struct NativeBrowserToolExecutor {
                 summary: "Web control is not configured in this browser surface.",
                 stepCount: 0
             )
+        },
+        queryArchive: @escaping @MainActor (_ url: String?, _ sinceTs: Date?, _ limit: Int) async -> [PageArchiveVisit] = { url, sinceTs, limit in
+            PageArchive.shared.query(url: url, sinceTs: sinceTs, limit: limit)
+        },
+        getArchiveVisit: @escaping @MainActor (_ visitID: Int64) async -> PageArchiveVisitDetails? = { visitID in
+            PageArchive.shared.get(visitID: visitID)
         }
     ) {
         self.openURL = openURL
@@ -468,6 +516,8 @@ struct NativeBrowserToolExecutor {
         self.draftMailReply = draftMailReply
         self.saveAndOpenArtifact = saveAndOpenArtifact
         self.runWebControl = runWebControl
+        self.queryArchive = queryArchive
+        self.getArchiveVisit = getArchiveVisit
     }
 
     func execute(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
@@ -494,6 +544,10 @@ struct NativeBrowserToolExecutor {
             return await createArtifact(call)
         case .webControl:
             return await webControl(call)
+        case .archiveQuery:
+            return await archiveQuery(call)
+        case .archiveGet:
+            return await archiveGet(call)
         }
     }
 }
@@ -512,6 +566,8 @@ enum NativeBrowserToolPrompt {
     - mail_draft_reply: opens the Gmail overlay composer with a reply draft. Pass either `message_id` or `thread_id`, plus `body` containing the exact reply draft text. This does not send mail; the user reviews and sends.
     - create_artifact: saves a fully self-contained HTML document under ~/.thebrowser/web_artifacts/ and opens it in a new tab. Use this when the user asks for an "artifact", "document", "report", "dashboard", "summary", or anything similar that should be rendered as a standalone page.
     - web_control: delegates a bounded task to a separate web-control agent and live-page harness that can click, type, press keys, scroll, wait, navigate, and inspect the current WKWebView without adding its step-by-step context to this chat. Use it when the user asks you to interact with a live site or web app on their behalf: click links/buttons, fill fields/forms, operate menus, submit searches, complete a workflow, or play a browser game such as Wordle. Pass a concise `task` string describing the user's goal and any constraints. The harness will show an "Agent is Working" overlay while it controls the page.
+    - archive.query: searches the local-only page archive and returns captured visits. Optional `url` filters by URL substring, optional `since_ts` accepts ISO-8601 or Unix seconds, optional `limit` caps results.
+    - archive.get: reads one archived visit by `visit_id` and returns the rendered DOM, screenshot file path, and observed network log.
 
     To use a tool, reply with only one JSON object and no prose:
     {"tool":"open","url":"https://example.com"}
@@ -527,6 +583,8 @@ enum NativeBrowserToolPrompt {
     {"tool":"mail_draft_reply","message_id":"message-id-from-search","body":"Thanks — I can do Thursday at 2 PM."}
     {"tool":"create_artifact","title":"Market Overview","html":"<!doctype html><html>…</html>"}
     {"tool":"web_control","task":"On the current page, play one game of Wordle and report the outcome."}
+    {"tool":"archive.query","url":"example.com","limit":5}
+    {"tool":"archive.get","visit_id":123}
 
     CRITICAL tool-call rules — follow these or the dispatcher will treat your tool call as plain chat text and the action will silently fail:
     1. EXACTLY ONE tool call per response. Never emit two JSON objects in the same response. If you need read_tabs THEN create_artifact, emit only the read_tabs call now and wait for the result before emitting create_artifact in your next turn.
