@@ -682,11 +682,13 @@ struct AIChatPanel: View {
                 placeholder: composerPlaceholder,
                 onSubmit: sendCurrent
             ) {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     ModelPickerButton(
                         provider: provider,
+                        modelID: aiModel,
                         showingPicker: $showingModelPicker
                     )
+                    Spacer(minLength: 0)
                     SendButton(
                         enabled: canSend,
                         sending: viewModel.isSending,
@@ -842,15 +844,15 @@ private struct HeaderIconButton: View {
 
 // MARK: - Composer field
 
-private struct ComposerField<Trailing: View>: View {
+private struct ComposerField<Footer: View>: View {
     @Binding var draft: String
     var focused: FocusState<Bool>.Binding
     var placeholder: String
     var onSubmit: () -> Void
-    @ViewBuilder var trailingButton: () -> Trailing
+    @ViewBuilder var footer: () -> Footer
 
     var body: some View {
-        HStack(alignment: .bottom, spacing: 8) {
+        VStack(alignment: .leading, spacing: 6) {
             TextField(
                 "",
                 text: $draft,
@@ -862,8 +864,6 @@ private struct ComposerField<Trailing: View>: View {
             .font(.system(size: 13.5))
             .foregroundStyle(Palette.textPrimary)
             .lineLimit(1...10)
-            .padding(.horizontal, 14)
-            .padding(.vertical, 11)
             .onSubmit(onSubmit)
             .onKeyPress(.return) {
                 if NSEvent.modifierFlags.contains(.shift) {
@@ -872,20 +872,23 @@ private struct ComposerField<Trailing: View>: View {
                 onSubmit()
                 return .handled
             }
-            .background {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .fill(focused.wrappedValue ? Palette.surfaceHover : Palette.surface)
-            }
-            .overlay {
-                RoundedRectangle(cornerRadius: 14, style: .continuous)
-                    .stroke(focused.wrappedValue ? Color.white.opacity(0.22) : Palette.stroke, lineWidth: 1)
-            }
-            .shadow(color: focused.wrappedValue ? Color.white.opacity(0.06) : Color.clear, radius: 12, x: 0, y: 0)
-            .animation(.easeOut(duration: 0.16), value: focused.wrappedValue)
+            .padding(.horizontal, 12)
+            .padding(.top, 11)
 
-            trailingButton()
-                .padding(.bottom, 4)
+            footer()
+                .padding(.horizontal, 8)
+                .padding(.bottom, 8)
         }
+        .background {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(focused.wrappedValue ? Palette.surfaceHover : Palette.surface)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .stroke(focused.wrappedValue ? Color.white.opacity(0.22) : Palette.stroke, lineWidth: 1)
+        }
+        .shadow(color: focused.wrappedValue ? Color.white.opacity(0.06) : Color.clear, radius: 12, x: 0, y: 0)
+        .animation(.easeOut(duration: 0.16), value: focused.wrappedValue)
     }
 }
 
@@ -1425,6 +1428,7 @@ private struct BreathingPulse: ViewModifier {
 
 private struct ModelPickerButton: View {
     let provider: AIProviderKind
+    let modelID: String
     @Binding var showingPicker: Bool
 
     @State private var isHovering = false
@@ -1433,28 +1437,62 @@ private struct ModelPickerButton: View {
         Button {
             showingPicker.toggle()
         } label: {
-            ZStack {
-                Circle()
-                    .fill(isHovering || showingPicker ? Palette.surfaceHover : Palette.surface)
-                    .frame(width: 32, height: 32)
-                Circle()
-                    .stroke(isHovering || showingPicker ? Palette.strokeStrong : Palette.stroke, lineWidth: 1)
-                    .frame(width: 32, height: 32)
-                ProviderMark(provider: provider, size: 14)
+            HStack(spacing: 6) {
+                ProviderMark(provider: provider, size: 11)
                     .foregroundStyle(Palette.textPrimary)
+                    .opacity(0.9)
+                Text(displayLabel)
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(Palette.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(Palette.textMuted)
+                    .rotationEffect(.degrees(showingPicker ? 180 : 0))
             }
-            .scaleEffect(isHovering ? 1.04 : 1.0)
+            .padding(.leading, 10)
+            .padding(.trailing, 9)
+            .frame(height: 28)
+            .background {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .fill(triggerFill)
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                    .stroke(triggerStroke, lineWidth: 1)
+            }
+            .scaleEffect(isHovering ? 1.03 : 1.0)
             .animation(Motion.springSnap, value: isHovering)
-            .animation(Motion.hoverFade, value: showingPicker)
+            .animation(Motion.springSnap, value: showingPicker)
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
         .help("Choose model")
+        .accessibilityLabel("Model: \(displayLabel)")
         .popover(isPresented: $showingPicker, arrowEdge: .bottom) {
             ModelPickerPopover {
                 showingPicker = false
             }
         }
+    }
+
+    private var displayLabel: String {
+        if let model = AIModelOption.find(provider: provider, modelID: modelID) {
+            return model.displayName
+        }
+        return modelID.isEmpty ? "Select model" : modelID
+    }
+
+    private var triggerFill: Color {
+        if showingPicker { return Palette.surfaceActive }
+        if isHovering { return Palette.surfaceHover }
+        return Palette.surface
+    }
+
+    private var triggerStroke: Color {
+        if showingPicker || isHovering { return Palette.strokeStrong }
+        return Palette.stroke
     }
 }
 
