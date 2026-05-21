@@ -44,11 +44,32 @@ struct MailSearchOptions: Sendable {
     /// the "you gave me nothing" guard in the executor.
     var hasAnyFilter: Bool {
         if mailbox != nil { return true }
-        for value in [rawQuery, from, to, subject, keyword, label, newerThan, olderThan, after, before] {
+        for value in [rawQuery, from, to, subject, keyword, label] {
             if value?.trimmedNonBlank != nil { return true }
         }
-        if hasAttachment != nil || unreadOnly != nil || starredOnly != nil { return true }
+        if hasAttachment == true || unreadOnly == true || starredOnly == true { return true }
+        if newerThan?.trimmedNonBlank.flatMap(MailQueryDuration.gmailValue) != nil { return true }
+        if olderThan?.trimmedNonBlank.flatMap(MailQueryDuration.gmailValue) != nil { return true }
+        if MailQueryDate.gmailFormat(after?.trimmedNonBlank) != nil { return true }
+        if MailQueryDate.gmailFormat(before?.trimmedNonBlank) != nil { return true }
         return false
+    }
+
+    var validationError: String? {
+        var messages: [String] = []
+        if let value = newerThan?.trimmedNonBlank, MailQueryDuration.gmailValue(value) == nil {
+            messages.append("newer_than must look like 7d, 30d, 6m, or 1y")
+        }
+        if let value = olderThan?.trimmedNonBlank, MailQueryDuration.gmailValue(value) == nil {
+            messages.append("older_than must look like 7d, 30d, 6m, or 1y")
+        }
+        if let value = after?.trimmedNonBlank, MailQueryDate.gmailFormat(value) == nil {
+            messages.append("after must be a real date in YYYY-MM-DD format")
+        }
+        if let value = before?.trimmedNonBlank, MailQueryDate.gmailFormat(value) == nil {
+            messages.append("before must be a real date in YYYY-MM-DD format")
+        }
+        return messages.isEmpty ? nil : messages.joined(separator: "; ")
     }
 
     /// Gmail query string assembled from the structured fields plus the
@@ -65,10 +86,10 @@ struct MailSearchOptions: Sendable {
         if hasAttachment == true { pieces.append("has:attachment") }
         if unreadOnly == true { pieces.append("is:unread") }
         if starredOnly == true { pieces.append("is:starred") }
-        if let value = newerThan?.trimmedNonBlank, MailQueryDuration.isValid(value) {
+        if let value = newerThan?.trimmedNonBlank.flatMap(MailQueryDuration.gmailValue) {
             pieces.append("newer_than:\(value)")
         }
-        if let value = olderThan?.trimmedNonBlank, MailQueryDuration.isValid(value) {
+        if let value = olderThan?.trimmedNonBlank.flatMap(MailQueryDuration.gmailValue) {
             pieces.append("older_than:\(value)")
         }
         if let value = MailQueryDate.gmailFormat(after?.trimmedNonBlank) {
@@ -158,11 +179,11 @@ struct MailReadOptions: Sendable {
 
 private enum MailQueryDuration {
     /// Gmail accepts `<int><unit>` where unit is one of d/w/m/y. Anything
-    /// else is dropped on the floor — the agent gets the raw piece back in
-    /// the filter summary so it can correct the format on retry.
-    static func isValid(_ value: String) -> Bool {
+    /// else is rejected before the search can broaden unexpectedly.
+    static func gmailValue(_ value: String) -> String? {
+        let cleaned = value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         let pattern = #"^\d+[dwmy]$"#
-        return value.range(of: pattern, options: .regularExpression) != nil
+        return cleaned.range(of: pattern, options: .regularExpression) == nil ? nil : cleaned
     }
 }
 
@@ -176,12 +197,20 @@ private enum MailQueryDate {
         let parts = value.components(separatedBy: separators).filter { !$0.isEmpty }
         guard parts.count == 3,
               let year = Int(parts[0]), let month = Int(parts[1]), let day = Int(parts[2]),
-              (1900...2200).contains(year),
-              (1...12).contains(month),
-              (1...31).contains(day)
+              (1900...2200).contains(year)
         else {
             return nil
         }
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? calendar.timeZone
+        let components = DateComponents(calendar: calendar, year: year, month: month, day: day)
+        guard let date = calendar.date(from: components) else { return nil }
+        let resolved = calendar.dateComponents([.year, .month, .day], from: date)
+        guard resolved.year == year, resolved.month == month, resolved.day == day else {
+            return nil
+        }
+
         return String(format: "%04d/%02d/%02d", year, month, day)
     }
 }
@@ -224,6 +253,15 @@ extension NativeBrowserToolExecutor {
             maxResults: min(max(call.maxResults ?? 15, 1), 50),
             format: MailResultFormat(raw: call.mailFormat)
         )
+
+        if let validationError = options.validationError {
+            await openMailIntegration()
+            return NativeBrowserToolResult(
+                call: call,
+                succeeded: false,
+                content: "mail_search has invalid filters: \(validationError)."
+            )
+        }
 
         guard options.hasAnyFilter else {
             await openMailIntegration()

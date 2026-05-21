@@ -240,7 +240,7 @@ struct NativeBrowserToolsTests {
         #expect(query.contains("after:2025/01/01"))
     }
 
-    @Test("MailSearchOptions drops malformed dates and durations")
+    @Test("MailSearchOptions rejects malformed dates and durations")
     func mailSearchOptionsRejectsMalformed() {
         let options = MailSearchOptions(
             mailbox: nil,
@@ -263,6 +263,33 @@ struct NativeBrowserToolsTests {
 
         let query = options.gmailQueryString()
         #expect(query == "hello")
+        #expect(options.validationError?.contains("newer_than") == true)
+        #expect(options.validationError?.contains("after") == true)
+    }
+
+    @Test("MailSearchOptions ignores inactive false boolean filters")
+    func mailSearchOptionsIgnoreFalseBooleans() {
+        let options = MailSearchOptions(
+            mailbox: nil,
+            rawQuery: nil,
+            from: nil,
+            to: nil,
+            subject: nil,
+            keyword: nil,
+            label: nil,
+            hasAttachment: false,
+            unreadOnly: false,
+            starredOnly: false,
+            newerThan: nil,
+            olderThan: nil,
+            after: nil,
+            before: nil,
+            maxResults: 10,
+            format: .compact
+        )
+
+        #expect(!options.hasAnyFilter)
+        #expect(options.gmailQueryString().isEmpty)
     }
 
     @Test("mail_read_thread parses message id")
@@ -279,8 +306,8 @@ struct NativeBrowserToolsTests {
         let json = #"""
         {
             "tool": "mail_read_thread",
-            "message_ids": ["msg-a", "msg-b"],
-            "thread_ids": ["thr-c"],
+            "message_ids": ["msg:msg-a", "msg-b"],
+            "thread_ids": ["thr-c", "thread:thr-d"],
             "include_body": false,
             "max_body_chars": 500
         }
@@ -289,10 +316,11 @@ struct NativeBrowserToolsTests {
 
         #expect(call.name == .mailReadThread)
         let identifiers = call.mailIdentifiers
-        #expect(identifiers.count == 3)
+        #expect(identifiers.count == 4)
         #expect(identifiers[0] == MailToolMessageIdentifier(kind: .message, value: "msg-a"))
         #expect(identifiers[1] == MailToolMessageIdentifier(kind: .message, value: "msg-b"))
         #expect(identifiers[2] == MailToolMessageIdentifier(kind: .thread, value: "thr-c"))
+        #expect(identifiers[3] == MailToolMessageIdentifier(kind: .thread, value: "thr-d"))
         #expect(call.mailIncludeBody == false)
         #expect(call.mailMaxBodyChars == 500)
     }
@@ -449,6 +477,33 @@ struct NativeBrowserToolsTests {
         #expect(!result.succeeded)
         #expect(openedMail)
         #expect(result.content.contains("at least one filter"))
+    }
+
+    @MainActor
+    @Test("mail_search rejects invalid structured filters before searching")
+    func mailSearchRejectsInvalidFilters() async {
+        var searched = false
+        let executor = NativeBrowserToolExecutor(
+            openURL: { _ in },
+            readTabsContent: { _ in "" },
+            readHighlightsContent: { _ in "" },
+            smartReadContent: { "" },
+            searchMail: { _ in
+                searched = true
+                return []
+            },
+            saveAndOpenArtifact: { _, _ in URL(fileURLWithPath: "/tmp/unused.html") }
+        )
+
+        let result = await executor.execute(
+            NativeBrowserToolCall(name: .mailSearch, mailNewerThan: "two weeks", mailAfter: "2025-02-31")
+        )
+
+        #expect(!result.succeeded)
+        #expect(!searched)
+        #expect(result.content.contains("invalid filters"))
+        #expect(result.content.contains("newer_than"))
+        #expect(result.content.contains("after"))
     }
 
     @MainActor

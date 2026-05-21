@@ -29,6 +29,25 @@ struct MailToolMessageIdentifier: Equatable, Sendable {
         case .thread: return "thread:\(value)"
         }
     }
+
+    static func parse(_ raw: String, defaultKind: Kind = .message) -> MailToolMessageIdentifier? {
+        let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !cleaned.isEmpty else { return nil }
+
+        let lowered = cleaned.lowercased()
+        let recognizedPrefixes: [(String, Kind)] = [
+            ("message:", .message),
+            ("msg:", .message),
+            ("thread:", .thread)
+        ]
+        for (prefix, kind) in recognizedPrefixes where lowered.hasPrefix(prefix) {
+            let value = String(cleaned.dropFirst(prefix.count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : MailToolMessageIdentifier(kind: kind, value: value)
+        }
+
+        return MailToolMessageIdentifier(kind: defaultKind, value: cleaned)
+    }
 }
 
 struct NativeBrowserToolCall: Equatable, Sendable {
@@ -120,11 +139,10 @@ struct NativeBrowserToolCall: Equatable, Sendable {
         var seen = Set<String>()
 
         func append(_ kind: MailToolMessageIdentifier.Kind, _ raw: String) {
-            let cleaned = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !cleaned.isEmpty else { return }
-            let key = "\(kind):\(cleaned)"
+            guard let identifier = MailToolMessageIdentifier.parse(raw, defaultKind: kind) else { return }
+            let key = "\(identifier.kind):\(identifier.value)"
             guard seen.insert(key).inserted else { return }
-            collected.append(MailToolMessageIdentifier(kind: kind, value: cleaned))
+            collected.append(identifier)
         }
 
         if let id = messageID { append(.message, id) }
@@ -838,18 +856,7 @@ enum DirectNativeToolCommand {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
 
-        let lowered = trimmed.lowercased()
-        if lowered.hasPrefix("thread:") {
-            let value = String(trimmed.dropFirst("thread:".count))
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return value.isEmpty ? nil : MailToolMessageIdentifier(kind: .thread, value: value)
-        }
-        if lowered.hasPrefix("message:") {
-            let value = String(trimmed.dropFirst("message:".count))
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            return value.isEmpty ? nil : MailToolMessageIdentifier(kind: .message, value: value)
-        }
-        return MailToolMessageIdentifier(kind: .message, value: trimmed)
+        return MailToolMessageIdentifier.parse(trimmed, defaultKind: .message)
     }
 
     private static func inferredMailSearch(from text: String) -> NativeBrowserToolCall? {
