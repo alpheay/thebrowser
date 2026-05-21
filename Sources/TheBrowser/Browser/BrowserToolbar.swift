@@ -5,8 +5,10 @@ struct BrowserToolbar: View {
     @ObservedObject var selectedTab: BrowserTab
     var reservesTrafficLightGutter: Bool
     var readerActive: Bool = false
+    var threadTitle: String = "New Thread"
     var onSmartRead: () -> Void = {}
     var onReaderMode: () -> Void = {}
+    var onShowThreadPicker: () -> Void = {}
     @Binding var isClipboardPopoverPresented: Bool
 
     @AppStorage(PreferenceKey.toolbarShowBack) private var showBack = true
@@ -235,6 +237,12 @@ struct BrowserToolbar: View {
                 .help("Toggle side tabs")
             }
 
+            Button(action: onShowThreadPicker) {
+                Image(systemName: "rectangle.stack")
+            }
+            .buttonStyle(IconButtonStyle(size: 28))
+            .help("Switch Thread: \(threadTitle)")
+
             if showChatToggle {
                 Button {
                     withAnimation(Motion.springSnap) { model.toggleChat() }
@@ -292,4 +300,3 @@ struct FaviconView: View {
         URL(string: "https://www.google.com/s2/favicons?domain=\(host)&sz=64")
     }
 }
-

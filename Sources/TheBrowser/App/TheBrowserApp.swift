@@ -23,6 +23,14 @@ struct TheBrowserApp: App {
         }
         .windowStyle(.hiddenTitleBar)
         .windowToolbarStyle(.unifiedCompact)
+        .commands {
+            CommandMenu("Thread") {
+                Button("Close Thread") {
+                    NotificationCenter.default.post(name: ThreadCommand.closeCurrentThread, object: nil)
+                }
+                .keyboardShortcut("w", modifiers: [.command, .shift])
+            }
+        }
 
         Settings {
             SettingsView()

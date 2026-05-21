@@ -95,6 +95,7 @@ final class ChatViewModel: ObservableObject {
 
     private let client = AIProviderClient()
     private let store = ChatSessionStore.shared
+    private var scratchDirectoryOverride: URL?
 
     init() {
         self.sessionID = ChatSessionStore.shared.newSessionID()
@@ -220,7 +221,38 @@ final class ChatViewModel: ObservableObject {
     /// The directory that backs the current session. Persisted at
     /// ``~/.thebrowser/sessions/<sessionID>``.
     var sessionDirectory: URL {
-        store.directory(for: sessionID)
+        if let scratchDirectoryOverride {
+            try? FileManager.default.createDirectory(
+                at: scratchDirectoryOverride,
+                withIntermediateDirectories: true
+            )
+            return scratchDirectoryOverride
+        }
+        return store.directory(for: sessionID)
+    }
+
+    func bindToThread(
+        agentContext: String,
+        scratchDirectory: URL,
+        context: BrowserPageContext
+    ) {
+        guard !isSending else { return }
+        persist(context: context)
+        scratchDirectoryOverride = scratchDirectory
+
+        let nextSessionID: String
+        if let handle = ThreadAgentContext(serialized: agentContext), !handle.sessionID.isEmpty {
+            nextSessionID = handle.sessionID
+        } else {
+            nextSessionID = store.newSessionID()
+        }
+
+        guard nextSessionID != sessionID else { return }
+        sessionID = nextSessionID
+        messages = store.load(sessionID: nextSessionID)
+        draft = ""
+        pendingAttachments.removeAll()
+        draftPreset = nil
     }
 
     func send(

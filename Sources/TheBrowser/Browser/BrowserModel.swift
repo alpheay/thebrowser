@@ -1,3 +1,4 @@
+import AppKit
 import Combine
 import Foundation
 
@@ -5,6 +6,10 @@ import Foundation
 final class BrowserModel: ObservableObject {
     @Published var tabs: [BrowserTab]
     @Published var selectedTabID: BrowserTab.ID
+    @Published private(set) var currentThreadID: UUID?
+    @Published private(set) var currentThread: ThreadRecord?
+    @Published private(set) var availableThreads: [ThreadRecord] = []
+    @Published var isThreadPickerVisible = false
     @Published var isTabRailVisible = false
     @Published var isChatVisible = false
     @Published var addressDraft = ""
@@ -16,19 +21,34 @@ final class BrowserModel: ObservableObject {
     /// short enough that a 30-minute setting feels exact and long enough
     /// that the sweep itself is invisible.
     private static let hibernationSweepInterval: UInt64 = 60_000_000_000
+    private static let threadPersistenceDebounce: UInt64 = 500_000_000
+    private let threadStore: ThreadStore
     private var hibernationSweepTask: Task<Void, Never>?
+    private var threadPersistenceTask: Task<Void, Never>?
+    private var threadRestoreTask: Task<Void, Never>?
     private var tabChangeCancellables: [BrowserTab.ID: AnyCancellable] = [:]
+    private weak var window: NSWindow?
 
-    init() {
+    init(
+        threadStore: ThreadStore = .shared,
+        initialThreadID: UUID? = nil,
+        restoresThreads: Bool = false
+    ) {
+        self.threadStore = threadStore
         let firstTab = BrowserTab()
         tabs = [firstTab]
         selectedTabID = firstTab.id
         configure(firstTab)
         startHibernationSweep()
+        if restoresThreads {
+            restoreThreadsOnLaunch(initialThreadID: initialThreadID)
+        }
     }
 
     deinit {
         hibernationSweepTask?.cancel()
+        threadPersistenceTask?.cancel()
+        threadRestoreTask?.cancel()
     }
 
     var selectedTab: BrowserTab {
@@ -41,6 +61,21 @@ final class BrowserModel: ObservableObject {
 
     var selectedContext: BrowserPageContext {
         BrowserPageContext(title: selectedTab.displayTitle, url: selectedTab.displayAddress)
+    }
+
+    var threadTitle: String {
+        currentThread?.title ?? "New Thread"
+    }
+
+    var threadAgentContext: String {
+        currentThread?.agentContext ?? ""
+    }
+
+    var threadScratchDirectory: URL {
+        if let path = currentThread?.scratchDirPath, !path.isEmpty {
+            return URL(fileURLWithPath: path, isDirectory: true)
+        }
+        return ThreadScratchDirectory.url(for: currentThreadID ?? UUID())
     }
 
     func select(_ tab: BrowserTab) {
@@ -59,12 +94,14 @@ final class BrowserModel: ObservableObject {
             _ = tab.webView
         }
         addressDraft = tab.displayAddress
+        scheduleThreadPersistence()
     }
 
     func addTab() {
         let tab = makeTab()
         tabs.append(tab)
         select(tab)
+        scheduleThreadPersistence()
     }
 
     /// Opens `url` in a freshly created tab. The new tab is appended to the
@@ -82,12 +119,14 @@ final class BrowserModel: ObservableObject {
         if !background {
             updateAddressFromSelectedTab()
         }
+        scheduleThreadPersistence()
     }
 
     func close(_ tab: BrowserTab) {
         guard tabs.count > 1 else {
             tab.goHome()
             addressDraft = ""
+            scheduleThreadPersistence()
             return
         }
 
@@ -98,12 +137,14 @@ final class BrowserModel: ObservableObject {
 
         tabs.remove(at: closingIndex)
         tab.setNewWindowHandler(nil)
+        tab.setStateChangeHandler(nil)
         tabChangeCancellables[tab.id] = nil
 
         if wasSelected {
             let nextIndex = min(closingIndex, tabs.count - 1)
             select(tabs[nextIndex])
         }
+        scheduleThreadPersistence()
     }
 
     func closeSelected() {
@@ -114,11 +155,13 @@ final class BrowserModel: ObservableObject {
         let target = input ?? addressDraft
         selectedTab.navigate(to: target)
         addressDraft = selectedTab.displayAddress
+        scheduleThreadPersistence()
     }
 
     func goHome() {
         selectedTab.goHome()
         addressDraft = ""
+        scheduleThreadPersistence()
     }
 
     func updateAddressFromSelectedTab() {
@@ -135,6 +178,125 @@ final class BrowserModel: ObservableObject {
 
     func focusAddress() {
         addressFocusToken &+= 1
+    }
+
+    func attachWindow(_ window: NSWindow) {
+        self.window = window
+        if let currentThreadID {
+            ThreadWindowRegistry.shared.register(threadID: currentThreadID, window: window)
+        }
+    }
+
+    func restoreThreadsOnLaunch(initialThreadID: UUID? = nil) {
+        threadRestoreTask?.cancel()
+        threadRestoreTask = Task { @MainActor [weak self] in
+            await self?.loadInitialThread(initialThreadID: initialThreadID)
+        }
+    }
+
+    func showThreadPicker() {
+        refreshThreadList()
+        isThreadPickerVisible = true
+    }
+
+    func cycleThread(forward: Bool) {
+        guard availableThreads.count > 1 else { return }
+        let ordered = availableThreads
+        let currentIndex = ordered.firstIndex { $0.id == currentThreadID } ?? 0
+        let nextIndex: Int
+        if forward {
+            nextIndex = (currentIndex + 1) % ordered.count
+        } else {
+            nextIndex = (currentIndex - 1 + ordered.count) % ordered.count
+        }
+        switchToThread(id: ordered[nextIndex].id)
+    }
+
+    func switchToThread(id: UUID) {
+        guard id != currentThreadID else {
+            isThreadPickerVisible = false
+            return
+        }
+        Task { @MainActor [weak self] in
+            await self?.switchToThreadAsync(id: id)
+        }
+    }
+
+    func createThreadAndSwitch() {
+        Task { @MainActor [weak self] in
+            await self?.createThreadAndSwitchAsync()
+        }
+    }
+
+    func closeCurrentThread() {
+        guard let id = currentThreadID else { return }
+        let context = currentThread?.agentContext ?? ""
+        if let agentContext = ThreadAgentContext(serialized: context) {
+            ChatSessionStore.shared.delete(sessionID: agentContext.sessionID)
+        }
+        Task { @MainActor [weak self] in
+            await self?.deleteThreadAndSelectReplacement(id: id)
+        }
+    }
+
+    func updateAgentContext(_ serializedContext: String) {
+        guard let id = currentThreadID,
+              currentThread?.agentContext != serializedContext else {
+            return
+        }
+        if var thread = currentThread {
+            thread.agentContext = serializedContext
+            currentThread = thread
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                if let updated = try await self.threadStore.updateAgentContext(
+                    id: id,
+                    agentContext: serializedContext
+                ) {
+                    self.currentThread = updated
+                    await self.reloadThreadList()
+                }
+            } catch {
+                #if DEBUG
+                print("BrowserModel: failed to persist thread agent context: \(error)")
+                #endif
+            }
+        }
+    }
+
+    func markThreadWindowOpen() {
+        guard let id = currentThreadID else { return }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                _ = try await self.threadStore.markWindowOpen(id: id, isOpen: true)
+                await self.reloadThreadList()
+            } catch {
+                #if DEBUG
+                print("BrowserModel: failed to mark thread open: \(error)")
+                #endif
+            }
+        }
+    }
+
+    func markThreadWindowClosed(isTerminating: Bool) {
+        if let currentThreadID {
+            ThreadWindowRegistry.shared.unregister(threadID: currentThreadID, window: window)
+        }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.persistTabsNow()
+            guard !isTerminating, let id = self.currentThreadID else { return }
+            do {
+                _ = try await self.threadStore.markWindowOpen(id: id, isOpen: false)
+            } catch {
+                #if DEBUG
+                print("BrowserModel: failed to mark thread closed: \(error)")
+                #endif
+            }
+        }
     }
 
     /// Snapshot of the currently open tabs, formatted for the AI prompt's
@@ -285,6 +447,195 @@ final class BrowserModel: ObservableObject {
         }
     }
 
+    func persistTabsNow() async {
+        threadPersistenceTask?.cancel()
+        threadPersistenceTask = nil
+        await saveTabsToCurrentThread()
+    }
+
+    private func loadInitialThread(initialThreadID: UUID?) async {
+        do {
+            let threads = try await threadStore.list()
+            availableThreads = threads
+
+            if let initialThreadID,
+               let thread = try await threadStore.get(id: initialThreadID) {
+                guard load(thread: thread) else {
+                    window?.close()
+                    return
+                }
+                _ = try await threadStore.markWindowOpen(id: thread.id, isOpen: true)
+                await reloadThreadList()
+                return
+            }
+
+            if threads.isEmpty {
+                let created = try await threadStore.create(isWindowOpen: true)
+                _ = load(thread: created)
+                await reloadThreadList()
+                return
+            }
+
+            let openThreads = threads.filter(\.isWindowOpen)
+            let chosen = openThreads.count == 1 ? openThreads[0] : threads[0]
+            guard load(thread: chosen) else {
+                window?.close()
+                return
+            }
+            _ = try await threadStore.markWindowOpen(id: chosen.id, isOpen: true)
+            await reloadThreadList()
+
+            if threads.count > 1 || openThreads.count > 1 {
+                isThreadPickerVisible = true
+            }
+        } catch {
+            #if DEBUG
+            print("BrowserModel: failed to restore threads: \(error)")
+            #endif
+        }
+    }
+
+    private func switchToThreadAsync(id: UUID) async {
+        await persistTabsNow()
+        if let currentThreadID {
+            _ = try? await threadStore.markWindowOpen(id: currentThreadID, isOpen: false)
+        }
+
+        do {
+            guard let thread = try await threadStore.get(id: id) else { return }
+            guard load(thread: thread) else {
+                isThreadPickerVisible = false
+                return
+            }
+            _ = try await threadStore.markWindowOpen(id: id, isOpen: true)
+            await reloadThreadList()
+            isThreadPickerVisible = false
+        } catch {
+            #if DEBUG
+            print("BrowserModel: failed to switch thread: \(error)")
+            #endif
+        }
+    }
+
+    private func createThreadAndSwitchAsync() async {
+        await persistTabsNow()
+        if let currentThreadID {
+            _ = try? await threadStore.markWindowOpen(id: currentThreadID, isOpen: false)
+        }
+
+        do {
+            let thread = try await threadStore.create(isWindowOpen: true)
+            _ = load(thread: thread)
+            await reloadThreadList()
+            isThreadPickerVisible = false
+        } catch {
+            #if DEBUG
+            print("BrowserModel: failed to create thread: \(error)")
+            #endif
+        }
+    }
+
+    private func deleteThreadAndSelectReplacement(id: UUID) async {
+        await persistTabsNow()
+        do {
+            try await threadStore.delete(id: id)
+            let remaining = try await threadStore.list()
+            if let next = remaining.first {
+                _ = load(thread: next)
+                _ = try await threadStore.markWindowOpen(id: next.id, isOpen: true)
+            } else {
+                let created = try await threadStore.create(isWindowOpen: true)
+                _ = load(thread: created)
+            }
+            await reloadThreadList()
+            isThreadPickerVisible = false
+        } catch {
+            #if DEBUG
+            print("BrowserModel: failed to close thread: \(error)")
+            #endif
+        }
+    }
+
+    private func refreshThreadList() {
+        Task { @MainActor [weak self] in
+            await self?.reloadThreadList()
+        }
+    }
+
+    private func reloadThreadList() async {
+        do {
+            availableThreads = try await threadStore.list()
+        } catch {
+            #if DEBUG
+            print("BrowserModel: failed to reload thread list: \(error)")
+            #endif
+        }
+    }
+
+    @discardableResult
+    private func load(thread: ThreadRecord) -> Bool {
+        if thread.id != currentThreadID,
+           ThreadWindowRegistry.shared.focus(threadID: thread.id) {
+            return false
+        }
+
+        threadPersistenceTask?.cancel()
+        threadPersistenceTask = nil
+
+        if let currentThreadID {
+            ThreadWindowRegistry.shared.unregister(threadID: currentThreadID, window: window)
+        }
+
+        for tab in tabs {
+            tab.setNewWindowHandler(nil)
+            tab.setStateChangeHandler(nil)
+            tab.setLinkHoverListener(nil)
+        }
+        tabChangeCancellables.removeAll()
+
+        currentThreadID = thread.id
+        currentThread = thread
+        let restoredTabs = thread.tabs.isEmpty
+            ? [BrowserTab()]
+            : thread.tabs.map(BrowserTab.init(snapshot:))
+        tabs = restoredTabs
+        selectedTabID = restoredTabs[0].id
+        for tab in restoredTabs {
+            configure(tab)
+        }
+        updateAddressFromSelectedTab()
+        if let window {
+            ThreadWindowRegistry.shared.register(threadID: thread.id, window: window)
+        }
+        objectWillChange.send()
+        return true
+    }
+
+    private func scheduleThreadPersistence() {
+        guard currentThreadID != nil else { return }
+        threadPersistenceTask?.cancel()
+        threadPersistenceTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: BrowserModel.threadPersistenceDebounce)
+            guard !Task.isCancelled else { return }
+            await self?.saveTabsToCurrentThread()
+        }
+    }
+
+    private func saveTabsToCurrentThread() async {
+        guard let id = currentThreadID else { return }
+        let snapshots = tabs.map { $0.snapshotForThread() }
+        do {
+            if let updated = try await threadStore.updateTabs(id: id, tabs: snapshots) {
+                currentThread = updated
+                await reloadThreadList()
+            }
+        } catch {
+            #if DEBUG
+            print("BrowserModel: failed to persist thread tabs: \(error)")
+            #endif
+        }
+    }
+
     private func makeTab() -> BrowserTab {
         let tab = BrowserTab()
         configure(tab)
@@ -295,6 +646,10 @@ final class BrowserModel: ObservableObject {
         tab.setNewWindowHandler { [weak self] sourceTab, request in
             guard let self, let url = request.url else { return }
             self.openInNewTab(url: url, background: sourceTab.id != self.selectedTabID)
+        }
+
+        tab.setStateChangeHandler { [weak self] _ in
+            self?.scheduleThreadPersistence()
         }
 
         let tabSink = tab.objectWillChange.sink { [weak self] _ in

@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 struct BrowserShellView: View {
-    @StateObject private var model = BrowserModel()
+    @StateObject private var model: BrowserModel
     @StateObject private var chatModel = ChatViewModel()
     @StateObject private var selectionWidget = TextSelectionWidgetModel()
     @StateObject private var smartReadModel = SmartReadModel()
@@ -33,6 +33,13 @@ struct BrowserShellView: View {
     @State private var isShowingMigrationPrompt = false
     @State private var isClipboardPopoverPresented = false
     @State private var isShowingHistoryModal = false
+
+    init(initialThreadID: UUID? = nil) {
+        _model = StateObject(wrappedValue: BrowserModel(
+            initialThreadID: initialThreadID,
+            restoresThreads: true
+        ))
+    }
 
     private var railOverlayVisible: Bool {
         model.isTabRailVisible || isPeekingRail
@@ -185,6 +192,16 @@ struct BrowserShellView: View {
                 .opacity(0)
                 .allowsHitTesting(false)
 
+            ThreadWindowCloseObserver(
+                onAttach: { window in model.attachWindow(window) },
+                onClose: { isTerminating in
+                    model.markThreadWindowClosed(isTerminating: isTerminating)
+                }
+            )
+            .frame(width: 0, height: 0)
+            .opacity(0)
+            .allowsHitTesting(false)
+
             // Integrations overlay (Gmail, future Slack/Calendar/…).
             // Sits below the notification toasts so any incoming toast
             // still surfaces above it.
@@ -218,6 +235,18 @@ struct BrowserShellView: View {
             // into the shared model so the card reflects this tab.
             smartReadModel.bind(to: model.selectedTab)
         }
+        .onChange(of: model.currentThreadID) { _, _ in
+            chatModel.bindToThread(
+                agentContext: model.threadAgentContext,
+                scratchDirectory: model.threadScratchDirectory,
+                context: model.selectedContext
+            )
+            smartReadModel.bind(to: model.selectedTab)
+            installLinkHoverListener()
+        }
+        .onChange(of: chatModel.sessionID) { _, newValue in
+            model.updateAgentContext(ThreadAgentContext(sessionID: newValue).serialized)
+        }
         .onChange(of: hoverPreviewEnabled) { _, newValue in
             for tab in model.tabs { tab.updateHoverPreviewEnabled(newValue) }
             if !newValue { hoverPreview.dismiss() }
@@ -227,6 +256,12 @@ struct BrowserShellView: View {
         }
         .onAppear {
             postWelcomeNotificationIfNeeded()
+            model.markThreadWindowOpen()
+            chatModel.bindToThread(
+                agentContext: model.threadAgentContext,
+                scratchDirectory: model.threadScratchDirectory,
+                context: model.selectedContext
+            )
             installLinkHoverListener()
             hoverPreview.prefetcher.updateBlocklist(hoverPreviewBlocklist)
             for tab in model.tabs { tab.updateHoverPreviewEnabled(hoverPreviewEnabled) }
@@ -238,6 +273,9 @@ struct BrowserShellView: View {
         .onReceive(NotificationCenter.default.publisher(for: CitedClipboardPopoverModel.draftRequestedNotification)) { note in
             guard let clips = note.userInfo?[CitedClipboardPopoverModel.draftRequestedClipsKey] as? [CitedClip] else { return }
             handleDraftRequest(clips: clips)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: ThreadCommand.closeCurrentThread)) { _ in
+            model.closeCurrentThread()
         }
         .sheet(isPresented: $isShowingMigrationPrompt) {
             MigrationView(presentation: .firstRun) {
@@ -267,6 +305,12 @@ struct BrowserShellView: View {
             .frame(minWidth: 880, idealWidth: 1000, minHeight: 580, idealHeight: 680)
             .preferredColorScheme(.dark)
         }
+        .sheet(isPresented: $model.isThreadPickerVisible) {
+            ThreadPickerView(model: model)
+                .frame(width: 520, height: 460)
+                .preferredColorScheme(.dark)
+                .background(Palette.bg)
+        }
         .animation(Motion.springSnap, value: model.isChatVisible)
         .animation(Motion.springSnap, value: model.isTabRailVisible)
         .animation(Motion.springSnap, value: integrations.isPresented)
@@ -281,8 +325,10 @@ struct BrowserShellView: View {
                 selectedTab: model.selectedTab,
                 reservesTrafficLightGutter: !model.isTabRailVisible,
                 readerActive: readerModel.isPresented,
+                threadTitle: model.threadTitle,
                 onSmartRead: triggerSmartRead,
                 onReaderMode: triggerReaderMode,
+                onShowThreadPicker: { model.showThreadPicker() },
                 isClipboardPopoverPresented: $isClipboardPopoverPresented
             )
 
@@ -539,6 +585,10 @@ struct BrowserShellView: View {
             (newTabShortcut, { model.addTab() }),
             (closeTabShortcut, { model.closeSelected() }),
             (focusAddressShortcut, { model.focusAddress() }),
+            ("shift+command+[", { model.cycleThread(forward: false) }),
+            ("shift+command+]", { model.cycleThread(forward: true) }),
+            ("shift+command+t", { model.showThreadPicker() }),
+            ("shift+command+w", { model.closeCurrentThread() }),
             (smartReadShortcut, triggerSmartRead),
             (readerModeShortcut, triggerReaderMode),
             (pasteWithCitationShortcut, { CitedClipboardCursorPanelController.shared.toggle() }),

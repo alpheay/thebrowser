@@ -6,7 +6,7 @@ import PDFKit
 
 @MainActor
 final class BrowserTab: NSObject, ObservableObject, Identifiable {
-    let id = UUID()
+    let id: UUID
 
     @Published var title: String = "New Space"
     @Published var url: URL?
@@ -52,7 +52,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private var selectionBridge: TextSelectionBridge?
     private var citedClipboardBridge: CitedClipboardBridge?
     private var linkHoverBridge: LinkHoverBridge?
+    private var pageStateBridge: ThreadPageStateBridge?
     private var pdfLoadTask: Task<Void, Never>?
+    private var restoredInteractionStateData: Data?
+    private var interactionStateDataOverride: Data?
+    private var lastScreenshotPath: String?
     /// True between the moment we cancel a PDF response and the moment our
     /// own URLSession fetch resolves. Lets ``didFailProvisionalNavigation``
     /// distinguish "we cancelled this on purpose to take over" from a real
@@ -82,6 +86,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     private var linkHoverListener: LinkHoverListener?
     typealias NewWindowHandler = @MainActor (BrowserTab, URLRequest) -> Void
     private var newWindowHandler: NewWindowHandler?
+    typealias StateChangeHandler = @MainActor (BrowserTab) -> Void
+    private var stateChangeHandler: StateChangeHandler?
 
     /// User agent used for both browsing tabs and the in-app Google sign-in
     /// sheet. WKWebView's default UA omits the `Version/X Safari/Y` suffix,
@@ -94,6 +100,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Safari/605.1.15"
 
     override init() {
+        self.id = UUID()
         super.init()
         mountWebViewStack()
         // Point the find controller at this tab's live webview. Reads
@@ -101,6 +108,25 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         // resurrected by a stray find call.
         findController.webViewProvider = { [weak self] in
             self?._webView
+        }
+    }
+
+    init(snapshot: TabSnapshot) {
+        self.id = snapshot.id
+        self.title = snapshot.title.isEmpty ? "New Space" : snapshot.title
+        self.url = snapshot.url
+        self.isHome = snapshot.url == nil
+        self.restoredInteractionStateData = snapshot.interactionState
+        self.lastScreenshotPath = snapshot.lastScreenshotPath
+        self.lastActiveAt = snapshot.lastVisitedAt
+        super.init()
+        let view = mountWebViewStack()
+        findController.webViewProvider = { [weak self] in
+            self?._webView
+        }
+        applyRestoredInteractionStateIfNeeded()
+        if let url = snapshot.url {
+            view.load(URLRequest(url: url))
         }
     }
 
@@ -117,6 +143,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             if let url {
                 view.load(URLRequest(url: url))
             }
+            applyRestoredInteractionStateIfNeeded()
         }
         return view
     }
@@ -136,6 +163,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         observations = []
 
         if let webView = _webView {
+            restoredInteractionStateData = currentInteractionStateData() ?? restoredInteractionStateData
             webView.stopLoading()
             webView.navigationDelegate = nil
             webView.uiDelegate = nil
@@ -143,14 +171,17 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             content.removeScriptMessageHandler(forName: TextSelectionBridge.messageName)
             content.removeScriptMessageHandler(forName: CitedClipboardBridge.messageName)
             content.removeScriptMessageHandler(forName: LinkHoverBridge.messageName)
+            content.removeScriptMessageHandler(forName: ThreadPageStateBridge.messageName)
         }
 
         selectionBridge?.tab = nil
         citedClipboardBridge?.tab = nil
         linkHoverBridge?.tab = nil
+        pageStateBridge?.tab = nil
         selectionBridge = nil
         citedClipboardBridge = nil
         linkHoverBridge = nil
+        pageStateBridge = nil
         _webView = nil
 
         isLoading = false
@@ -181,6 +212,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         citedClipboardBridge = citedBridge
         let hoverBridge = LinkHoverBridge()
         linkHoverBridge = hoverBridge
+        let pageBridge = ThreadPageStateBridge()
+        pageStateBridge = pageBridge
 
         let configuration = WKWebViewConfiguration()
         configuration.defaultWebpagePreferences.allowsContentJavaScript = true
@@ -190,10 +223,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         configuration.userContentController.addUserScript(Self.textSelectionUserScript)
         configuration.userContentController.addUserScript(CitedClipboardScript.userScript)
         configuration.userContentController.addUserScript(Self.makeLinkHoverUserScript())
+        configuration.userContentController.addUserScript(Self.pageStateUserScript)
         configuration.userContentController.addUserScript(Self.discordThemeUserScript)
         configuration.userContentController.add(bridge, name: TextSelectionBridge.messageName)
         configuration.userContentController.add(citedBridge, name: CitedClipboardBridge.messageName)
         configuration.userContentController.add(hoverBridge, name: LinkHoverBridge.messageName)
+        configuration.userContentController.add(pageBridge, name: ThreadPageStateBridge.messageName)
 
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.customUserAgent = Self.userAgent
@@ -204,10 +239,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         bridge.tab = self
         citedBridge.tab = self
         hoverBridge.tab = self
+        pageBridge.tab = self
         view.navigationDelegate = self
         view.uiDelegate = self
         _webView = view
         observeWebView()
+        applyRestoredInteractionStateIfNeeded()
         return view
     }
 
@@ -224,6 +261,14 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// this to the tab strip so those requests become real browser tabs.
     func setNewWindowHandler(_ handler: NewWindowHandler?) {
         newWindowHandler = handler
+    }
+
+    func setStateChangeHandler(_ handler: StateChangeHandler?) {
+        stateChangeHandler = handler
+    }
+
+    func notifyPageInteractionChanged() {
+        stateChangeHandler?(self)
     }
 
     func applyLinkHover(_ info: LinkHoverInfo) {
@@ -250,6 +295,85 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     func clearSelectionInfo() {
         selectionInfo = nil
+    }
+
+    func snapshotForThread(now: Date = Date()) -> TabSnapshot {
+        TabSnapshot(
+            id: id,
+            url: isHome || searchPage != nil ? nil : url,
+            title: displayTitle,
+            interactionState: interactionStateDataOverride ?? currentInteractionStateData() ?? restoredInteractionStateData,
+            lastScreenshotPath: lastScreenshotPath,
+            lastVisitedAt: now
+        )
+    }
+
+    func setInteractionStateForTesting(_ state: Any?) {
+        _webView?.interactionState = state
+        interactionStateDataOverride = Self.archivedInteractionState(state)
+        restoredInteractionStateData = interactionStateDataOverride
+    }
+
+    static func archivedInteractionState(_ state: Any?) -> Data? {
+        guard let state else { return nil }
+        if let data = state as? Data {
+            return archiveInteractionStateObject(NSData(data: data))
+        }
+        guard let object = state as? NSCoding else {
+            return nil
+        }
+        return archiveInteractionStateObject(object)
+    }
+
+    static func unarchivedInteractionState(from data: Data?) -> Any? {
+        guard let data else { return nil }
+        if let object = try? NSKeyedUnarchiver.unarchivedObject(
+            ofClasses: allowedInteractionStateClasses,
+            from: data
+        ) {
+            return object
+        }
+
+        do {
+            let unarchiver = try NSKeyedUnarchiver(forReadingFrom: data)
+            unarchiver.requiresSecureCoding = false
+            defer { unarchiver.finishDecoding() }
+            return unarchiver.decodeObject(forKey: NSKeyedArchiveRootObjectKey)
+        } catch {
+            return nil
+        }
+    }
+
+    private static let allowedInteractionStateClasses: [AnyClass] = [
+        NSArray.self,
+        NSDictionary.self,
+        NSSet.self,
+        NSString.self,
+        NSNumber.self,
+        NSData.self,
+        NSDate.self,
+        NSURL.self,
+        NSNull.self
+    ]
+
+    private static func archiveInteractionStateObject(_ object: NSCoding) -> Data {
+        let archiver = NSKeyedArchiver(requiringSecureCoding: false)
+        archiver.encode(object, forKey: NSKeyedArchiveRootObjectKey)
+        archiver.finishEncoding()
+        return archiver.encodedData
+    }
+
+    private func currentInteractionStateData() -> Data? {
+        guard let view = _webView else { return nil }
+        return Self.archivedInteractionState(view.interactionState)
+    }
+
+    private func applyRestoredInteractionStateIfNeeded() {
+        guard let view = _webView,
+              let state = Self.unarchivedInteractionState(from: restoredInteractionStateData) else {
+            return
+        }
+        view.interactionState = state
     }
 
     var displayTitle: String {
@@ -360,6 +484,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
         switch destination {
         case .url(let target):
+            restoredInteractionStateData = nil
             if let searchPage {
                 searchBackStack.append(searchPage)
             } else {
@@ -372,7 +497,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             url = target
             title = target.host(percentEncoded: false) ?? target.absoluteString
             load(target)
+            notifyPageInteractionChanged()
         case .search(let query):
+            restoredInteractionStateData = nil
             if let searchPage {
                 searchBackStack.append(searchPage)
             } else {
@@ -394,10 +521,12 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                 engine: SearchEngine.selected.rawValue,
                 tabID: id.uuidString
             )
+            notifyPageInteractionChanged()
         }
     }
 
     func goHome() {
+        restoredInteractionStateData = nil
         webView.stopLoading()
         searchBackStack.removeAll()
         searchPage = nil
@@ -409,6 +538,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         url = nil
         selectionInfo = nil
         clearPDFState()
+        notifyPageInteractionChanged()
     }
 
     /// Tears down any in-flight PDF fetch and unmounts the displayed
@@ -426,6 +556,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// containing directory read access without complaining about the
     /// file:// scheme.
     func loadArtifact(at fileURL: URL) {
+        restoredInteractionStateData = nil
         webView.stopLoading()
         searchBackStack.removeAll()
         searchPage = nil
@@ -436,6 +567,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         url = fileURL
         title = fileURL.deletingPathExtension().lastPathComponent
         webView.loadFileURL(fileURL, allowingReadAccessTo: fileURL.deletingLastPathComponent())
+        notifyPageInteractionChanged()
     }
 
     /// Extracts visible text content from the loaded page via JavaScript. Used
@@ -579,6 +711,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             estimatedProgress = 1
             url = nil
             title = previousSearchPage.query
+            notifyPageInteractionChanged()
         }
     }
 
@@ -669,6 +802,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                         // history row written by `didFinish` so the modal
                         // doesn't show the host fallback.
                         self.refreshHistoryTitleIfNeeded()
+                        self.notifyPageInteractionChanged()
                     }
                 }
             },
@@ -677,6 +811,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
                     guard let self else { return }
                     if let url = webView.url {
                         self.url = url
+                        self.notifyPageInteractionChanged()
                     }
                 }
             },
@@ -1362,11 +1497,13 @@ extension BrowserTab: WKNavigationDelegate {
             if let title = webView.title, !title.isEmpty {
                 self.title = title
             }
+            self.applyRestoredInteractionStateIfNeeded()
             self.recordVisitToHistory()
             // Page content just changed under our feet — re-run the
             // current find query so the counter and highlight match what
             // the user can now see, without stealing focus.
             self.findController.rerunForNavigation()
+            self.notifyPageInteractionChanged()
         }
     }
 
@@ -1483,6 +1620,7 @@ extension BrowserTab {
                     self.title = pdfURL.lastPathComponent
                 }
                 self.recordVisitToHistory()
+                self.notifyPageInteractionChanged()
             } catch is CancellationError {
                 return
             } catch {
