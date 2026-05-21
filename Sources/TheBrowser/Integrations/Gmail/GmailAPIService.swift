@@ -106,6 +106,15 @@ struct GmailAPIService {
         return envelope.toFullMessage()
     }
 
+    func fetchThread(id: String) async throws -> [GmailMessage] {
+        let safeID = id.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? id
+        let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/threads/\(safeID)?format=full")!
+        let envelope: RawThread = try await get(url)
+        return envelope.messages
+            .map { $0.toFullMessage() }
+            .sorted { $0.date < $1.date }
+    }
+
     // MARK: - Send
 
     /// Sends `draft` as a brand-new message. If `draft.inReplyTo` is set we
@@ -195,6 +204,11 @@ struct GmailAPIService {
 }
 
 // MARK: - Wire types
+
+private struct RawThread: Decodable {
+    let id: String
+    let messages: [RawMessage]
+}
 
 /// Raw shape of `users.messages.get`. We model just the fields we read.
 private struct RawMessage: Decodable {

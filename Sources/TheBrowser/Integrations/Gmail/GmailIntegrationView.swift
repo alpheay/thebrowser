@@ -47,9 +47,18 @@ struct GmailIntegrationView: View {
             GmailAuthWebSheet(request: request)
         }
         .onAppear {
-            if account.isSignedIn { store.refreshList() }
+            if account.isSignedIn && shouldRefreshOnAppear {
+                store.refreshList()
+            }
             DispatchQueue.main.async { searchFocused = true }
         }
+    }
+
+    private var shouldRefreshOnAppear: Bool {
+        store.paneMode == .list
+            && store.messages.isEmpty
+            && store.openMessage == nil
+            && store.query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     // MARK: - Header

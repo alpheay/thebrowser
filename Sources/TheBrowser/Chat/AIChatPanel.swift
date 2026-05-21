@@ -273,11 +273,40 @@ final class ChatViewModel: ObservableObject {
             promptText = userText
         }
 
+        let directMailCommandRequested = activePreset == nil
+            && attachmentsForTurn.isEmpty
+            && trimmed.hasPrefix("/mail_")
+        let canUseDirectTool = activePreset == nil && attachmentsForTurn.isEmpty
+        let directToolCall = canUseDirectTool
+            ? DirectNativeToolCommand.parse(trimmed)
+            : nil
+
         messages.append(ChatMessage(role: .user, text: userText, attachments: attachmentsForTurn))
         draft = ""
         draftPreset = nil
         isSending = true
         persist(context: context)
+
+        if directMailCommandRequested && directToolCall == nil {
+            messages.append(ChatMessage(role: .assistant, text: DirectNativeToolCommand.helpText))
+            isSending = false
+            persist(context: context)
+            return
+        }
+
+        if let directToolCall {
+            Task {
+                let result = await nativeTools.execute(directToolCall)
+                messages.append(ChatMessage(
+                    role: .assistant,
+                    text: result.content,
+                    toolChain: [result.invocation]
+                ))
+                isSending = false
+                persist(context: context)
+            }
+            return
+        }
 
         let directory = sessionDirectory
         let history = messages
@@ -294,7 +323,7 @@ final class ChatViewModel: ObservableObject {
 
         Task {
             do {
-                let response = try await client.ask(prompt: prompt, sessionDirectory: directory)
+                let response = try await askWithRetry(prompt: prompt, sessionDirectory: directory)
                 let (finalResponse, toolChain) = try await resolveNativeBrowserTools(
                     initialResponse: response,
                     basePrompt: prompt,
@@ -360,7 +389,7 @@ final class ChatViewModel: ObservableObject {
                 basePrompt: basePrompt,
                 results: results
             )
-            response = try await client.ask(prompt: continuation, sessionDirectory: sessionDirectory)
+            response = try await askWithRetry(prompt: continuation, sessionDirectory: sessionDirectory)
         }
 
         let chain = results.map(\.invocation)
@@ -369,6 +398,44 @@ final class ChatViewModel: ObservableObject {
         }
 
         return (response, chain)
+    }
+
+    private func askWithRetry(
+        prompt: String,
+        sessionDirectory: URL,
+        attempts: Int = 2
+    ) async throws -> String {
+        var latestError: Error?
+        var currentPrompt = prompt
+
+        for attempt in 1...max(attempts, 1) {
+            do {
+                return try await client.ask(prompt: currentPrompt, sessionDirectory: sessionDirectory)
+            } catch {
+                latestError = error
+                guard attempt < attempts, shouldRetry(error) else { break }
+                currentPrompt = """
+                \(prompt)
+
+                Retry notice:
+                The previous model run failed or returned no usable message. Try again now. If a native tool is needed, reply with exactly one bare JSON tool call from the listed schema. For mail/inbox requests, use mail_search instead of asking the user for another query.
+                """
+            }
+        }
+
+        throw latestError ?? AIProviderError.emptyResponse
+    }
+
+    private func shouldRetry(_ error: Error) -> Bool {
+        guard let providerError = error as? AIProviderError else { return false }
+        switch providerError {
+        case .emptyResponse:
+            return true
+        case .processFailed:
+            return true
+        case .missingExecutable:
+            return false
+        }
     }
 }
 
@@ -890,13 +957,15 @@ private struct EmptyChatState: View {
             return [
                 Suggestion(icon: "text.alignleft", text: "Summarize this page"),
                 Suggestion(icon: "lightbulb", text: "Explain the key ideas"),
-                Suggestion(icon: "questionmark.bubble", text: "What should I ask about this?")
+                Suggestion(icon: "questionmark.bubble", text: "What should I ask about this?"),
+                Suggestion(icon: "envelope.open", text: "/mail_search inbox newer_than:7d")
             ]
         }
         return [
             Suggestion(icon: "globe", text: "Find me a great article on…"),
             Suggestion(icon: "lightbulb", text: "Explain a concept simply"),
-            Suggestion(icon: "text.bubble", text: "Help me write something")
+            Suggestion(icon: "text.bubble", text: "Help me write something"),
+            Suggestion(icon: "envelope.open", text: "/mail_search inbox newer_than:7d")
         ]
     }
 
@@ -1177,6 +1246,9 @@ private struct ToolChainChip: View {
         case "fetch": return "arrow.down.doc"
         case "read_tabs": return "rectangle.on.rectangle"
         case "read_highlights": return "quote.opening"
+        case "mail_search": return "envelope.badge"
+        case "mail_read_thread": return "envelope.open"
+        case "mail_draft_reply": return "arrowshape.turn.up.left"
         case "create_artifact": return "doc.richtext"
         case "web_control": return "cursorarrow.click"
         default: return "wrench"
@@ -1190,6 +1262,9 @@ private struct ToolChainChip: View {
         case "fetch": return "fetch"
         case "read_tabs": return "read tabs"
         case "read_highlights": return "read highlights"
+        case "mail_search": return "mail search"
+        case "mail_read_thread": return "mail read"
+        case "mail_draft_reply": return "mail draft"
         case "create_artifact": return "artifact"
         case "web_control": return "web control"
         default: return invocation.tool

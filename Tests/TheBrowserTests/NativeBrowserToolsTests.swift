@@ -160,6 +160,83 @@ struct NativeBrowserToolsTests {
         #expect(call.rawInput == "Click the first result and summarize it.")
     }
 
+    @Test("mail_search parses query mailbox and max results")
+    func mailSearchParsesArguments() throws {
+        let call = try #require(NativeBrowserToolCall.parse(from: #"{"tool":"mail_search","query":"from:alex newer_than:7d","mailbox":"inbox","max_results":5}"#))
+
+        #expect(call.name == .mailSearch)
+        #expect(call.query == "from:alex newer_than:7d")
+        #expect(call.mailbox == "inbox")
+        #expect(call.maxResults == 5)
+        #expect(call.rawInput == "inbox: from:alex newer_than:7d")
+    }
+
+    @Test("mail_search accepts a mailbox without a query")
+    func mailSearchParsesMailboxOnly() throws {
+        let call = try #require(NativeBrowserToolCall.parse(from: #"{"tool":"mail_search","mailbox":"inbox","max_results":10}"#))
+
+        #expect(call.name == .mailSearch)
+        #expect(call.query == nil)
+        #expect(call.mailbox == "inbox")
+        #expect(call.rawInput == "inbox")
+    }
+
+    @Test("mail_read_thread parses message id")
+    func mailReadThreadParsesMessageID() throws {
+        let call = try #require(NativeBrowserToolCall.parse(from: #"{"tool":"mail_read_thread","message_id":"msg-123"}"#))
+
+        #expect(call.name == .mailReadThread)
+        #expect(call.mailIdentifier == MailToolMessageIdentifier(kind: .message, value: "msg-123"))
+        #expect(call.rawInput == "message:msg-123")
+    }
+
+    @Test("mail_draft_reply parses thread id and body")
+    func mailDraftReplyParsesBody() throws {
+        let call = try #require(NativeBrowserToolCall.parse(from: #"{"tool":"mail_draft_reply","thread_id":"thr-123","body":"Thanks, that works."}"#))
+
+        #expect(call.name == .mailDraftReply)
+        #expect(call.mailIdentifier == MailToolMessageIdentifier(kind: .thread, value: "thr-123"))
+        #expect(call.body == "Thanks, that works.")
+    }
+
+    @Test("Direct mail slash commands parse")
+    func directMailSlashCommandsParse() throws {
+        let search = try #require(DirectNativeToolCommand.parse("/mail_search inbox from:alex"))
+        let inbox = try #require(DirectNativeToolCommand.parse("/mail_search inbox"))
+        let read = try #require(DirectNativeToolCommand.parse("/mail_read_thread thread:thr-123"))
+        let draft = try #require(DirectNativeToolCommand.parse("/mail_draft_reply msg-123 | Sounds good."))
+
+        #expect(search.name == .mailSearch)
+        #expect(search.mailbox == "inbox")
+        #expect(search.query == "from:alex")
+        #expect(inbox.name == .mailSearch)
+        #expect(inbox.mailbox == "inbox")
+        #expect(inbox.query == "")
+        #expect(read.mailIdentifier == MailToolMessageIdentifier(kind: .thread, value: "thr-123"))
+        #expect(draft.mailIdentifier == MailToolMessageIdentifier(kind: .message, value: "msg-123"))
+        #expect(draft.body == "Sounds good.")
+    }
+
+    @Test("Natural inbox requests route directly to mail search")
+    func naturalInboxRequestsRouteToMailSearch() throws {
+        let broad = try #require(DirectNativeToolCommand.parse("what mails do I have?"))
+        let inbox = try #require(DirectNativeToolCommand.parse("in my inbox"))
+        let unread = try #require(DirectNativeToolCommand.parse("show unread emails"))
+        let sender = try #require(DirectNativeToolCommand.parse("do I have email from Alex?"))
+
+        #expect(broad.name == .mailSearch)
+        #expect(broad.mailbox == "inbox")
+        #expect(broad.query == "")
+        #expect(inbox.name == .mailSearch)
+        #expect(inbox.mailbox == "inbox")
+        #expect(unread.name == .mailSearch)
+        #expect(unread.mailbox == "inbox")
+        #expect(unread.query == "is:unread")
+        #expect(sender.name == .mailSearch)
+        #expect(sender.mailbox == "inbox")
+        #expect(sender.query == "from:alex")
+    }
+
     @Test("Web control agent command parses actions")
     func webControlAgentCommandParsesActions() throws {
         let command = try #require(WebControlAgentCommand.parse(from: #"{"action":"type","id":"wca-abc","text":"wordle","clear":true}"#))
@@ -194,6 +271,53 @@ struct NativeBrowserToolsTests {
         #expect(receivedTask == "Play Wordle")
         #expect(result.content.contains("Steps: 3"))
         #expect(result.invocation.tool == "web_control")
+    }
+
+    @MainActor
+    @Test("mail_search opens Gmail overlay and formats results")
+    func mailSearchInvokesMailBridge() async {
+        var openedMail = false
+        var receivedQuery = ""
+        var receivedMailbox: GmailMailbox?
+        let executor = NativeBrowserToolExecutor(
+            openURL: { _ in },
+            readTabsContent: { _ in "" },
+            readHighlightsContent: { _ in "" },
+            smartReadContent: { "" },
+            openMailIntegration: {
+                openedMail = true
+            },
+            searchMail: { query, mailbox, _ in
+                receivedQuery = query
+                receivedMailbox = mailbox
+                return [
+                    GmailMessageSummary(
+                        id: "msg-123",
+                        threadId: "thr-123",
+                        snippet: "See you Thursday",
+                        subject: "Planning",
+                        fromName: "Alex",
+                        fromAddress: "alex@example.com",
+                        date: Date(timeIntervalSince1970: 0),
+                        unread: true,
+                        starred: false,
+                        labelIDs: ["INBOX", "UNREAD"]
+                    )
+                ]
+            },
+            saveAndOpenArtifact: { _, _ in URL(fileURLWithPath: "/tmp/unused.html") }
+        )
+
+        let result = await executor.execute(
+            NativeBrowserToolCall(name: .mailSearch, query: "", mailbox: "inbox")
+        )
+
+        #expect(openedMail)
+        #expect(receivedQuery == "")
+        #expect(receivedMailbox == .inbox)
+        #expect(result.succeeded)
+        #expect(result.content.contains("Message ID: msg-123"))
+        #expect(result.invocation.tool == "mail_search")
     }
 
     @MainActor

@@ -5,8 +5,8 @@ import SwiftUI
 /// backdrop, click-outside-to-close, Esc-to-close, centered card.
 struct IntegrationsOverlay: View {
     @ObservedObject var model: IntegrationsModel
-    @StateObject private var gmailAccount = GmailAccountStore.shared
-    @StateObject private var gmailStore = GmailStore()
+    @ObservedObject var gmailAccount: GmailAccountStore
+    @ObservedObject var gmailStore: GmailStore
 
     var body: some View {
         ZStack {

@@ -44,6 +44,7 @@ struct SettingsView: View {
     @State private var pendingHistoryClearRange: HistoryClearRange?
     @State private var historyEntryCount = 0
     @StateObject private var googleAccountStore = GoogleAccountStore.shared
+    @StateObject private var gmailAccountStore = GmailAccountStore.shared
     @StateObject private var discordAccountStore = DiscordAccountStore.shared
     @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
     @AppStorage(PreferenceKey.openHistoryShortcut) private var openHistoryShortcut = "command+y"
@@ -136,6 +137,7 @@ struct SettingsView: View {
                     .tracking(1.8)
                     .foregroundStyle(Palette.textFaint)
                 GoogleAccountView(store: googleAccountStore)
+                GmailConnectionRow(store: gmailAccountStore)
             }
 
             VStack(alignment: .leading, spacing: 10) {
@@ -561,6 +563,74 @@ struct SettingsView: View {
             return $codexCLIPath
         case .claude:
             return $claudeCLIPath
+        }
+    }
+}
+
+private struct GmailConnectionRow: View {
+    @ObservedObject var store: GmailAccountStore
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Image(systemName: "envelope.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Palette.textSecondary)
+                .frame(width: 22, height: 22)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text("Gmail")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(Palette.textPrimary)
+                Text(statusDetail)
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(Palette.textMuted)
+            }
+
+            Spacer()
+
+            Text(statusTitle)
+                .font(.system(size: 10, weight: .semibold))
+                .tracking(1.1)
+                .foregroundStyle(store.isSignedIn ? Color(red: 0.55, green: 0.85, blue: 0.62) : Palette.textFaint)
+                .padding(.horizontal, 9)
+                .frame(height: 22)
+                .background {
+                    Capsule()
+                        .fill(store.isSignedIn ? Color(red: 0.55, green: 0.85, blue: 0.62).opacity(0.12) : Palette.surface)
+                }
+                .overlay {
+                    Capsule()
+                        .stroke(store.isSignedIn ? Color(red: 0.55, green: 0.85, blue: 0.62).opacity(0.24) : Palette.stroke, lineWidth: 1)
+                }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+        .background {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Palette.surface)
+        }
+        .overlay {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(Palette.stroke, lineWidth: 1)
+        }
+    }
+
+    private var statusTitle: String {
+        store.isSignedIn ? "Connected" : "Not connected"
+    }
+
+    private var statusDetail: String {
+        if let identity = store.identity, store.isSignedIn {
+            return identity.email
+        }
+
+        switch store.credentialsState {
+        case .loading:
+            return "Checking Gmail credentials"
+        case .ready:
+            return "Open Gmail from Integrations to connect mail"
+        case .missing:
+            return "Gmail credentials are not configured"
         }
     }
 }

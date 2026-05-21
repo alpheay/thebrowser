@@ -192,6 +192,83 @@ final class GmailStore: ObservableObject {
         }
     }
 
+    func searchForTool(
+        query: String,
+        mailbox: GmailMailbox?,
+        maxResults: Int
+    ) async throws -> [GmailMessageSummary] {
+        guard account.isSignedIn else { throw GmailAuthError.notSignedIn }
+        guard let token = await account.currentAccessToken() else { throw GmailAuthError.notSignedIn }
+
+        phase = .loadingList
+        defer { phase = .idle }
+
+        let api = GmailAPIService(accessToken: token)
+        let resolvedMailbox = mailbox ?? .all
+        let result = try await api.listMessages(
+            mailbox: resolvedMailbox,
+            query: query,
+            maxResults: maxResults
+        )
+
+        selectedMailbox = resolvedMailbox
+        self.query = query
+        messages = result.summaries
+        openMessage = nil
+        paneMode = .list
+        lastError = nil
+        return result.summaries
+    }
+
+    func readThreadForTool(identifier: MailToolMessageIdentifier) async throws -> [GmailMessage] {
+        guard account.isSignedIn else { throw GmailAuthError.notSignedIn }
+        guard let token = await account.currentAccessToken() else { throw GmailAuthError.notSignedIn }
+
+        phase = .loadingMessage
+        defer { phase = .idle }
+
+        let api = GmailAPIService(accessToken: token)
+        let thread: [GmailMessage]
+        switch identifier.kind {
+        case .message:
+            let message = try await api.fetchMessage(id: identifier.value)
+            thread = try await api.fetchThread(id: message.threadId)
+        case .thread:
+            thread = try await api.fetchThread(id: identifier.value)
+        }
+
+        if let focused = thread.last ?? thread.first {
+            openMessage = focused
+            paneMode = .reading(messageID: focused.id)
+        }
+        lastError = nil
+        return thread
+    }
+
+    @discardableResult
+    func draftReplyForTool(identifier: MailToolMessageIdentifier, body: String) async throws -> GmailMessage {
+        let thread = try await readThreadForTool(identifier: identifier)
+        guard let target = thread.last ?? thread.first else {
+            throw GmailAPIError.decoding("Thread did not contain any messages.")
+        }
+
+        let subject = target.subject.lowercased().hasPrefix("re:")
+            ? target.subject
+            : "Re: \(target.subject)"
+
+        let draft = GmailPaneMode.Draft(
+            to: target.fromAddress,
+            subject: subject,
+            body: body.trimmingCharacters(in: .whitespacesAndNewlines),
+            inReplyTo: target
+        )
+
+        openMessage = target
+        paneMode = .composing(draft)
+        lastError = nil
+        return target
+    }
+
     // MARK: - Internals
 
     private func performRefresh() async {

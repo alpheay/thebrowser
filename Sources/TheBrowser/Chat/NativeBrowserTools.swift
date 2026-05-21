@@ -7,8 +7,28 @@ enum NativeBrowserToolName: String, Equatable, Sendable {
     case readTabs = "read_tabs"
     case readHighlights = "read_highlights"
     case readSmartRead = "read_smart_read"
+    case mailSearch = "mail_search"
+    case mailReadThread = "mail_read_thread"
+    case mailDraftReply = "mail_draft_reply"
     case createArtifact = "create_artifact"
     case webControl = "web_control"
+}
+
+struct MailToolMessageIdentifier: Equatable, Sendable {
+    enum Kind: Equatable, Sendable {
+        case message
+        case thread
+    }
+
+    var kind: Kind
+    var value: String
+
+    var displayValue: String {
+        switch kind {
+        case .message: return "message:\(value)"
+        case .thread: return "thread:\(value)"
+        }
+    }
 }
 
 struct NativeBrowserToolCall: Equatable, Sendable {
@@ -19,6 +39,11 @@ struct NativeBrowserToolCall: Equatable, Sendable {
     var title: String? = nil
     var html: String? = nil
     var indices: [Int]? = nil
+    var mailbox: String? = nil
+    var messageID: String? = nil
+    var threadID: String? = nil
+    var body: String? = nil
+    var maxResults: Int? = nil
 
     static func parse(from text: String) -> NativeBrowserToolCall? {
         for candidate in jsonObjectCandidates(in: text) {
@@ -44,9 +69,38 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             return "all"
         case .readSmartRead:
             return "summary"
+        case .mailSearch:
+            let trimmedQuery = query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard let mailbox = mailbox?.trimmingCharacters(in: .whitespacesAndNewlines), !mailbox.isEmpty else {
+                return trimmedQuery
+            }
+            guard !trimmedQuery.isEmpty else {
+                return mailbox
+            }
+            return "\(mailbox): \(trimmedQuery)"
+        case .mailReadThread:
+            return mailIdentifier?.displayValue ?? ""
+        case .mailDraftReply:
+            let preview = body?
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let capped = preview.count > 40 ? String(preview.prefix(40)) + "…" : preview
+            return [mailIdentifier?.displayValue ?? "", capped]
+                .filter { !$0.isEmpty }
+                .joined(separator: " | ")
         case .createArtifact:
             return title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "artifact"
         }
+    }
+
+    var mailIdentifier: MailToolMessageIdentifier? {
+        if let id = messageID?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty {
+            return MailToolMessageIdentifier(kind: .message, value: id)
+        }
+        if let id = threadID?.trimmingCharacters(in: .whitespacesAndNewlines), !id.isEmpty {
+            return MailToolMessageIdentifier(kind: .thread, value: id)
+        }
+        return nil
     }
 
     private static func parse(json: String) -> NativeBrowserToolCall? {
@@ -83,6 +137,23 @@ struct NativeBrowserToolCall: Equatable, Sendable {
         let indices = intArrayValue(named: "indices", in: dictionary, arguments: arguments)
             ?? intArrayValue(named: "tabs", in: dictionary, arguments: arguments)
             ?? intArrayValue(named: "highlights", in: dictionary, arguments: arguments)
+        let mailbox = stringValue(named: "mailbox", in: dictionary, arguments: arguments)
+            ?? stringValue(named: "label", in: dictionary, arguments: arguments)
+        let messageID = stringValue(named: "message_id", in: dictionary, arguments: arguments)
+            ?? stringValue(named: "messageId", in: dictionary, arguments: arguments)
+            ?? stringValue(named: "message", in: dictionary, arguments: arguments)
+            ?? (name == .mailReadThread || name == .mailDraftReply ? stringValue(named: "id", in: dictionary, arguments: arguments) : nil)
+        let threadID = stringValue(named: "thread_id", in: dictionary, arguments: arguments)
+            ?? stringValue(named: "threadId", in: dictionary, arguments: arguments)
+            ?? stringValue(named: "thread", in: dictionary, arguments: arguments)
+        let body = stringValue(named: "body", in: dictionary, arguments: arguments)
+            ?? stringValue(named: "draft", in: dictionary, arguments: arguments)
+            ?? stringValue(named: "reply", in: dictionary, arguments: arguments)
+            ?? stringValue(named: "text", in: dictionary, arguments: arguments)
+            ?? stringValue(named: "content", in: dictionary, arguments: arguments)
+        let maxResults = intValue(named: "max_results", in: dictionary, arguments: arguments)
+            ?? intValue(named: "maxResults", in: dictionary, arguments: arguments)
+            ?? intValue(named: "limit", in: dictionary, arguments: arguments)
 
         let call = NativeBrowserToolCall(
             name: name,
@@ -91,7 +162,12 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             task: task,
             title: title,
             html: html,
-            indices: indices
+            indices: indices,
+            mailbox: mailbox,
+            messageID: messageID,
+            threadID: threadID,
+            body: body,
+            maxResults: maxResults
         )
 
         switch name {
@@ -99,6 +175,12 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             return call.rawInput.isEmpty ? nil : call
         case .readTabs, .readHighlights, .readSmartRead:
             return call
+        case .mailSearch:
+            return call.rawInput.isEmpty ? nil : call
+        case .mailReadThread:
+            return call.mailIdentifier == nil ? nil : call
+        case .mailDraftReply:
+            return call.mailIdentifier == nil || (body?.isEmpty ?? true) ? nil : call
         case .createArtifact:
             return (html?.isEmpty == false) ? call : nil
         }
@@ -120,6 +202,16 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             return nil
         }
         return ints.isEmpty ? nil : ints
+    }
+
+    private static func intValue(named key: String, in dictionary: [String: Any], arguments: [String: Any]) -> Int? {
+        let raw = dictionary[key] ?? arguments[key]
+        if let int = raw as? Int { return int }
+        if let number = raw as? NSNumber { return number.intValue }
+        if let string = raw as? String {
+            return Int(string.trimmingCharacters(in: .whitespacesAndNewlines))
+        }
+        return nil
     }
 
     private static func jsonObjectCandidates(in text: String) -> [String] {
@@ -335,6 +427,10 @@ struct NativeBrowserToolExecutor {
     /// metadata) when one is loaded, or a status message when the panel is
     /// idle, loading, or in a failed state.
     var smartReadContent: @MainActor () async -> String
+    var openMailIntegration: @MainActor () -> Void
+    var searchMail: @MainActor (_ query: String, _ mailbox: GmailMailbox?, _ maxResults: Int) async throws -> [GmailMessageSummary]
+    var readMailThread: @MainActor (_ identifier: MailToolMessageIdentifier) async throws -> [GmailMessage]
+    var draftMailReply: @MainActor (_ identifier: MailToolMessageIdentifier, _ body: String) async throws -> GmailMessage
     var saveAndOpenArtifact: @MainActor (_ title: String, _ html: String) async throws -> URL
     var runWebControl: @MainActor (_ task: String) async -> WebControlAgentOutcome
 
@@ -343,6 +439,16 @@ struct NativeBrowserToolExecutor {
         readTabsContent: @escaping @MainActor ([Int]?) async -> String,
         readHighlightsContent: @escaping @MainActor ([Int]?) async -> String,
         smartReadContent: @escaping @MainActor () async -> String,
+        openMailIntegration: @escaping @MainActor () -> Void = {},
+        searchMail: @escaping @MainActor (_ query: String, _ mailbox: GmailMailbox?, _ maxResults: Int) async throws -> [GmailMessageSummary] = { _, _, _ in
+            throw NativeMailToolError.unavailable
+        },
+        readMailThread: @escaping @MainActor (_ identifier: MailToolMessageIdentifier) async throws -> [GmailMessage] = { _ in
+            throw NativeMailToolError.unavailable
+        },
+        draftMailReply: @escaping @MainActor (_ identifier: MailToolMessageIdentifier, _ body: String) async throws -> GmailMessage = { _, _ in
+            throw NativeMailToolError.unavailable
+        },
         saveAndOpenArtifact: @escaping @MainActor (_ title: String, _ html: String) async throws -> URL,
         runWebControl: @escaping @MainActor (_ task: String) async -> WebControlAgentOutcome = { _ in
             WebControlAgentOutcome(
@@ -356,6 +462,10 @@ struct NativeBrowserToolExecutor {
         self.readTabsContent = readTabsContent
         self.readHighlightsContent = readHighlightsContent
         self.smartReadContent = smartReadContent
+        self.openMailIntegration = openMailIntegration
+        self.searchMail = searchMail
+        self.readMailThread = readMailThread
+        self.draftMailReply = draftMailReply
         self.saveAndOpenArtifact = saveAndOpenArtifact
         self.runWebControl = runWebControl
     }
@@ -374,6 +484,12 @@ struct NativeBrowserToolExecutor {
             return await readHighlights(call)
         case .readSmartRead:
             return await readSmartRead(call)
+        case .mailSearch:
+            return await mailSearch(call)
+        case .mailReadThread:
+            return await mailReadThread(call)
+        case .mailDraftReply:
+            return await mailDraftReply(call)
         case .createArtifact:
             return await createArtifact(call)
         case .webControl:
@@ -391,6 +507,9 @@ enum NativeBrowserToolPrompt {
     - read_tabs: returns the visible text of the user's currently open tabs. Use this when the user asks about, summarizes across, or wants to act on the tabs they already have open. Pass `indices` (1-based) to read specific tabs, or omit it to read all of them.
     - read_highlights: returns the full text of highlights (page passages the user clipped via the Ask widget) attached earlier in the conversation. The prompt lists prior highlights by their 1-based global index with source + preview only; use this tool to fetch the full text of one or more of them when the user references "the highlight", "what I sent earlier", a specific quoted phrase, etc. Pass `indices` (1-based) to read specific highlights, or omit it to read all of them. The CURRENT turn's highlights are already inlined in the prompt — only call this tool for highlights from PRIOR turns.
     - read_smart_read: returns the Smart Read summary currently displayed in the chat sidebar (TL;DR sentence, numbered key points, read time, word count, page title, page URL). Use this whenever the user references "the smart read", "the summary", "what did smart read say", or asks for any details from the summary panel. The prompt notes when a Smart Read is active — only call this tool while one is shown. Takes no arguments.
+    - mail_search: searches or lists the connected Gmail account and opens the Gmail overlay to the results. Use when the user asks you to find, triage, summarize, list, show, or act on mail. For broad requests like "what mail do I have?", "show my inbox", "what's in my inbox", or "in my inbox", call mail_search with `mailbox:"inbox"` and omit `query`. Pass `query` only when the user gives search constraints, using Gmail search syntax. Optional `mailbox` is one of inbox, starred, sent, drafts, all. Optional `max_results` is 1-20.
+    - mail_read_thread: reads a Gmail thread and opens the Gmail overlay to the message. Pass either `message_id` from mail_search results or `thread_id`.
+    - mail_draft_reply: opens the Gmail overlay composer with a reply draft. Pass either `message_id` or `thread_id`, plus `body` containing the exact reply draft text. This does not send mail; the user reviews and sends.
     - create_artifact: saves a fully self-contained HTML document under ~/.thebrowser/web_artifacts/ and opens it in a new tab. Use this when the user asks for an "artifact", "document", "report", "dashboard", "summary", or anything similar that should be rendered as a standalone page.
     - web_control: delegates a bounded task to a separate web-control agent and live-page harness that can click, type, press keys, scroll, wait, navigate, and inspect the current WKWebView without adding its step-by-step context to this chat. Use it when the user asks you to interact with a live site or web app on their behalf: click links/buttons, fill fields/forms, operate menus, submit searches, complete a workflow, or play a browser game such as Wordle. Pass a concise `task` string describing the user's goal and any constraints. The harness will show an "Agent is Working" overlay while it controls the page.
 
@@ -402,6 +521,10 @@ enum NativeBrowserToolPrompt {
     {"tool":"read_tabs","indices":[1,3]}
     {"tool":"read_highlights","indices":[2]}
     {"tool":"read_smart_read"}
+    {"tool":"mail_search","query":"from:alex newer_than:30d","mailbox":"inbox","max_results":10}
+    {"tool":"mail_search","mailbox":"inbox","max_results":10}
+    {"tool":"mail_read_thread","message_id":"message-id-from-search"}
+    {"tool":"mail_draft_reply","message_id":"message-id-from-search","body":"Thanks — I can do Thursday at 2 PM."}
     {"tool":"create_artifact","title":"Market Overview","html":"<!doctype html><html>…</html>"}
     {"tool":"web_control","task":"On the current page, play one game of Wordle and report the outcome."}
 
@@ -449,6 +572,158 @@ enum NativeBrowserToolURL {
             return nil
         }
         return url
+    }
+}
+
+enum NativeMailToolError: LocalizedError {
+    case unavailable
+
+    var errorDescription: String? {
+        switch self {
+        case .unavailable:
+            return "Mail tools are not configured in this browser surface."
+        }
+    }
+}
+
+enum DirectNativeToolCommand {
+    static let helpText = """
+    Mail commands:
+    /mail_search [inbox|starred|sent|drafts|all] [Gmail search query]
+    /mail_read_thread [message:<id>|thread:<id>|<message-id>]
+    /mail_draft_reply [message:<id>|thread:<id>|<message-id>] | <reply body>
+    """
+
+    static func parse(_ text: String) -> NativeBrowserToolCall? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") else { return inferredMailSearch(from: trimmed) }
+        let parts = trimmed.split(maxSplits: 1, whereSeparator: \.isWhitespace)
+        guard let command = parts.first?.lowercased() else { return nil }
+        let remainder = parts.count > 1 ? String(parts[1]).trimmingCharacters(in: .whitespacesAndNewlines) : ""
+
+        switch command {
+        case "/mail_search":
+            return parseMailSearch(remainder)
+        case "/mail_read_thread":
+            return parseMailReadThread(remainder)
+        case "/mail_draft_reply":
+            return parseMailDraftReply(remainder)
+        default:
+            return nil
+        }
+    }
+
+    private static func parseMailSearch(_ text: String) -> NativeBrowserToolCall? {
+        var query = text.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var mailbox: String? = query.isEmpty ? GmailMailbox.inbox.rawValue : nil
+        if let first = query.split(maxSplits: 1, whereSeparator: \.isWhitespace).first {
+            let candidate = String(first).lowercased()
+            if GmailMailbox(rawValue: candidate) != nil {
+                mailbox = candidate
+                query = String(query.dropFirst(first.count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+        }
+
+        guard !query.isEmpty || mailbox != nil else { return nil }
+        return NativeBrowserToolCall(
+            name: .mailSearch,
+            query: query,
+            mailbox: mailbox
+        )
+    }
+
+    private static func parseMailReadThread(_ text: String) -> NativeBrowserToolCall? {
+        guard let identifier = parseIdentifier(text) else { return nil }
+        return NativeBrowserToolCall(
+            name: .mailReadThread,
+            messageID: identifier.kind == .message ? identifier.value : nil,
+            threadID: identifier.kind == .thread ? identifier.value : nil
+        )
+    }
+
+    private static func parseMailDraftReply(_ text: String) -> NativeBrowserToolCall? {
+        let pieces = text.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+        guard pieces.count == 2 else { return nil }
+        guard let identifier = parseIdentifier(String(pieces[0])) else { return nil }
+        let body = String(pieces[1]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return nil }
+        return NativeBrowserToolCall(
+            name: .mailDraftReply,
+            messageID: identifier.kind == .message ? identifier.value : nil,
+            threadID: identifier.kind == .thread ? identifier.value : nil,
+            body: body
+        )
+    }
+
+    private static func parseIdentifier(_ text: String) -> MailToolMessageIdentifier? {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+
+        let lowered = trimmed.lowercased()
+        if lowered.hasPrefix("thread:") {
+            let value = String(trimmed.dropFirst("thread:".count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : MailToolMessageIdentifier(kind: .thread, value: value)
+        }
+        if lowered.hasPrefix("message:") {
+            let value = String(trimmed.dropFirst("message:".count))
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return value.isEmpty ? nil : MailToolMessageIdentifier(kind: .message, value: value)
+        }
+        return MailToolMessageIdentifier(kind: .message, value: trimmed)
+    }
+
+    private static func inferredMailSearch(from text: String) -> NativeBrowserToolCall? {
+        let normalized = normalizedWords(in: text)
+        guard !normalized.isEmpty else { return nil }
+
+        let words = Set(normalized.split(separator: " ").map(String.init))
+        let mentionsMail = !words.isDisjoint(with: Set(["mail", "mails", "email", "emails", "inbox"]))
+        guard mentionsMail else { return nil }
+
+        let asksToList = !words.isDisjoint(with: Set([
+            "what", "whats", "show", "list", "see", "view", "check",
+            "have", "got", "new", "latest", "recent", "unread", "inbox"
+        ]))
+        guard asksToList else { return nil }
+
+        let mailbox = inferredMailbox(words: words)
+        let query = inferredQuery(words: words, normalized: normalized)
+        return NativeBrowserToolCall(
+            name: .mailSearch,
+            query: query,
+            mailbox: mailbox.rawValue,
+            maxResults: 10
+        )
+    }
+
+    private static func inferredMailbox(words: Set<String>) -> GmailMailbox {
+        if words.contains("starred") { return .starred }
+        if words.contains("sent") { return .sent }
+        if words.contains("draft") || words.contains("drafts") { return .drafts }
+        if words.contains("all") { return .all }
+        return .inbox
+    }
+
+    private static func inferredQuery(words: Set<String>, normalized: String) -> String {
+        if words.contains("unread") { return "is:unread" }
+        let tokens = normalized.split(separator: " ").map(String.init)
+        if let fromIndex = tokens.firstIndex(of: "from"), tokens.indices.contains(fromIndex + 1) {
+            let sender = tokens[fromIndex + 1]
+            if !["me", "my", "the", "a", "an"].contains(sender) {
+                return "from:\(sender)"
+            }
+        }
+        return ""
+    }
+
+    private static func normalizedWords(in text: String) -> String {
+        text
+            .lowercased()
+            .replacingOccurrences(of: #"[^a-z0-9]+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }
 

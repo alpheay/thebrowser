@@ -9,6 +9,8 @@ struct BrowserShellView: View {
     @StateObject private var readerModel = ReaderModeModel()
     @StateObject private var hoverPreview = HoverPreviewModel()
     @StateObject private var integrations = IntegrationsModel()
+    @StateObject private var gmailAccount = GmailAccountStore.shared
+    @StateObject private var gmailStore = GmailStore(account: GmailAccountStore.shared)
 
     @AppStorage(PreferenceKey.toggleChatShortcut) private var toggleChatShortcut = "command+j"
     @AppStorage(PreferenceKey.toggleTabsShortcut) private var toggleTabsShortcut = "command+b"
@@ -69,6 +71,24 @@ struct BrowserShellView: View {
                             },
                             smartReadContent: {
                                 smartReadModel.summaryText()
+                            },
+                            openMailIntegration: {
+                                withAnimation(Motion.springSnap) {
+                                    integrations.open(.gmail)
+                                }
+                            },
+                            searchMail: { query, mailbox, maxResults in
+                                try await gmailStore.searchForTool(
+                                    query: query,
+                                    mailbox: mailbox,
+                                    maxResults: maxResults
+                                )
+                            },
+                            readMailThread: { identifier in
+                                try await gmailStore.readThreadForTool(identifier: identifier)
+                            },
+                            draftMailReply: { identifier, body in
+                                try await gmailStore.draftReplyForTool(identifier: identifier, body: body)
                             },
                             saveAndOpenArtifact: { title, html in
                                 let url = try ArtifactStore.shared.save(title: title, html: html)
@@ -169,7 +189,11 @@ struct BrowserShellView: View {
             // Sits below the notification toasts so any incoming toast
             // still surfaces above it.
             if integrations.isPresented {
-                IntegrationsOverlay(model: integrations)
+                IntegrationsOverlay(
+                    model: integrations,
+                    gmailAccount: gmailAccount,
+                    gmailStore: gmailStore
+                )
                     .ignoresSafeArea()
                     .transition(.opacity)
                     .zIndex(1)
