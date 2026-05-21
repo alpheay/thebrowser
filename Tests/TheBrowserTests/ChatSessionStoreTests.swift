@@ -97,6 +97,87 @@ struct ChatSessionStoreTests {
         #expect(reloaded[1].toolChain.last?.artifactURL == artifactURL)
     }
 
+    @Test("save and load round-trips status + output for the assistant tool chain")
+    func toolChainStatusRoundTrips() {
+        let (store, root) = Self.makeIsolatedStore()
+        defer { Self.cleanup(root) }
+
+        let runningInvocation = ChatMessage.ToolInvocation(
+            tool: "search",
+            input: "ramen brooklyn",
+            status: .running
+        )
+        let completedInvocation = ChatMessage.ToolInvocation(
+            tool: "fetch",
+            input: "https://example.com",
+            status: .completed,
+            output: "Hello world."
+        )
+        let failedInvocation = ChatMessage.ToolInvocation(
+            tool: "open",
+            input: "::bad-url::",
+            status: .failed,
+            output: "Invalid URL."
+        )
+
+        let assistant = ChatMessage(
+            role: .assistant,
+            text: "Done.",
+            toolChain: [runningInvocation, completedInvocation, failedInvocation]
+        )
+        let context = BrowserPageContext(title: "T", url: "u")
+        store.save(messages: [assistant], sessionID: "status", pageContext: context)
+
+        let reloaded = store.load(sessionID: "status")
+        #expect(reloaded.count == 1)
+        let chain = reloaded[0].toolChain
+        #expect(chain.count == 3)
+        // Identity round-trips so the UI can keep stable @ForEach IDs
+        // even after a reload.
+        #expect(chain[0].id == runningInvocation.id)
+        #expect(chain[0].status == .running)
+        #expect(chain[1].status == .completed)
+        #expect(chain[1].output == "Hello world.")
+        #expect(chain[2].status == .failed)
+        #expect(chain[2].output == "Invalid URL.")
+    }
+
+    @Test("Legacy payloads with only `succeeded` map to completed / failed status")
+    func legacyStatusInference() throws {
+        let (store, root) = Self.makeIsolatedStore()
+        defer { Self.cleanup(root) }
+
+        // Pre-status payload: only `succeeded` and no `status` field.
+        let legacyJSON = """
+        {
+          "id" : "legacy-status",
+          "messages" : [
+            {
+              "role" : "assistant",
+              "text" : "Two old tools.",
+              "toolChain" : [
+                { "tool" : "open", "input" : "https://a.com", "succeeded" : true },
+                { "tool" : "search", "input" : "q", "succeeded" : false }
+              ]
+            }
+          ],
+          "pageTitle" : "T",
+          "pageURL" : "u",
+          "updatedAt" : "2026-05-10T12:00:00Z"
+        }
+        """
+        let dir = root.appendingPathComponent("legacy-status", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        try legacyJSON.data(using: .utf8)!.write(to: dir.appendingPathComponent("messages.json"))
+
+        let reloaded = store.load(sessionID: "legacy-status")
+        #expect(reloaded.count == 1)
+        let chain = reloaded[0].toolChain
+        #expect(chain.count == 2)
+        #expect(chain[0].status == .completed)
+        #expect(chain[1].status == .failed)
+    }
+
     @Test("Sessions saved before artifactURL existed still load (field is optional)")
     func legacyToolChainPayloadDecodes() throws {
         let (store, root) = Self.makeIsolatedStore()

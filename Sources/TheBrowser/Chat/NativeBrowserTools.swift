@@ -386,6 +386,159 @@ struct NativeBrowserToolCall: Equatable, Sendable {
     }
 }
 
+enum StreamingToolCallMask {
+    /// Returns the prefix of an in-progress streamed response that's safe
+    /// to show the user — strips any trailing JSON object that's likely
+    /// to be a tool call.
+    ///
+    /// Two cases are stripped:
+    ///   1. **In-progress JSON**: a `{` at the start of a line (or at
+    ///      the very start of the buffer, optionally preceded by
+    ///      whitespace) has been opened but not yet closed. Everything
+    ///      from that `{` onward is hidden so the model's
+    ///      mid-emission `"tool":"mail_se` doesn't flash in the bubble.
+    ///   2. **Completed trailing JSON**: a top-level JSON object that
+    ///      starts at a line boundary, closes, and is followed only by
+    ///      whitespace. This is a fully-typed tool call sitting at the
+    ///      end of the response — hide it.
+    ///
+    /// Embedded JSON (mid-prose `{example}` followed by more text) is
+    /// preserved unchanged — those aren't tool calls and stripping them
+    /// would damage the visible answer.
+    ///
+    /// The function tracks JSON string literals so braces inside quoted
+    /// values don't confuse the depth counter, and falls back to
+    /// returning the original input on malformed sequences (extra
+    /// closing braces) rather than over-trimming.
+    static func visiblePrefix(in text: String) -> String {
+        var depth = 0
+        var inString = false
+        var escaped = false
+        var lastTopLevelOpenIndex: String.Index? = nil
+
+        for index in text.indices {
+            let character = text[index]
+
+            if escaped {
+                escaped = false
+                continue
+            }
+            if inString {
+                if character == "\\" {
+                    escaped = true
+                } else if character == "\"" {
+                    inString = false
+                }
+                continue
+            }
+            if character == "\"" {
+                inString = true
+                continue
+            }
+            if character == "{" {
+                if depth == 0, isAtLineStart(text: text, index: index) {
+                    lastTopLevelOpenIndex = index
+                }
+                depth += 1
+            } else if character == "}" {
+                depth -= 1
+                if depth < 0 {
+                    // Malformed JSON balance — bail and show the input
+                    // unchanged. The post-stream parser will decide
+                    // whether anything in here is a real tool call.
+                    return text
+                }
+            }
+        }
+
+        guard let openIndex = lastTopLevelOpenIndex else {
+            return text
+        }
+
+        // Still inside the trailing JSON object — strip everything from
+        // its opening brace on. Covers the common "model is mid-typing
+        // the JSON" case.
+        if depth > 0 {
+            return cutPrefix(text, before: openIndex)
+        }
+
+        // Top-level object closed. Check that nothing non-whitespace
+        // follows its close — if there's trailing prose, treat the
+        // brace pair as embedded JSON (probably an example) and leave
+        // the buffer untouched.
+        guard let closeIndex = findMatchingClose(in: text, from: openIndex) else {
+            return text
+        }
+
+        let afterClose = text[text.index(after: closeIndex)..<text.endIndex]
+        if afterClose.contains(where: { !$0.isWhitespace }) {
+            return text
+        }
+
+        return cutPrefix(text, before: openIndex)
+    }
+
+    /// True when the run of characters immediately before `index` is
+    /// either empty, all whitespace, or contains a newline — i.e. the
+    /// `{` at `index` opens on a fresh line. This is how we
+    /// distinguish a tool-call-shaped JSON object from one embedded
+    /// mid-sentence ("`Use {example}` like this").
+    private static func isAtLineStart(text: String, index: String.Index) -> Bool {
+        var cursor = index
+        while cursor > text.startIndex {
+            cursor = text.index(before: cursor)
+            let character = text[cursor]
+            if character.isNewline { return true }
+            if !character.isWhitespace { return false }
+        }
+        return true
+    }
+
+    /// Returns the index of the `}` that closes the top-level JSON
+    /// object starting at `openIndex`. Falls back to `nil` for
+    /// malformed input.
+    private static func findMatchingClose(in text: String, from openIndex: String.Index) -> String.Index? {
+        var depth = 0
+        var inString = false
+        var escaped = false
+
+        for index in text[openIndex..<text.endIndex].indices {
+            let character = text[index]
+            if escaped { escaped = false; continue }
+            if inString {
+                if character == "\\" { escaped = true }
+                else if character == "\"" { inString = false }
+                continue
+            }
+            if character == "\"" { inString = true; continue }
+            if character == "{" { depth += 1 }
+            else if character == "}" {
+                depth -= 1
+                if depth == 0 { return index }
+                if depth < 0 { return nil }
+            }
+        }
+        return nil
+    }
+
+    /// Trims `text` to everything strictly before `cutoffIndex`, also
+    /// dropping any whitespace immediately preceding that point so the
+    /// visible body doesn't end in a dangling blank line where the
+    /// JSON used to sit.
+    private static func cutPrefix(_ text: String, before cutoffIndex: String.Index) -> String {
+        var cursor = cutoffIndex
+        while cursor > text.startIndex {
+            let previous = text.index(before: cursor)
+            if text[previous].isWhitespace {
+                cursor = previous
+            } else {
+                break
+            }
+        }
+        return String(text[text.startIndex..<cursor])
+    }
+}
+
 struct NativeBrowserToolResult: Equatable, Sendable {
     var call: NativeBrowserToolCall
     var succeeded: Bool
@@ -401,15 +554,31 @@ struct NativeBrowserToolResult: Equatable, Sendable {
     }
 
     /// The compact, UI-facing record of this tool call. Strips the prompt
-    /// transcript and just keeps the name, raw input, and outcome — enough
-    /// to render in the chat tool-chain row.
+    /// transcript and just keeps the name, raw input, outcome, and a
+    /// truncated copy of the captured output so the chat can show an
+    /// expandable detail card without holding the entire prompt
+    /// continuation in memory forever.
     var invocation: ChatMessage.ToolInvocation {
         ChatMessage.ToolInvocation(
             tool: call.name.rawValue,
             input: call.rawInput,
-            succeeded: succeeded,
+            status: succeeded ? .completed : .failed,
+            output: invocationDisplayOutput,
             artifactURL: artifactURL
         )
+    }
+
+    /// 4 KB-ish snapshot of the captured tool output, with leading/trailing
+    /// whitespace trimmed. Long results are clipped with an ellipsis so the
+    /// session JSON doesn't explode when a fetch returns a 200 KB document.
+    private var invocationDisplayOutput: String? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let limit = 4_000
+        if trimmed.count <= limit {
+            return trimmed
+        }
+        return String(trimmed.prefix(limit)) + "\n…\n[Output truncated. \(trimmed.count) characters total.]"
     }
 }
 
@@ -530,9 +699,10 @@ enum NativeBrowserToolPrompt {
 
     CRITICAL tool-call rules — follow these or the dispatcher will treat your tool call as plain chat text and the action will silently fail:
     1. EXACTLY ONE tool call per response. Never emit two JSON objects in the same response. If you need read_tabs THEN create_artifact, emit only the read_tabs call now and wait for the result before emitting create_artifact in your next turn.
-    2. ZERO prose in a tool-call response. No leading sentence, no trailing summary, no explanation, no markdown headings. The entire response must be the bare JSON object.
-    3. The response MUST start with `{` and END with `}`. Anything else is treated as a normal chat answer.
-    4. When you need to describe what a tool does to the user, use plain English. Do not paste JSON examples into chat answers.
+    2. A short one-line commentary BEFORE the JSON is OK and encouraged on chained turns — it helps the user understand what you're doing between tools (e.g. "Now checking your inbox." then the JSON on the next line). Keep it under one sentence. If you have nothing useful to say, omit the commentary and emit just the JSON.
+    3. The JSON tool call MUST be the LAST thing in your response, on its own line(s), starting with `{` and ending with `}`. Anything written AFTER the closing `}` will be treated as a normal chat answer and your tool call will silently fail.
+    4. No trailing summary, no "let me know if that worked", no markdown headings. The JSON object must end the response.
+    5. When you need to describe what a tool does to the user, use plain English. Do not paste JSON examples into chat answers.
 
     Use a tool only when it helps the user's request. If the user asks you to open or navigate to a site, use the open tool instead of saying you will do it. Use web_control for live interactions that require clicking, typing, pressing keys, scrolling, or reading dynamic page state. If no tool is needed, answer normally. Never say a browser action happened unless a native tool result in this conversation says it succeeded. Do not claim you managed bookmarks/history/settings or inspected hidden page state.
 

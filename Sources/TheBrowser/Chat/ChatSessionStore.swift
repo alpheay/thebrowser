@@ -114,9 +114,12 @@ final class ChatSessionStore {
                         ? nil
                         : msg.toolChain.map {
                             ToolInvocationPayload(
+                                id: $0.id.uuidString,
                                 tool: $0.tool,
                                 input: $0.input,
                                 succeeded: $0.succeeded,
+                                status: $0.status.persistedValue,
+                                output: $0.output,
                                 artifactURL: $0.artifactURL?.absoluteString
                             )
                         },
@@ -193,9 +196,14 @@ final class ChatSessionStore {
             guard let role = ChatMessage.Role(persistedValue: item.role) else { return nil }
             let chain = (item.toolChain ?? []).map {
                 ChatMessage.ToolInvocation(
+                    id: $0.id.flatMap(UUID.init(uuidString:)) ?? UUID(),
                     tool: $0.tool,
                     input: $0.input,
-                    succeeded: $0.succeeded,
+                    status: ChatMessage.ToolInvocation.Status(
+                        persistedValue: $0.status,
+                        legacySucceeded: $0.succeeded
+                    ),
+                    output: $0.output,
                     artifactURL: $0.artifactURL.flatMap(URL.init(string:))
                 )
             }
@@ -231,9 +239,18 @@ final class ChatSessionStore {
     }
 
     private struct ToolInvocationPayload: Codable {
+        /// Optional so files written before the in-flight harness landed
+        /// (which had no stable identity for tool entries) still decode
+        /// cleanly. New writes always supply a uuid string.
+        var id: String?
         var tool: String
         var input: String
+        /// Kept for back-compat with older session files. New writes set
+        /// both `succeeded` (true iff status == completed) and `status`
+        /// (the canonical persisted form).
         var succeeded: Bool
+        var status: String?
+        var output: String?
         var artifactURL: String?
     }
 
@@ -260,6 +277,29 @@ extension ChatMessage.Role {
         case "assistant": self = .assistant
         case "system": self = .system
         default: return nil
+        }
+    }
+}
+
+extension ChatMessage.ToolInvocation.Status {
+    var persistedValue: String {
+        switch self {
+        case .running: return "running"
+        case .completed: return "completed"
+        case .failed: return "failed"
+        }
+    }
+
+    /// Resolves the canonical status when loading a session file that may
+    /// have been written before the status field existed. Modern files
+    /// carry a `status` string; older files only have `succeeded: Bool`,
+    /// which gets mapped onto `.completed` / `.failed`.
+    init(persistedValue: String?, legacySucceeded: Bool) {
+        switch persistedValue {
+        case "running": self = .running
+        case "completed": self = .completed
+        case "failed": self = .failed
+        default: self = legacySucceeded ? .completed : .failed
         }
     }
 }
