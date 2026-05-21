@@ -401,15 +401,31 @@ struct NativeBrowserToolResult: Equatable, Sendable {
     }
 
     /// The compact, UI-facing record of this tool call. Strips the prompt
-    /// transcript and just keeps the name, raw input, and outcome — enough
-    /// to render in the chat tool-chain row.
+    /// transcript and just keeps the name, raw input, outcome, and a
+    /// truncated copy of the captured output so the chat can show an
+    /// expandable detail card without holding the entire prompt
+    /// continuation in memory forever.
     var invocation: ChatMessage.ToolInvocation {
         ChatMessage.ToolInvocation(
             tool: call.name.rawValue,
             input: call.rawInput,
-            succeeded: succeeded,
+            status: succeeded ? .completed : .failed,
+            output: invocationDisplayOutput,
             artifactURL: artifactURL
         )
+    }
+
+    /// 4 KB-ish snapshot of the captured tool output, with leading/trailing
+    /// whitespace trimmed. Long results are clipped with an ellipsis so the
+    /// session JSON doesn't explode when a fetch returns a 200 KB document.
+    private var invocationDisplayOutput: String? {
+        let trimmed = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let limit = 4_000
+        if trimmed.count <= limit {
+            return trimmed
+        }
+        return String(trimmed.prefix(limit)) + "\n…\n[Output truncated. \(trimmed.count) characters total.]"
     }
 }
 

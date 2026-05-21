@@ -9,16 +9,57 @@ struct ChatMessage: Identifiable, Equatable {
     }
 
     /// One link in the tool chain for an assistant turn. Captures the tool
-    /// the model invoked, the argument it passed (URL or query), and whether
-    /// the call succeeded — enough to render a compact provenance trail in
-    /// the chat without re-running the call. `artifactURL` is set only for
-    /// successful `create_artifact` calls so the chip can re-open or focus
-    /// the saved file.
+    /// the model invoked, the argument it passed (URL or query), the
+    /// current status of the call, and an optional snippet of the captured
+    /// output so the chip can be expanded into a detail card without
+    /// re-running the call. `artifactURL` is set only for successful
+    /// `create_artifact` calls so the chip can re-open the saved file.
     struct ToolInvocation: Equatable, Hashable {
+        enum Status: Equatable, Hashable {
+            case running
+            case completed
+            case failed
+        }
+
+        var id = UUID()
         var tool: String
         var input: String
-        var succeeded: Bool
+        var status: Status
+        var output: String? = nil
         var artifactURL: URL? = nil
+
+        /// Back-compat read-only accessor — most call sites still ask
+        /// "did this tool succeed?" rather than the full status.
+        var succeeded: Bool { status == .completed }
+
+        init(
+            id: UUID = UUID(),
+            tool: String,
+            input: String,
+            status: Status,
+            output: String? = nil,
+            artifactURL: URL? = nil
+        ) {
+            self.id = id
+            self.tool = tool
+            self.input = input
+            self.status = status
+            self.output = output
+            self.artifactURL = artifactURL
+        }
+
+        /// Convenience initializer kept for historical call sites that
+        /// pass `succeeded: Bool` directly. Maps it to the new status
+        /// enum so the rest of the harness can rely on `status`.
+        init(tool: String, input: String, succeeded: Bool, artifactURL: URL? = nil) {
+            self.init(
+                tool: tool,
+                input: input,
+                status: succeeded ? .completed : .failed,
+                output: nil,
+                artifactURL: artifactURL
+            )
+        }
     }
 
     let id = UUID()
@@ -26,6 +67,15 @@ struct ChatMessage: Identifiable, Equatable {
     var text: String
     var toolChain: [ToolInvocation] = []
     var attachments: [ChatAttachment] = []
+    /// True while this message represents the in-flight assistant turn —
+    /// text is partial, tools may still be running. The UI uses this to
+    /// show streaming affordances (cursor, shimmer footer, etc.) and to
+    /// suppress decorations like the copy button until the turn finishes.
+    var isStreaming: Bool = false
+    /// Short contextual label rendered alongside the streaming shimmer
+    /// ("Running mail_search…", "Reading 2 tabs…"). Cleared when the turn
+    /// is fully resolved.
+    var statusLabel: String? = nil
 }
 
 /// A snippet of page text the user clipped via the in-page selection widget
@@ -82,6 +132,14 @@ struct ChatAttachment: Identifiable, Equatable, Hashable {
 @MainActor
 final class ChatViewModel: ObservableObject {
     @Published var messages: [ChatMessage] = []
+    /// The in-flight assistant turn. Rendered as the bottom-most bubble
+    /// while a reply is being produced; mutated in place as text streams
+    /// in and tool calls fire, then moved into `messages` once finalized.
+    /// Keeping it out-of-band from `messages` lets the UI distinguish
+    /// finalized rows (markdown, copy button, no spinner) from the live
+    /// row (status footer, in-progress tool chips, suppressed copy
+    /// button) without sprinkling `isStreaming` checks across the list.
+    @Published var liveMessage: ChatMessage?
     @Published var draft = ""
     @Published var isSending = false
     @Published var focusComposerToken = 0
@@ -95,6 +153,12 @@ final class ChatViewModel: ObservableObject {
 
     private let client = AIProviderClient()
     private let store = ChatSessionStore.shared
+    /// The Swift Task currently driving the agent loop, plus the
+    /// AgentRunHandle that lets us kill its subprocess. Both are non-nil
+    /// while a turn is in flight; tearing them down (or being torn down
+    /// by `cancelCurrent`) finalizes the live message.
+    private var currentTask: Task<Void, Never>?
+    private var currentRunHandle: AgentRunHandle?
 
     init() {
         self.sessionID = ChatSessionStore.shared.newSessionID()
@@ -285,64 +349,397 @@ final class ChatViewModel: ObservableObject {
         draft = ""
         draftPreset = nil
         isSending = true
+        // Spin up the live in-flight bubble immediately so the user sees
+        // the agent "engage" before the first CLI subprocess returns.
+        liveMessage = ChatMessage(
+            role: .assistant,
+            text: "",
+            toolChain: [],
+            isStreaming: true,
+            statusLabel: AgentStatusLabel.thinking
+        )
         persist(context: context)
 
         if directMailCommandRequested && directToolCall == nil {
-            messages.append(ChatMessage(role: .assistant, text: DirectNativeToolCommand.helpText))
+            // /mail_<unknown> — fall back to the inline help text, which
+            // can finalize the live bubble synchronously.
+            finalizeLiveMessage(text: DirectNativeToolCommand.helpText, context: context)
             isSending = false
-            persist(context: context)
             return
         }
 
         if let directToolCall {
-            Task {
-                let result = await nativeTools.execute(directToolCall)
-                messages.append(ChatMessage(
-                    role: .assistant,
-                    text: result.content,
-                    toolChain: [result.invocation]
-                ))
-                isSending = false
-                persist(context: context)
-            }
+            runDirectToolTurn(directToolCall, context: context, nativeTools: nativeTools)
             return
         }
 
+        runAgentTurn(
+            promptText: promptText,
+            context: context,
+            history: messages,
+            tabs: tabs,
+            attachments: attachmentsForTurn,
+            smartReadActive: smartReadActive,
+            nativeTools: nativeTools
+        )
+    }
+
+    /// Stop button handler. Flips the run handle (which terminates any
+    /// CLI subprocess currently in flight) and cancels the Swift Task —
+    /// the loop will catch the cancellation at its next checkpoint and
+    /// finalize the live message in `cancelled` state.
+    func cancelCurrent() {
+        guard isSending else { return }
+        currentRunHandle?.cancel()
+        currentTask?.cancel()
+    }
+
+    /// Direct-tool path (e.g. `/mail_search inbox newer_than:7d`): runs
+    /// one tool natively, surfaces its progress through the same live
+    /// bubble the model-driven path uses, then finalizes.
+    private func runDirectToolTurn(
+        _ call: NativeBrowserToolCall,
+        context: BrowserPageContext,
+        nativeTools: NativeBrowserToolExecutor
+    ) {
+        let handle = AgentRunHandle()
+        currentRunHandle = handle
+
+        currentTask = Task { @MainActor in
+            defer {
+                self.currentTask = nil
+                self.currentRunHandle = nil
+                self.isSending = false
+                self.persist(context: context)
+            }
+
+            // Begin the tool chip in the live bubble so the user sees it
+            // light up before the tool finishes.
+            beginLiveTool(call: call)
+
+            if handle.isCancelled || Task.isCancelled {
+                completeLiveTool(status: .failed, output: "Stopped.")
+                finalizeLiveMessage(
+                    text: "Stopped.",
+                    context: context,
+                    role: .system
+                )
+                return
+            }
+
+            let result = await nativeTools.execute(call)
+            completeLiveTool(
+                status: result.succeeded ? .completed : .failed,
+                output: result.invocation.output,
+                artifactURL: result.invocation.artifactURL
+            )
+            finalizeLiveMessage(text: result.content, context: context)
+        }
+    }
+
+    /// Model-driven agentic loop. Each iteration:
+    ///   1. Runs the CLI to get the next assistant response.
+    ///   2. Parses the response for a JSON tool call.
+    ///   3. If a tool call: executes it live, appends results, continues.
+    ///   4. If not: finalizes the live message with the response text.
+    /// The loop bounds at `maxAgentIterations`; cancellation can interrupt
+    /// any await point.
+    private func runAgentTurn(
+        promptText: String,
+        context: BrowserPageContext,
+        history: [ChatMessage],
+        tabs: [TabManifestEntry],
+        attachments: [ChatAttachment],
+        smartReadActive: Bool,
+        nativeTools: NativeBrowserToolExecutor
+    ) {
         let directory = sessionDirectory
-        let history = messages
         let configuration = AIHarnessConfiguration.current()
-        let prompt = AIProviderClient.prompt(
+        let basePrompt = AIProviderClient.prompt(
             for: promptText,
             context: context,
             history: history,
             configuration: configuration,
             tabs: tabs,
-            attachments: attachmentsForTurn,
+            attachments: attachments,
             smartReadActive: smartReadActive
         )
 
-        Task {
-            do {
-                let response = try await askWithRetry(prompt: prompt, sessionDirectory: directory)
-                let (finalResponse, toolChain) = try await resolveNativeBrowserTools(
-                    initialResponse: response,
-                    basePrompt: prompt,
-                    sessionDirectory: directory,
-                    nativeTools: nativeTools
-                )
-                messages.append(ChatMessage(role: .assistant, text: finalResponse, toolChain: toolChain))
-            } catch {
-                let message = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
-                messages.append(ChatMessage(role: .system, text: message))
+        let handle = AgentRunHandle()
+        currentRunHandle = handle
+
+        currentTask = Task { @MainActor in
+            defer {
+                self.currentTask = nil
+                self.currentRunHandle = nil
+                self.isSending = false
+                self.persist(context: context)
             }
 
-            isSending = false
-            persist(context: context)
+            var collectedResults: [NativeBrowserToolResult] = []
+            var currentPrompt = basePrompt
+
+            do {
+                for iteration in 0..<maxAgentIterations {
+                    if handle.isCancelled || Task.isCancelled {
+                        throw AIProviderError.cancelled
+                    }
+
+                    // Snapshot whatever prose the bubble already shows
+                    // before this iteration runs — if it turns out to be
+                    // a tool call we'll rewind to here so the JSON
+                    // doesn't pollute the visible chat.
+                    let liveTextBeforeIteration = liveMessage?.text ?? ""
+
+                    setLiveStatus(AgentStatusLabel.thinking)
+                    let response = try await streamIteration(
+                        prompt: currentPrompt,
+                        sessionDirectory: directory,
+                        runHandle: handle,
+                        supportsStreaming: configuration.supportsStreamingEvents
+                    )
+
+                    if handle.isCancelled || Task.isCancelled {
+                        throw AIProviderError.cancelled
+                    }
+
+                    // No tool call in the response — this is the final
+                    // model utterance for the turn. Whatever text the
+                    // streamer already pushed into `liveMessage.text`
+                    // matches `response`, so finalize as-is.
+                    guard let call = NativeBrowserToolCall.parse(from: response) else {
+                        finalizeLiveMessage(text: response, context: context)
+                        return
+                    }
+
+                    // Tool call: roll the streamed iteration text back
+                    // off the live bubble — JSON tool calls aren't user-
+                    // facing prose. Any text from PRIOR iterations is
+                    // preserved.
+                    rewindLiveText(priorText: liveTextBeforeIteration)
+
+                    // Surface the tool as `.running` immediately so the
+                    // user sees the chip light up before the work starts.
+                    beginLiveTool(call: call)
+
+                    let result = await nativeTools.execute(call)
+                    collectedResults.append(result)
+                    completeLiveTool(
+                        status: result.succeeded ? .completed : .failed,
+                        output: result.invocation.output,
+                        artifactURL: result.invocation.artifactURL
+                    )
+
+                    if iteration == maxAgentIterations - 1 {
+                        // We hit the ceiling without a final answer. Show
+                        // the last tool's text so the user can at least
+                        // see what the agent was producing.
+                        let trailer = "I used several browser tools and stopped to avoid looping.\n\n\(result.promptText)"
+                        finalizeLiveMessage(text: trailer, context: context)
+                        return
+                    }
+
+                    currentPrompt = NativeBrowserToolPrompt.continuationPrompt(
+                        basePrompt: basePrompt,
+                        results: collectedResults
+                    )
+                }
+            } catch AIProviderError.cancelled {
+                rollbackInflightTool()
+                let partial = liveMessage?.text ?? ""
+                finalizeLiveMessage(
+                    text: partial.isEmpty ? "Stopped." : partial,
+                    context: context,
+                    role: partial.isEmpty ? .system : .assistant
+                )
+            } catch {
+                rollbackInflightTool()
+                let description = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                finalizeLiveMessage(text: description, context: context, role: .system)
+            }
         }
     }
 
+    /// Pushes a `.running` tool chip into the live bubble. Status label
+    /// flips to the tool-specific phrasing so the shimmer matches.
+    private func beginLiveTool(call: NativeBrowserToolCall) {
+        guard var live = liveMessage else { return }
+        live.toolChain.append(ChatMessage.ToolInvocation(
+            tool: call.name.rawValue,
+            input: call.rawInput,
+            status: .running
+        ))
+        live.statusLabel = AgentStatusLabel.forActiveTool(call)
+        liveMessage = live
+    }
+
+    /// Resolves the last `.running` tool chip with its captured output.
+    /// Falls back to a no-op if the chain is empty (shouldn't happen, but
+    /// keeps the harness defensive against weird race conditions).
+    private func completeLiveTool(
+        status: ChatMessage.ToolInvocation.Status,
+        output: String?,
+        artifactURL: URL? = nil
+    ) {
+        guard var live = liveMessage, !live.toolChain.isEmpty else { return }
+        let lastIndex = live.toolChain.count - 1
+        live.toolChain[lastIndex].status = status
+        live.toolChain[lastIndex].output = output
+        live.toolChain[lastIndex].artifactURL = artifactURL
+        liveMessage = live
+    }
+
+    /// Marks any trailing `.running` tool entry as `.failed`. Used on the
+    /// cancellation / error path so the chip doesn't get frozen in its
+    /// spinner state when the turn unwinds.
+    private func rollbackInflightTool() {
+        guard var live = liveMessage, !live.toolChain.isEmpty else { return }
+        let lastIndex = live.toolChain.count - 1
+        if live.toolChain[lastIndex].status == .running {
+            live.toolChain[lastIndex].status = .failed
+            live.toolChain[lastIndex].output = "Stopped."
+        }
+        liveMessage = live
+    }
+
+    private func setLiveStatus(_ label: String?) {
+        guard var live = liveMessage else { return }
+        live.statusLabel = label
+        liveMessage = live
+    }
+
+    /// One iteration of the agent loop. For providers that support
+    /// `--output-format stream-json` (currently just Claude), text
+    /// deltas are forwarded into `liveMessage.text` as they arrive so
+    /// the bubble fills in live. For non-streaming providers (Codex),
+    /// the full response surfaces as a single block once the call
+    /// completes, identical to the old behavior.
+    private func streamIteration(
+        prompt: String,
+        sessionDirectory: URL,
+        runHandle: AgentRunHandle,
+        supportsStreaming: Bool
+    ) async throws -> String {
+        if supportsStreaming {
+            return try await streamingAsk(
+                prompt: prompt,
+                sessionDirectory: sessionDirectory,
+                runHandle: runHandle
+            )
+        }
+        return try await askWithRetry(
+            prompt: prompt,
+            sessionDirectory: sessionDirectory,
+            runHandle: runHandle
+        )
+    }
+
+    /// Drives `client.askStream` while pushing each text delta into the
+    /// live bubble. Returns the authoritative final text — usually the
+    /// same as the concatenated deltas, but the consumer trusts the
+    /// `.result` payload so we don't have to parse mid-stream.
+    ///
+    /// Retries are intentionally NOT layered on top of the streaming
+    /// path: a partial mid-stream response is too messy to recover from
+    /// cleanly (we'd have to rewind the visible text, retry, and hope
+    /// the second response matches). Streaming is best-effort fast-path;
+    /// the askWithRetry fallback covers the cases that matter.
+    private func streamingAsk(
+        prompt: String,
+        sessionDirectory: URL,
+        runHandle: AgentRunHandle
+    ) async throws -> String {
+        var accumulated = ""
+        let stream = client.askStream(
+            prompt: prompt,
+            sessionDirectory: sessionDirectory,
+            runHandle: runHandle
+        )
+
+        for try await event in stream {
+            if runHandle.isCancelled || Task.isCancelled {
+                throw AIProviderError.cancelled
+            }
+            switch event {
+            case .textDelta(let chunk):
+                accumulated += chunk
+                appendLiveTextChunk(chunk)
+            case .result(let finalText):
+                // Final authoritative answer. If it differs from the
+                // accumulated stream (rare — usually only because the
+                // result includes trailing whitespace), reconcile.
+                if finalText != accumulated {
+                    overwriteLiveText(finalText)
+                }
+                return finalText
+            }
+        }
+
+        // Stream ended without a `.result` event — fall back to whatever
+        // we accumulated. Empty here means the provider returned nothing
+        // usable; surface that as an empty-response error so the loop's
+        // catch handler can show a system pill.
+        if accumulated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw AIProviderError.emptyResponse
+        }
+        return accumulated
+    }
+
+    private func appendLiveTextChunk(_ chunk: String) {
+        guard var live = liveMessage else { return }
+        live.text += chunk
+        liveMessage = live
+    }
+
+    private func overwriteLiveText(_ text: String) {
+        guard var live = liveMessage else { return }
+        live.text = text
+        liveMessage = live
+    }
+
+    /// Drops back to the text the bubble showed before the current
+    /// iteration started. Used when an iteration turns out to be a JSON
+    /// tool call rather than user-facing prose — the streamed JSON
+    /// shouldn't linger in the visible chat.
+    private func rewindLiveText(priorText: String) {
+        guard var live = liveMessage else { return }
+        live.text = priorText
+        liveMessage = live
+    }
+
+    /// Commits the in-flight bubble: clears its streaming flag and status
+    /// row, sets the final text, and moves it into `messages`. Passing
+    /// `role: .system` instead surfaces the text as a system pill (used
+    /// for harness errors and quiet cancellation messages).
+    private func finalizeLiveMessage(
+        text: String,
+        context: BrowserPageContext,
+        role: ChatMessage.Role = .assistant
+    ) {
+        let toolChain = liveMessage?.toolChain ?? []
+        let attachments = liveMessage?.attachments ?? []
+        // For system messages we drop the tool chain — the system pill is
+        // just a one-liner ("Stopped." or "Claude exited with status 1");
+        // the partial tool chain (if any) was either already shown live
+        // and rolled back, or wasn't relevant to the failure.
+        let finalized = ChatMessage(
+            role: role,
+            text: text,
+            toolChain: role == .assistant ? toolChain : [],
+            attachments: attachments,
+            isStreaming: false,
+            statusLabel: nil
+        )
+        liveMessage = nil
+        messages.append(finalized)
+    }
+
     func clear() {
+        // If a turn is mid-flight, kill it first so its task can't write
+        // back into the next conversation's live bubble after we wipe.
+        cancelCurrent()
         messages.removeAll()
+        liveMessage = nil
         draft = ""
         draftPreset = nil
         pendingAttachments.removeAll()
@@ -357,6 +754,7 @@ final class ChatViewModel: ObservableObject {
         persist(context: context)
         self.sessionID = sessionID
         self.messages = store.load(sessionID: sessionID)
+        self.liveMessage = nil
         self.draft = ""
     }
 
@@ -368,41 +766,10 @@ final class ChatViewModel: ObservableObject {
         store.save(messages: messages, sessionID: sessionID, pageContext: context)
     }
 
-    private func resolveNativeBrowserTools(
-        initialResponse: String,
-        basePrompt: String,
-        sessionDirectory: URL,
-        nativeTools: NativeBrowserToolExecutor
-    ) async throws -> (text: String, toolChain: [ChatMessage.ToolInvocation]) {
-        var response = initialResponse
-        var results: [NativeBrowserToolResult] = []
-
-        for _ in 0..<4 {
-            guard let call = NativeBrowserToolCall.parse(from: response) else {
-                return (response, results.map(\.invocation))
-            }
-
-            let result = await nativeTools.execute(call)
-            results.append(result)
-
-            let continuation = NativeBrowserToolPrompt.continuationPrompt(
-                basePrompt: basePrompt,
-                results: results
-            )
-            response = try await askWithRetry(prompt: continuation, sessionDirectory: sessionDirectory)
-        }
-
-        let chain = results.map(\.invocation)
-        if let last = results.last {
-            return ("I used several browser tools and stopped to avoid looping.\n\n\(last.promptText)", chain)
-        }
-
-        return (response, chain)
-    }
-
     private func askWithRetry(
         prompt: String,
         sessionDirectory: URL,
+        runHandle: AgentRunHandle? = nil,
         attempts: Int = 2
     ) async throws -> String {
         var latestError: Error?
@@ -410,7 +777,11 @@ final class ChatViewModel: ObservableObject {
 
         for attempt in 1...max(attempts, 1) {
             do {
-                return try await client.ask(prompt: currentPrompt, sessionDirectory: sessionDirectory)
+                return try await client.ask(
+                    prompt: currentPrompt,
+                    sessionDirectory: sessionDirectory,
+                    runHandle: runHandle
+                )
             } catch {
                 latestError = error
                 guard attempt < attempts, shouldRetry(error) else { break }
@@ -434,6 +805,9 @@ final class ChatViewModel: ObservableObject {
         case .processFailed:
             return true
         case .missingExecutable:
+            return false
+        case .cancelled:
+            // Don't retry cancellation — the user explicitly asked to stop.
             return false
         }
     }
@@ -544,7 +918,10 @@ struct AIChatPanel: View {
 
     @ViewBuilder
     private var content: some View {
-        if smartReadModel.isPresented || !viewModel.messages.isEmpty || viewModel.isSending {
+        if smartReadModel.isPresented
+            || !viewModel.messages.isEmpty
+            || viewModel.liveMessage != nil
+            || viewModel.isSending {
             messageList
         } else {
             EmptyChatState(
@@ -593,16 +970,21 @@ struct AIChatPanel: View {
                             ))
                     }
 
-                    if viewModel.isSending {
-                        ThinkingShimmer()
-                            .id("thinking")
-                            .transition(.opacity)
+                    if let live = viewModel.liveMessage {
+                        LiveAssistantMessage(
+                            message: live,
+                            showToolChain: showToolChain,
+                            onOpenArtifact: onOpenArtifact
+                        )
+                        .id("live-message")
+                        .transition(.opacity)
                     }
                 }
                 .padding(.horizontal, 16)
                 .padding(.vertical, 18)
                 .animation(Motion.springSoft, value: viewModel.messages.count)
-                .animation(Motion.springSoft, value: viewModel.isSending)
+                .animation(Motion.springSoft, value: viewModel.liveMessage?.toolChain.count ?? 0)
+                .animation(Motion.springSoft, value: viewModel.liveMessage?.statusLabel ?? "")
                 .animation(Motion.springSnap, value: smartReadModel.isPresented)
                 .animation(Motion.springSnap, value: smartReadModel.phase)
             }
@@ -615,11 +997,19 @@ struct AIChatPanel: View {
                     }
                 }
             }
-            .onChange(of: viewModel.isSending) { _, isSending in
-                if isSending {
+            .onChange(of: viewModel.liveMessage?.toolChain.count ?? 0) { _, _ in
+                if viewModel.liveMessage != nil {
                     withAnimation(Motion.springSoft) {
-                        proxy.scrollTo("thinking", anchor: .bottom)
+                        proxy.scrollTo("live-message", anchor: .bottom)
                     }
+                }
+            }
+            .onChange(of: viewModel.liveMessage == nil) { _, isHidden in
+                guard isHidden else {
+                    withAnimation(Motion.springSoft) {
+                        proxy.scrollTo("live-message", anchor: .bottom)
+                    }
+                    return
                 }
             }
         }
@@ -687,12 +1077,19 @@ struct AIChatPanel: View {
                         provider: provider,
                         showingPicker: $showingModelPicker
                     )
-                    SendButton(
-                        enabled: canSend,
-                        sending: viewModel.isSending,
-                        action: sendCurrent
-                    )
+                    if viewModel.isSending {
+                        StopButton(action: viewModel.cancelCurrent)
+                            .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                    } else {
+                        SendButton(
+                            enabled: canSend,
+                            sending: false,
+                            action: sendCurrent
+                        )
+                        .transition(.opacity.combined(with: .scale(scale: 0.85)))
+                    }
                 }
+                .animation(Motion.springSnap, value: viewModel.isSending)
             }
         }
         .padding(14)
@@ -1127,9 +1524,11 @@ private struct AssistantMessage: View {
                 ToolChainView(invocations: toolChain, onOpenArtifact: onOpenArtifact)
             }
 
-            MarkdownView(text: text)
+            if !text.isEmpty {
+                MarkdownView(text: text)
+            }
 
-            if isHovering {
+            if isHovering && !text.isEmpty {
                 CopyButton(text: text)
                     .transition(.opacity.combined(with: .offset(y: -3)))
             }
@@ -1141,103 +1540,248 @@ private struct AssistantMessage: View {
     }
 }
 
+/// In-flight version of `AssistantMessage`: same tool chain styling, but
+/// with a footer status row that shimmer-shows the current activity ("Thinking…",
+/// "Reading inbox…", …) and suppresses the copy button while the turn is
+/// still producing output.
+private struct LiveAssistantMessage: View {
+    var message: ChatMessage
+    var showToolChain: Bool
+    var onOpenArtifact: (URL) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if showToolChain && !message.toolChain.isEmpty {
+                ToolChainView(
+                    invocations: message.toolChain,
+                    onOpenArtifact: onOpenArtifact
+                )
+            }
+
+            if !message.text.isEmpty {
+                MarkdownView(text: message.text)
+            }
+
+            // Footer row sits below whatever the assistant has produced
+            // so it tracks the bottom of the conversation: tools above,
+            // status shimmer beneath.
+            HStack(spacing: 6) {
+                StreamingCursor()
+                ShimmerText(message.statusLabel ?? AgentStatusLabel.thinking)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// Pulsing white dot that sits in front of the streaming status text.
+/// Same "alive" affordance as a terminal cursor — gives the live bubble
+/// a heartbeat when nothing else is moving on the screen.
+private struct StreamingCursor: View {
+    @State private var on = false
+
+    var body: some View {
+        Circle()
+            .fill(Palette.textPrimary)
+            .frame(width: 5, height: 5)
+            .opacity(on ? 1 : 0.35)
+            .scaleEffect(on ? 1.0 : 0.7)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.8).repeatForever(autoreverses: true)) {
+                    on = true
+                }
+            }
+    }
+}
+
 // MARK: - Tool chain
 
-/// Sequenced chain of native browser tool calls the model fired off for an
-/// assistant turn. Rendered above the answer text as a row of compact chips
-/// linked by a hairline chevron — the visual emphasis is on the trail, not
-/// the individual chips, so they all share the same neutral palette as the
-/// surrounding chrome.
+/// Vertical stack of native browser tool calls the model fired off for
+/// an assistant turn. Each call renders as an expandable card showing
+/// the tool name, input, current status (spinner / check / x), and —
+/// when expanded — the full captured output. Replaces the older compact
+/// chip row so the user can audit what the agent did without having to
+/// hover individual chips for tooltips.
 private struct ToolChainView: View {
     let invocations: [ChatMessage.ToolInvocation]
     var onOpenArtifact: (URL) -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("TOOL CHAIN")
-                .font(.system(size: 9, weight: .semibold))
-                .tracking(1.4)
-                .foregroundStyle(Palette.textFaint)
-
-            HStack(alignment: .center, spacing: 5) {
-                ForEach(Array(invocations.enumerated()), id: \.offset) { index, invocation in
-                    if index > 0 {
-                        Image(systemName: "chevron.right")
-                            .font(.system(size: 8, weight: .semibold))
-                            .foregroundStyle(Palette.textFaint)
-                    }
-                    ToolChainChip(invocation: invocation, onOpenArtifact: onOpenArtifact)
-                }
+            ForEach(Array(invocations.enumerated()), id: \.offset) { index, invocation in
+                ToolCallCard(
+                    invocation: invocation,
+                    index: index + 1,
+                    isLast: index == invocations.count - 1,
+                    onOpenArtifact: onOpenArtifact
+                )
             }
         }
     }
 }
 
-private struct ToolChainChip: View {
+/// Expandable card for a single tool call. Header is always visible —
+/// icon, label, compact input, status indicator. Tapping the header
+/// toggles a detail panel that shows the full raw input and the
+/// captured output text (truncated upstream in NativeBrowserToolResult).
+private struct ToolCallCard: View {
     let invocation: ChatMessage.ToolInvocation
+    let index: Int
+    let isLast: Bool
     var onOpenArtifact: (URL) -> Void
 
+    @State private var expanded = false
     @State private var isHovering = false
 
     var body: some View {
-        if let artifactURL, isClickable {
-            Button {
-                onOpenArtifact(artifactURL)
-            } label: {
-                chipBody
-            }
-            .buttonStyle(.plain)
-            .onHover { hovering in
-                withAnimation(Motion.hoverFade) { isHovering = hovering }
-                if hovering {
-                    NSCursor.pointingHand.push()
-                } else {
-                    NSCursor.pop()
+        VStack(alignment: .leading, spacing: 0) {
+            header
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if isArtifactCard {
+                        if let artifactURL = invocation.artifactURL {
+                            onOpenArtifact(artifactURL)
+                        }
+                    } else if canExpand {
+                        withAnimation(Motion.springSnap) { expanded.toggle() }
+                    }
                 }
-            }
-            .help(helpText)
-        } else {
-            chipBody
-                .help(helpText)
-        }
-    }
 
-    private var chipBody: some View {
-        HStack(spacing: 5) {
-            Image(systemName: iconName)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(invocation.succeeded ? Palette.textSecondary : Palette.textMuted)
-
-            Text(label)
-                .font(.system(size: 10.5, weight: .semibold))
-                .foregroundStyle(Palette.textPrimary)
-
-            if !displayInput.isEmpty {
-                Text(displayInput)
-                    .font(.system(size: 10.5, weight: .regular, design: .monospaced))
-                    .foregroundStyle(Palette.textMuted)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
+            if expanded {
+                detailPanel
+                    .transition(.asymmetric(
+                        insertion: .opacity.combined(with: .offset(y: -4)),
+                        removal: .opacity
+                    ))
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 4)
         .background {
-            Capsule().fill(isHovering ? Palette.surfaceHover : Palette.surface)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(isHovering ? Palette.surfaceHover : Palette.surface)
         }
         .overlay {
-            Capsule().stroke(isHovering ? Palette.strokeStrong : Palette.stroke, lineWidth: 1)
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .stroke(isLast && invocation.status == .running ? Palette.strokeStrong : Palette.stroke, lineWidth: 1)
         }
-        .contentShape(Capsule())
+        .onHover { hovering in
+            withAnimation(Motion.hoverFade) { isHovering = hovering }
+        }
+        .help(helpText)
     }
 
-    private var isClickable: Bool {
+    private var header: some View {
+        HStack(spacing: 8) {
+            ToolStatusBadge(status: invocation.status)
+
+            Image(systemName: iconName)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Palette.textSecondary)
+                .frame(width: 14)
+
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 6) {
+                    Text(label)
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Palette.textPrimary)
+                    if !displayInput.isEmpty {
+                        Text(displayInput)
+                            .font(.system(size: 11.5, weight: .regular, design: .monospaced))
+                            .foregroundStyle(Palette.textMuted)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+            }
+
+            Spacer(minLength: 4)
+
+            if isArtifactCard {
+                Image(systemName: "arrow.up.right.square")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Palette.textMuted)
+            } else if canExpand {
+                Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                    .font(.system(size: 9.5, weight: .bold))
+                    .foregroundStyle(Palette.textMuted)
+            }
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 7)
+    }
+
+    @ViewBuilder
+    private var detailPanel: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Rectangle()
+                .fill(Palette.stroke)
+                .frame(height: 1)
+
+            if !invocation.input.isEmpty {
+                detailSection(title: "INPUT", body: invocation.input, monospaced: true)
+            }
+
+            if let output = invocation.output, !output.isEmpty {
+                detailSection(title: outputSectionTitle, body: output, monospaced: false)
+            } else if invocation.status == .running {
+                Text("Running…")
+                    .font(.system(size: 11.5, weight: .regular, design: .monospaced))
+                    .foregroundStyle(Palette.textFaint)
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 8)
+            }
+        }
+    }
+
+    private func detailSection(title: String, body: String, monospaced: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(title)
+                .font(.system(size: 9, weight: .semibold))
+                .tracking(1.2)
+                .foregroundStyle(Palette.textFaint)
+
+            Text(body)
+                .font(.system(
+                    size: 11.5,
+                    weight: .regular,
+                    design: monospaced ? .monospaced : .default
+                ))
+                .foregroundStyle(Palette.textSecondary)
+                .textSelection(.enabled)
+                .lineLimit(20)
+                .multilineTextAlignment(.leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 6)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background {
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(Palette.bgSunken)
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 8)
+    }
+
+    private var outputSectionTitle: String {
+        switch invocation.status {
+        case .running: return "PARTIAL OUTPUT"
+        case .completed: return "OUTPUT"
+        case .failed: return "ERROR"
+        }
+    }
+
+    private var isArtifactCard: Bool {
         invocation.tool == "create_artifact"
-            && invocation.succeeded
+            && invocation.status == .completed
             && invocation.artifactURL != nil
     }
 
-    private var artifactURL: URL? { invocation.artifactURL }
+    private var canExpand: Bool {
+        if isArtifactCard { return false }
+        if invocation.status == .running { return true }
+        return !(invocation.output?.isEmpty ?? true) || !invocation.input.isEmpty
+    }
 
     private var iconName: String {
         switch invocation.tool {
@@ -1246,6 +1790,7 @@ private struct ToolChainChip: View {
         case "fetch": return "arrow.down.doc"
         case "read_tabs": return "rectangle.on.rectangle"
         case "read_highlights": return "quote.opening"
+        case "read_smart_read": return "doc.text.magnifyingglass"
         case "mail_search": return "envelope.badge"
         case "mail_read_thread": return "envelope.open"
         case "mail_draft_reply": return "arrowshape.turn.up.left"
@@ -1262,6 +1807,7 @@ private struct ToolChainChip: View {
         case "fetch": return "fetch"
         case "read_tabs": return "read tabs"
         case "read_highlights": return "read highlights"
+        case "read_smart_read": return "smart read"
         case "mail_search": return "mail search"
         case "mail_read_thread": return "mail read"
         case "mail_draft_reply": return "mail draft"
@@ -1289,8 +1835,62 @@ private struct ToolChainChip: View {
     }
 
     private var helpText: String {
-        let status = invocation.succeeded ? "" : " (failed)"
-        return "\(invocation.tool): \(invocation.input)\(status)"
+        let suffix: String
+        switch invocation.status {
+        case .running: suffix = " (running)"
+        case .completed: suffix = ""
+        case .failed: suffix = " (failed)"
+        }
+        return "\(invocation.tool): \(invocation.input)\(suffix)"
+    }
+}
+
+/// Tiny leading badge that tells the user the lifecycle of a tool call at
+/// a glance: a spinning arc while running, a soft check when done, a
+/// muted slash when failed. All three live in the same 14×14 footprint so
+/// the card header doesn't shift width as the status changes.
+private struct ToolStatusBadge: View {
+    let status: ChatMessage.ToolInvocation.Status
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Palette.stroke, lineWidth: 1)
+                .frame(width: 14, height: 14)
+
+            switch status {
+            case .running:
+                ToolSpinner()
+            case .completed:
+                Image(systemName: "checkmark")
+                    .font(.system(size: 8, weight: .heavy))
+                    .foregroundStyle(Palette.textPrimary)
+                    .transition(.opacity.combined(with: .scale(scale: 0.6)))
+            case .failed:
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .heavy))
+                    .foregroundStyle(Palette.textMuted)
+                    .transition(.opacity.combined(with: .scale(scale: 0.6)))
+            }
+        }
+        .frame(width: 14, height: 14)
+    }
+}
+
+private struct ToolSpinner: View {
+    @State private var angle: Double = 0
+
+    var body: some View {
+        Circle()
+            .trim(from: 0.0, to: 0.72)
+            .stroke(Palette.textPrimary, style: StrokeStyle(lineWidth: 1.4, lineCap: .round))
+            .frame(width: 10, height: 10)
+            .rotationEffect(.degrees(angle))
+            .onAppear {
+                withAnimation(.linear(duration: 0.85).repeatForever(autoreverses: false)) {
+                    angle = 360
+                }
+            }
     }
 }
 
@@ -1360,14 +1960,6 @@ private struct SystemPill: View {
 }
 
 // MARK: - Thinking indicator
-
-private struct ThinkingShimmer: View {
-    var body: some View {
-        ShimmerText("Thinking…")
-            .frame(height: 16)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-}
 
 private struct ShimmerText: View {
     let text: String
@@ -1524,6 +2116,40 @@ private struct SpinnerArc: View {
                     angle = 360
                 }
             }
+    }
+}
+
+/// Counterpart to `SendButton` that takes over the composer's primary
+/// action while the agent loop is running. Surfaces a stop glyph
+/// wrapped in a faint spinner so the user reads it as "in progress —
+/// click to interrupt" rather than as a regular button.
+private struct StopButton: View {
+    var action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            ZStack {
+                Circle()
+                    .fill(isHovering ? Palette.surfaceHover : Palette.surface)
+                    .frame(width: 32, height: 32)
+                Circle()
+                    .stroke(Palette.strokeStrong, lineWidth: 1)
+                    .frame(width: 32, height: 32)
+                SpinnerArc()
+                    .opacity(0.55)
+                RoundedRectangle(cornerRadius: 2, style: .continuous)
+                    .fill(Palette.textPrimary)
+                    .frame(width: 9, height: 9)
+            }
+            .scaleEffect(isHovering ? 1.06 : 1.0)
+            .shadow(color: isHovering ? Color.white.opacity(0.18) : Color.clear, radius: 9, x: 0, y: 0)
+            .animation(Motion.springSnap, value: isHovering)
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .help("Stop")
     }
 }
 
