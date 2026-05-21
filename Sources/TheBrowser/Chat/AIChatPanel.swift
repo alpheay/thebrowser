@@ -485,11 +485,10 @@ final class ChatViewModel: ObservableObject {
                         throw AIProviderError.cancelled
                     }
 
-                    // Snapshot whatever prose the bubble already shows
-                    // before this iteration runs — if it turns out to be
-                    // a tool call we'll rewind to here so the JSON
-                    // doesn't pollute the visible chat.
-                    let liveTextBeforeIteration = liveMessage?.text ?? ""
+                    // Snapshot whatever prose the bubble already carries
+                    // (commentary from prior iterations) — we join new
+                    // commentary onto this base, never overwrite it.
+                    let baseTextBeforeIteration = liveMessage?.text ?? ""
 
                     setLiveStatus(AgentStatusLabel.thinking)
                     let response = try await streamIteration(
@@ -503,20 +502,29 @@ final class ChatViewModel: ObservableObject {
                         throw AIProviderError.cancelled
                     }
 
+                    // Apply the tool-call mask uniformly. For the
+                    // streaming path the bubble already reflects this
+                    // (the mask ran on every delta), so this is
+                    // idempotent. For Codex / fallback paths it's the
+                    // first place we strip the JSON tail out.
+                    let iterationVisible = StreamingToolCallMask.visiblePrefix(in: response)
+                    let composed = Self.composeLiveText(
+                        base: baseTextBeforeIteration,
+                        iterationVisible: iterationVisible
+                    )
+                    overwriteLiveText(composed)
+
                     // No tool call in the response — this is the final
-                    // model utterance for the turn. Whatever text the
-                    // streamer already pushed into `liveMessage.text`
-                    // matches `response`, so finalize as-is.
+                    // model utterance for the turn. Finalize with the
+                    // composed bubble so all prior commentary survives.
                     guard let call = NativeBrowserToolCall.parse(from: response) else {
-                        finalizeLiveMessage(text: response, context: context)
+                        finalizeLiveMessage(text: composed, context: context)
                         return
                     }
 
-                    // Tool call: roll the streamed iteration text back
-                    // off the live bubble — JSON tool calls aren't user-
-                    // facing prose. Any text from PRIOR iterations is
-                    // preserved.
-                    rewindLiveText(priorText: liveTextBeforeIteration)
+                    // Tool call detected. The bubble already shows the
+                    // composed pre-tool commentary (if the model wrote
+                    // any) — no rewind needed.
 
                     // Surface the tool as `.running` immediately so the
                     // user sees the chip light up before the work starts.
@@ -649,7 +657,13 @@ final class ChatViewModel: ObservableObject {
         sessionDirectory: URL,
         runHandle: AgentRunHandle
     ) async throws -> String {
+        // Prior-iteration commentary already in the bubble. New text
+        // from this iteration joins onto this base; we never overwrite
+        // it so chained "doing X… now doing Y…" stories survive.
+        let baseText = liveMessage?.text ?? ""
+        var iterationBuffer = ""
         var accumulated = ""
+
         let stream = client.askStream(
             prompt: prompt,
             sessionDirectory: sessionDirectory,
@@ -663,13 +677,23 @@ final class ChatViewModel: ObservableObject {
             switch event {
             case .textDelta(let chunk):
                 accumulated += chunk
-                appendLiveTextChunk(chunk)
+                iterationBuffer += chunk
+                let visible = StreamingToolCallMask.visiblePrefix(in: iterationBuffer)
+                overwriteLiveText(Self.composeLiveText(
+                    base: baseText,
+                    iterationVisible: visible
+                ))
             case .result(let finalText):
-                // Final authoritative answer. If it differs from the
-                // accumulated stream (rare — usually only because the
-                // result includes trailing whitespace), reconcile.
+                // Final authoritative answer. Reconcile by re-running
+                // the mask against the canonical text so the bubble
+                // ends in the same masked-prose state we'd have hit if
+                // every delta had matched the result.
                 if finalText != accumulated {
-                    overwriteLiveText(finalText)
+                    let visible = StreamingToolCallMask.visiblePrefix(in: finalText)
+                    overwriteLiveText(Self.composeLiveText(
+                        base: baseText,
+                        iterationVisible: visible
+                    ))
                 }
                 return finalText
             }
@@ -685,25 +709,22 @@ final class ChatViewModel: ObservableObject {
         return accumulated
     }
 
-    private func appendLiveTextChunk(_ chunk: String) {
-        guard var live = liveMessage else { return }
-        live.text += chunk
-        liveMessage = live
+    /// Joins prior-iteration commentary (`base`) with the masked text
+    /// from the current iteration (`iterationVisible`) using a paragraph
+    /// break, so chained "doing X" lines from successive turns read as
+    /// separate thoughts rather than a single run-on string.
+    /// Trims trailing whitespace on the new piece so the bubble doesn't
+    /// end with a hanging newline where the JSON used to sit.
+    static func composeLiveText(base: String, iterationVisible: String) -> String {
+        let trimmedVisible = iterationVisible.trimmingCharacters(in: .whitespacesAndNewlines)
+        if base.isEmpty { return trimmedVisible }
+        if trimmedVisible.isEmpty { return base }
+        return base + "\n\n" + trimmedVisible
     }
 
     private func overwriteLiveText(_ text: String) {
         guard var live = liveMessage else { return }
         live.text = text
-        liveMessage = live
-    }
-
-    /// Drops back to the text the bubble showed before the current
-    /// iteration started. Used when an iteration turns out to be a JSON
-    /// tool call rather than user-facing prose — the streamed JSON
-    /// shouldn't linger in the visible chat.
-    private func rewindLiveText(priorText: String) {
-        guard var live = liveMessage else { return }
-        live.text = priorText
         liveMessage = live
     }
 
