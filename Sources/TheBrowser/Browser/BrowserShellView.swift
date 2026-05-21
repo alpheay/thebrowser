@@ -589,7 +589,7 @@ private struct WebControlWorkingOverlay: View {
 
     var body: some View {
         ZStack {
-            PixelCornerDissolve()
+            PixelEdgeDissolve()
                 .padding(.horizontal, Metrics.webviewInset)
                 .padding(.bottom, Metrics.webviewInset)
                 .allowsHitTesting(false)
@@ -646,94 +646,54 @@ private struct WebControlWorkingOverlay: View {
     }
 }
 
-/// Each of the four webview corners dissolves into a fine field of soft
-/// round dots, coloured to match `Palette.bg` so the page looks like it's
-/// breaking into the surrounding chrome. Per-pixel phase offsets let each
-/// dot fade in (small→big) and out independently — a quiet, ethereal
-/// shimmer rather than a hard twinkle.
-private struct PixelCornerDissolve: View {
+/// A fine field of soft round dots traces the entire webview perimeter,
+/// coloured to match `Palette.bg` so the page looks like it's breaking
+/// into the surrounding chrome. Density falls off from any edge inward;
+/// per-pixel phase offsets let each dot fade in (small→big) and out
+/// independently — a quiet, ethereal shimmer rather than a hard twinkle.
+private struct PixelEdgeDissolve: View {
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 30.0, paused: false)) { context in
             Canvas(opaque: false, rendersAsynchronously: false) { gc, size in
                 let cell: CGFloat = 6
                 let maxRadius: CGFloat = 2.8
-                let extent: CGFloat = 140
+                let extent: CGFloat = 90
                 let cycle: Double = 2.4
                 let t = context.date.timeIntervalSinceReferenceDate
                 let color = Palette.bg
 
-                draw(gc, size: size, anchor: .topLeading,
-                     cell: cell, maxRadius: maxRadius, extent: extent,
-                     t: t, cycle: cycle, color: color, salt:  1.7)
-                draw(gc, size: size, anchor: .topTrailing,
-                     cell: cell, maxRadius: maxRadius, extent: extent,
-                     t: t, cycle: cycle, color: color, salt: 13.1)
-                draw(gc, size: size, anchor: .bottomLeading,
-                     cell: cell, maxRadius: maxRadius, extent: extent,
-                     t: t, cycle: cycle, color: color, salt: 29.9)
-                draw(gc, size: size, anchor: .bottomTrailing,
-                     cell: cell, maxRadius: maxRadius, extent: extent,
-                     t: t, cycle: cycle, color: color, salt: 53.3)
-            }
-        }
-    }
+                let cols = Int(ceil(size.width / cell))
+                let rows = Int(ceil(size.height / cell))
+                let band = Int(extent / cell)
+                guard cols > 0, rows > 0, band > 0 else { return }
+                let bandD = Double(band)
 
-    private enum CornerAnchor { case topLeading, topTrailing, bottomLeading, bottomTrailing }
+                for gx in 0..<cols {
+                    for gy in 0..<rows {
+                        let edgeDist = min(gx, cols - 1 - gx, gy, rows - 1 - gy)
+                        if edgeDist >= band { continue }
 
-    private func draw(
-        _ gc: GraphicsContext,
-        size: CGSize,
-        anchor: CornerAnchor,
-        cell: CGFloat,
-        maxRadius: CGFloat,
-        extent: CGFloat,
-        t: Double,
-        cycle: Double,
-        color: Color,
-        salt: Double
-    ) {
-        let count = Int(extent / cell)
-        let countD = Double(count)
+                        let density = 1 - Double(edgeDist) / bandD
+                        let densityCurve = density * density
 
-        for gx in 0..<count {
-            for gy in 0..<count {
-                let dx = Double(gx)
-                let dy = Double(gy)
-                let dist = sqrt(dx * dx + dy * dy) / countD
-                if dist >= 1 { continue }
+                        if noise(gx, gy, 1.7) > densityCurve { continue }
 
-                let density = 1 - dist
-                let densityCurve = density * density
+                        let phaseOffset = noise(gx, gy, 97.3)
+                        let phase = ((t / cycle) + phaseOffset).truncatingRemainder(dividingBy: 1.0)
 
-                if noise(gx, gy, salt) > densityCurve { continue }
+                        // Half the cycle invisible, half spent fading in then out.
+                        guard phase < 0.5 else { continue }
+                        let scale = sin(phase * 2 * .pi)
 
-                let phaseOffset = noise(gx, gy, salt + 97)
-                let phase = ((t / cycle) + phaseOffset).truncatingRemainder(dividingBy: 1.0)
+                        let radius = maxRadius * CGFloat(densityCurve) * CGFloat(scale)
+                        if radius < 0.3 { continue }
 
-                // Half the cycle invisible, half spent fading in then out.
-                guard phase < 0.5 else { continue }
-                let scale = sin(phase * 2 * .pi)
-
-                let radius = maxRadius * CGFloat(densityCurve) * CGFloat(scale)
-                if radius < 0.3 { continue }
-
-                let fx = (CGFloat(gx) + 0.5) * cell
-                let fy = (CGFloat(gy) + 0.5) * cell
-                let cx: CGFloat
-                let cy: CGFloat
-                switch anchor {
-                case .topLeading:
-                    cx = fx;                cy = fy
-                case .topTrailing:
-                    cx = size.width - fx;   cy = fy
-                case .bottomLeading:
-                    cx = fx;                cy = size.height - fy
-                case .bottomTrailing:
-                    cx = size.width - fx;   cy = size.height - fy
+                        let cx = (CGFloat(gx) + 0.5) * cell
+                        let cy = (CGFloat(gy) + 0.5) * cell
+                        let rect = CGRect(x: cx - radius, y: cy - radius, width: radius * 2, height: radius * 2)
+                        gc.fill(Path(ellipseIn: rect), with: .color(color))
+                    }
                 }
-
-                let rect = CGRect(x: cx - radius, y: cy - radius, width: radius * 2, height: radius * 2)
-                gc.fill(Path(ellipseIn: rect), with: .color(color))
             }
         }
     }
