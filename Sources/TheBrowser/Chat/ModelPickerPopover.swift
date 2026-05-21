@@ -12,16 +12,16 @@ struct ModelPickerPopover: View {
     @State private var highlightedID: String? = nil
     @FocusState private var searchFocused: Bool
 
-    private let popoverWidth: CGFloat = 308
+    private let popoverWidth: CGFloat = 248
 
     var body: some View {
         VStack(spacing: 0) {
             searchField
-            divider
+            hairline
             modelList
         }
         .frame(width: popoverWidth)
-        .frame(minHeight: 240, maxHeight: 460)
+        .frame(minHeight: 120, maxHeight: 420)
         .background(Palette.bg)
         .onAppear {
             highlightedID = currentSelectionRowID ?? flatVisibleRowIDs.first
@@ -37,12 +37,12 @@ struct ModelPickerPopover: View {
     private var searchField: some View {
         HStack(spacing: 8) {
             Image(systemName: "magnifyingglass")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundStyle(Palette.textMuted)
+                .font(.system(size: 10.5, weight: .medium))
+                .foregroundStyle(Palette.textFaint)
 
-            TextField("Search models", text: $search)
+            TextField("Filter", text: $search)
                 .textFieldStyle(.plain)
-                .font(.system(size: 13))
+                .font(.system(size: 12.5))
                 .foregroundStyle(Palette.textPrimary)
                 .focused($searchFocused)
                 .onChange(of: search) { _, _ in
@@ -57,29 +57,15 @@ struct ModelPickerPopover: View {
                     moveHighlight(by: 1)
                     return .handled
                 }
-
-            if !search.isEmpty {
-                Button {
-                    search = ""
-                } label: {
-                    Image(systemName: "xmark.circle.fill")
-                        .font(.system(size: 12))
-                        .foregroundStyle(Palette.textMuted)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .help("Clear search")
-            }
         }
-        .padding(.horizontal, 14)
-        .frame(height: 42)
+        .padding(.horizontal, 12)
+        .frame(height: 34)
     }
 
-    private var divider: some View {
+    private var hairline: some View {
         Rectangle()
-            .fill(Palette.stroke)
+            .fill(Color.white.opacity(0.05))
             .frame(height: 1)
-            .opacity(0.6)
     }
 
     // MARK: - List
@@ -87,22 +73,22 @@ struct ModelPickerPopover: View {
     private var modelList: some View {
         ScrollViewReader { proxy in
             ScrollView(showsIndicators: false) {
-                LazyVStack(alignment: .leading, spacing: 0) {
+                VStack(alignment: .leading, spacing: 8) {
                     if !visibleFavorites.isEmpty {
-                        favoritesSection
+                        section(rows: visibleFavorites, inFavorites: true)
                     }
                     ForEach(AIProviderKind.allCases) { provider in
                         let models = visibleModels(for: provider)
                         if !models.isEmpty {
-                            providerSection(provider, models: models)
+                            section(rows: models, inFavorites: false)
                         }
                     }
                     if flatVisibleRowIDs.isEmpty {
                         emptyState
-                            .padding(.vertical, 32)
+                            .padding(.vertical, 24)
                     }
                 }
-                .padding(.vertical, 4)
+                .padding(.vertical, 6)
             }
             .onChange(of: highlightedID) { _, new in
                 guard let new else { return }
@@ -111,8 +97,6 @@ struct ModelPickerPopover: View {
                 }
             }
             .task {
-                // Defer initial scroll until after layout so the focused row
-                // lands in view on first open.
                 try? await Task.sleep(nanoseconds: 50_000_000)
                 if let id = highlightedID {
                     proxy.scrollTo(id, anchor: .center)
@@ -121,53 +105,12 @@ struct ModelPickerPopover: View {
         }
     }
 
-    private var favoritesSection: some View {
+    private func section(rows: [AIModelOption], inFavorites: Bool) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            sectionHeader(icon: "star.fill", title: "Favorites")
-            ForEach(visibleFavorites) { model in
-                row(for: model, inFavorites: true)
+            ForEach(rows) { model in
+                row(for: model, inFavorites: inFavorites)
             }
         }
-    }
-
-    private func providerSection(_ provider: AIProviderKind, models: [AIModelOption]) -> some View {
-        VStack(alignment: .leading, spacing: 0) {
-            sectionHeader(provider: provider)
-            ForEach(models) { model in
-                row(for: model, inFavorites: false)
-            }
-        }
-    }
-
-    private func sectionHeader(icon: String, title: String) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(Palette.textMuted)
-            Text(title.uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(1.1)
-                .foregroundStyle(Palette.textMuted)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 12)
-        .padding(.bottom, 4)
-    }
-
-    private func sectionHeader(provider: AIProviderKind) -> some View {
-        HStack(spacing: 6) {
-            ProviderMark(provider: provider, size: 10)
-                .foregroundStyle(Palette.textMuted)
-            Text(provider.displayName.uppercased())
-                .font(.system(size: 10, weight: .semibold))
-                .tracking(1.1)
-                .foregroundStyle(Palette.textMuted)
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .padding(.top, 12)
-        .padding(.bottom, 4)
     }
 
     private func row(for model: AIModelOption, inFavorites: Bool) -> some View {
@@ -185,22 +128,14 @@ struct ModelPickerPopover: View {
             }
         )
         .id(rowID)
-        .padding(.horizontal, 6)
+        .padding(.horizontal, 4)
     }
 
     private var emptyState: some View {
-        VStack(spacing: 8) {
-            Image(systemName: "magnifyingglass")
-                .font(.system(size: 18, weight: .semibold))
-                .foregroundStyle(Palette.textMuted)
-            Text("No matches")
-                .font(Typography.label)
-                .foregroundStyle(Palette.textSecondary)
-            Text("Try a different search.")
-                .font(Typography.caption)
-                .foregroundStyle(Palette.textMuted)
-        }
-        .frame(maxWidth: .infinity)
+        Text("No matches")
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(Palette.textMuted)
+            .frame(maxWidth: .infinity)
     }
 
     // MARK: - Derived state
@@ -234,8 +169,8 @@ struct ModelPickerPopover: View {
         }
     }
 
-    /// Stable order of every row id currently rendered. Drives arrow-key
-    /// navigation so highlight moves match what the user actually sees.
+    /// Flat ordering used by arrow-key navigation — matches the on-screen
+    /// reading order so highlight moves predictably.
     private var flatVisibleRowIDs: [String] {
         var ids: [String] = []
         for model in visibleFavorites {
@@ -322,57 +257,43 @@ private struct ModelRow: View {
     var body: some View {
         HStack(spacing: 8) {
             Text(model.displayName)
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(Palette.textPrimary)
+                .font(.system(size: 12.5, weight: .medium))
+                .foregroundStyle(isSelected ? Palette.text : Palette.textPrimary)
                 .lineLimit(1)
 
             Spacer(minLength: 4)
 
             if let shortcut {
                 Text(shortcut)
-                    .font(.system(size: 10, weight: .semibold, design: .rounded))
-                    .foregroundStyle(Palette.textSecondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background {
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .fill(Palette.surface)
-                    }
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 5, style: .continuous)
-                            .stroke(Palette.stroke, lineWidth: 1)
-                    }
-            }
-
-            if isSelected {
-                Image(systemName: "checkmark")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Palette.text)
-                    .frame(width: 14)
-                    .transition(.scale.combined(with: .opacity))
+                    .font(.system(size: 10.5, weight: .medium, design: .rounded))
+                    .foregroundStyle(Palette.textMuted)
+                    .monospacedDigit()
             }
 
             Button(action: onToggleFavorite) {
                 Image(systemName: isFavorite ? "star.fill" : "star")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(isFavorite ? Palette.textPrimary : Palette.textMuted)
-                    .frame(width: 18, height: 18)
+                    .font(.system(size: 10, weight: .semibold))
+                    .foregroundStyle(isFavorite ? Palette.textSecondary : Palette.textMuted)
+                    .frame(width: 14, height: 14)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .opacity(isFavorite || isHovering || isHighlighted ? 1 : 0)
             .help(isFavorite ? "Unfavorite" : "Favorite")
-            .onHover { hovering in
-                if hovering { NSCursor.pointingHand.push() } else { NSCursor.pop() }
-            }
+
+            Circle()
+                .fill(Palette.text)
+                .frame(width: 5, height: 5)
+                .opacity(isSelected ? 1 : 0)
+                .frame(width: 8, alignment: .center)
         }
         .padding(.horizontal, 10)
-        .frame(height: 32)
+        .frame(height: 28)
         .background {
-            RoundedRectangle(cornerRadius: 7, style: .continuous)
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
                 .fill(rowFill)
         }
-        .contentShape(RoundedRectangle(cornerRadius: 7, style: .continuous))
+        .contentShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
         .onHover {
             isHovering = $0
             onHover($0)
@@ -384,8 +305,8 @@ private struct ModelRow: View {
     }
 
     private var rowFill: Color {
-        if isSelected { return Palette.surfaceActive }
-        if isHighlighted || isHovering { return Palette.surfaceHover }
+        if isSelected { return Color.white.opacity(0.06) }
+        if isHighlighted || isHovering { return Color.white.opacity(0.04) }
         return Color.clear
     }
 }
