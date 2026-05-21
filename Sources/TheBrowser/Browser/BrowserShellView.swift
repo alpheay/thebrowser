@@ -585,310 +585,131 @@ private struct FindBarOverlay: View {
 
 private struct WebControlWorkingOverlay: View {
     var status: WebControlStatus
-
-    @State private var primaryAngle: Double = 0
-    @State private var counterAngle: Double = 0
     @State private var pulse: Bool = false
-    @State private var breath: Bool = false
-    @State private var shimmer: CGFloat = -0.3
-    @State private var orbitAngle: Double = 0
 
     var body: some View {
         ZStack {
-            edgeVignette
-            auroraHalo
+            PixelCornerDissolve()
+                .padding(.horizontal, Metrics.webviewInset)
+                .padding(.bottom, Metrics.webviewInset)
+                .allowsHitTesting(false)
 
             VStack(spacing: 0) {
                 Spacer(minLength: 0)
-                statusPill
+                statusChip
                     .padding(.bottom, 22)
             }
+            .padding(.horizontal, Metrics.webviewInset)
+            .padding(.bottom, Metrics.webviewInset)
         }
-        .clipShape(RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous))
-        .padding(.horizontal, Metrics.webviewInset)
-        .padding(.bottom, Metrics.webviewInset)
         .allowsHitTesting(true)
-        .onAppear { startAnimations() }
-    }
-
-    private func startAnimations() {
-        withAnimation(.linear(duration: 14).repeatForever(autoreverses: false)) {
-            primaryAngle = 360
-        }
-        withAnimation(.linear(duration: 22).repeatForever(autoreverses: false)) {
-            counterAngle = -360
-        }
-        withAnimation(.linear(duration: 3.2).repeatForever(autoreverses: false)) {
-            orbitAngle = 360
-        }
-        withAnimation(.easeInOut(duration: 2.2).repeatForever(autoreverses: true)) {
-            pulse = true
-        }
-        withAnimation(.easeInOut(duration: 3.6).repeatForever(autoreverses: true)) {
-            breath = true
-        }
-        withAnimation(.linear(duration: 2.4).repeatForever(autoreverses: false)) {
-            shimmer = 1.3
-        }
-    }
-
-    // Two soft white comets sweeping around the frame at different cadences.
-    private var primaryHalo: AngularGradient {
-        AngularGradient(
-            gradient: Gradient(stops: [
-                .init(color: .clear,                          location: 0.00),
-                .init(color: Color.white.opacity(0.95),       location: 0.16),
-                .init(color: .clear,                          location: 0.34),
-                .init(color: .clear,                          location: 0.56),
-                .init(color: Color.white.opacity(0.65),       location: 0.72),
-                .init(color: .clear,                          location: 0.90),
-                .init(color: .clear,                          location: 1.00)
-            ]),
-            center: .center,
-            angle: .degrees(primaryAngle)
-        )
-    }
-
-    private var secondaryHalo: AngularGradient {
-        AngularGradient(
-            gradient: Gradient(stops: [
-                .init(color: .clear,                          location: 0.00),
-                .init(color: Color.white.opacity(0.85),       location: 0.50),
-                .init(color: .clear,                          location: 1.00)
-            ]),
-            center: .center,
-            angle: .degrees(counterAngle * 2)
-        )
-    }
-
-    private var auroraHalo: some View {
-        let shape = RoundedRectangle(cornerRadius: Metrics.webviewRadius, style: .continuous)
-        return ZStack {
-            // Wide diffuse glow — the ethereal halo
-            shape
-                .strokeBorder(primaryHalo, lineWidth: 14)
-                .blur(radius: 24)
-                .opacity(pulse ? 0.95 : 0.65)
-
-            // Mid soft band for body
-            shape
-                .strokeBorder(primaryHalo, lineWidth: 4)
-                .blur(radius: 4)
-                .opacity(0.85)
-
-            // Crisp counter-rotating scan line
-            shape
-                .strokeBorder(secondaryHalo, lineWidth: 1)
-                .blur(radius: 0.4)
-                .opacity(0.75)
-
-            // Faint static frame so the edge always reads
-            shape
-                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
-        }
-        .allowsHitTesting(false)
-    }
-
-    private var edgeVignette: some View {
-        ZStack {
-            Color.black.opacity(0.22)
-
-            // Bottom dim so the pill reads cleanly against the page
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-                LinearGradient(
-                    colors: [Color.black.opacity(0), Color.black.opacity(0.55)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 220)
-            }
-
-            // Top sweep — a soft moonlight wash that breathes
-            VStack(spacing: 0) {
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(breath ? 0.08 : 0.03),
-                        Color.clear
-                    ],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-                .frame(height: 120)
-                Spacer(minLength: 0)
-            }
-
-            // Halo bloom radiating from where the pill sits
-            VStack(spacing: 0) {
-                Spacer(minLength: 0)
-                RadialGradient(
-                    colors: [
-                        Color.white.opacity(breath ? 0.07 : 0.03),
-                        Color.clear
-                    ],
-                    center: .bottom,
-                    startRadius: 0,
-                    endRadius: 420
-                )
-                .frame(height: 280)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 1.1).repeatForever(autoreverses: true)) {
+                pulse = true
             }
         }
-        .allowsHitTesting(false)
     }
 
-    private var statusPill: some View {
-        HStack(spacing: 12) {
-            orbitGlyph
+    private var statusChip: some View {
+        HStack(spacing: 8) {
+            Circle()
+                .fill(Color.white.opacity(pulse ? 0.95 : 0.40))
+                .frame(width: 5, height: 5)
 
-            VStack(alignment: .leading, spacing: 2) {
-                shimmerTitle
+            Text("Agent is working")
+                .font(.system(size: 11.5, weight: .semibold))
+                .foregroundStyle(Palette.textPrimary)
+
+            if !status.detail.isEmpty {
+                Text("·")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(Palette.textFaint)
                 Text(status.detail)
-                    .font(.system(size: 10.5, weight: .medium))
-                    .foregroundStyle(Palette.textSecondary)
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(Palette.textMuted)
                     .lineLimit(1)
                     .contentTransition(.opacity)
                     .id(status.detail)
             }
-
-            Spacer(minLength: 6)
-
-            stepBadge
         }
-        .padding(.leading, 12)
-        .padding(.trailing, 10)
-        .padding(.vertical, 9)
-        .background(pillBackground)
-        .overlay(pillBorder)
-        .shadow(color: Color.white.opacity(pulse ? 0.28 : 0.14), radius: 30, x: 0, y: 0)
-        .shadow(color: Color.black.opacity(0.65), radius: 26, x: 0, y: 16)
-        .fixedSize(horizontal: false, vertical: true)
-        .frame(maxWidth: 380)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 7)
+        .background {
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.80))
+        }
+        .overlay {
+            Capsule(style: .continuous)
+                .strokeBorder(Color.white.opacity(0.10), lineWidth: 1)
+        }
+        .shadow(color: Color.black.opacity(0.55), radius: 16, x: 0, y: 8)
     }
+}
 
-    // Matte black pill — deep flat black with a slow internal white drift.
-    private var pillBackground: some View {
-        ZStack {
-            Capsule(style: .continuous)
-                .fill(Color.black.opacity(0.86))
+/// Each of the four webview corners dissolves into chunky black pixels
+/// whose density falls off with distance from the corner. A new noise seed
+/// every ~150ms gives a quiet, deliberate twinkle — the corners look like
+/// they're being eaten by static.
+private struct PixelCornerDissolve: View {
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 8.0, paused: false)) { context in
+            Canvas(opaque: false, rendersAsynchronously: false) { gc, size in
+                let pixel: CGFloat = 6
+                let extent: CGFloat = 120
+                let seed = floor(context.date.timeIntervalSinceReferenceDate * 6)
 
-            // Slow white wash that rotates with the halo — keeps the pill alive
-            Capsule(style: .continuous)
-                .fill(
-                    AngularGradient(
-                        gradient: Gradient(colors: [
-                            Color.white.opacity(0.00),
-                            Color.white.opacity(0.10),
-                            Color.white.opacity(0.00),
-                            Color.white.opacity(0.06),
-                            Color.white.opacity(0.00)
-                        ]),
-                        center: .center,
-                        angle: .degrees(primaryAngle)
-                    )
-                )
-                .blendMode(.plusLighter)
-                .opacity(0.75)
-
-            // Matte top sheen
-            Capsule(style: .continuous)
-                .fill(
-                    LinearGradient(
-                        colors: [
-                            Color.white.opacity(0.10),
-                            Color.clear
-                        ],
-                        startPoint: .top,
-                        endPoint: .center
-                    )
-                )
+                draw(gc, size: size, anchor: .topLeading,     pixel: pixel, extent: extent, seed: seed +  1.7)
+                draw(gc, size: size, anchor: .topTrailing,    pixel: pixel, extent: extent, seed: seed + 13.1)
+                draw(gc, size: size, anchor: .bottomLeading,  pixel: pixel, extent: extent, seed: seed + 29.9)
+                draw(gc, size: size, anchor: .bottomTrailing, pixel: pixel, extent: extent, seed: seed + 53.3)
+            }
         }
     }
 
-    private var pillBorder: some View {
-        Capsule(style: .continuous)
-            .strokeBorder(
-                LinearGradient(
-                    colors: [
-                        Color.white.opacity(0.45),
-                        Color.white.opacity(0.10),
-                        Color.white.opacity(0.25)
-                    ],
-                    startPoint: .topLeading,
-                    endPoint: .bottomTrailing
-                ),
-                lineWidth: 1
-            )
-    }
+    private enum CornerAnchor { case topLeading, topTrailing, bottomLeading, bottomTrailing }
 
-    private var shimmerTitle: some View {
-        ZStack(alignment: .leading) {
-            Text("Agent is Working")
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(Palette.textPrimary)
+    private func draw(
+        _ gc: GraphicsContext,
+        size: CGSize,
+        anchor: CornerAnchor,
+        pixel: CGFloat,
+        extent: CGFloat,
+        seed: Double
+    ) {
+        let count = Int(extent / pixel)
+        let countD = Double(count)
+        for gx in 0..<count {
+            for gy in 0..<count {
+                let dx = Double(gx)
+                let dy = Double(gy)
+                let dist = sqrt(dx * dx + dy * dy) / countD
+                if dist >= 1 { continue }
 
-            Text("Agent is Working")
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(Color.white)
-                .mask {
-                    LinearGradient(
-                        colors: [.clear, .white, .clear],
-                        startPoint: UnitPoint(x: shimmer - 0.25, y: 0.5),
-                        endPoint: UnitPoint(x: shimmer + 0.25, y: 0.5)
-                    )
+                let density = 1 - dist
+                let threshold = density * density * density
+                if noise(gx, gy, seed) >= threshold { continue }
+
+                let fx = CGFloat(gx) * pixel
+                let fy = CGFloat(gy) * pixel
+                let x: CGFloat
+                let y: CGFloat
+                switch anchor {
+                case .topLeading:
+                    x = fx;                          y = fy
+                case .topTrailing:
+                    x = size.width - fx - pixel;     y = fy
+                case .bottomLeading:
+                    x = fx;                          y = size.height - fy - pixel
+                case .bottomTrailing:
+                    x = size.width - fx - pixel;    y = size.height - fy - pixel
                 }
+                gc.fill(Path(CGRect(x: x, y: y, width: pixel, height: pixel)), with: .color(.black))
+            }
         }
-        .fixedSize()
     }
 
-    private var orbitGlyph: some View {
-        ZStack {
-            Circle()
-                .stroke(Color.white.opacity(0.16), lineWidth: 1)
-                .frame(width: 22, height: 22)
-
-            Circle()
-                .trim(from: 0, to: 0.40)
-                .stroke(
-                    AngularGradient(
-                        gradient: Gradient(colors: [.clear, Color.white.opacity(0.95)]),
-                        center: .center
-                    ),
-                    style: StrokeStyle(lineWidth: 1.6, lineCap: .round)
-                )
-                .frame(width: 22, height: 22)
-                .rotationEffect(.degrees(orbitAngle))
-
-            Circle()
-                .fill(Color.white)
-                .frame(width: 5.5, height: 5.5)
-                .shadow(color: Color.white.opacity(0.9), radius: pulse ? 6 : 2)
-
-            Circle()
-                .fill(Color.white)
-                .frame(width: 3, height: 3)
-                .offset(y: -11)
-                .rotationEffect(.degrees(orbitAngle))
-                .shadow(color: Color.white.opacity(0.9), radius: 4)
-        }
-        .frame(width: 24, height: 24)
-    }
-
-    private var stepBadge: some View {
-        Text("STEP \(max(status.step, 0))")
-            .font(.system(size: 9, weight: .bold, design: .monospaced))
-            .foregroundStyle(Palette.textPrimary.opacity(0.85))
-            .tracking(0.8)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 3)
-            .background {
-                Capsule(style: .continuous)
-                    .fill(Color.white.opacity(0.10))
-            }
-            .overlay {
-                Capsule(style: .continuous)
-                    .strokeBorder(Color.white.opacity(0.20), lineWidth: 0.5)
-            }
-            .contentTransition(.numericText())
-            .animation(.snappy, value: status.step)
+    private func noise(_ x: Int, _ y: Int, _ seed: Double) -> Double {
+        let v = sin(Double(x) * 12.9898 + Double(y) * 78.233 + seed * 1.7) * 43758.5453
+        return v - floor(v)
     }
 }
