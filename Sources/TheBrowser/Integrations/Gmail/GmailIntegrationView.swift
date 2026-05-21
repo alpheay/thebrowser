@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+@preconcurrency import WebKit
 
 /// Slashy-style Gmail launcher. A centered floating card with three
 /// columns of state:
@@ -276,6 +277,7 @@ struct GmailIntegrationView: View {
                     onReply: { store.startCompose(replyingTo: message) },
                     onArchive: { store.archiveCurrent() }
                 )
+                .id(message.id)
             } else if store.phase == .loadingMessage {
                 placeholder(icon: "ellipsis", title: "Loading message…", message: "")
             } else {
@@ -578,6 +580,8 @@ private struct MessageReader: View {
     let onReply: () -> Void
     let onArchive: () -> Void
 
+    @State private var bodyHeight: CGFloat = 60
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
@@ -643,12 +647,7 @@ private struct MessageReader: View {
 
                     Divider().background(Palette.strokeFaint)
 
-                    Text(bodyText)
-                        .font(.system(size: 13, weight: .regular))
-                        .foregroundStyle(Palette.textSecondary)
-                        .lineSpacing(4)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
+                    bodyContent
                 }
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -657,13 +656,23 @@ private struct MessageReader: View {
         }
     }
 
-    private var bodyText: String {
-        if !message.plainBody.isEmpty {
-            return message.plainBody
-        }
+    @ViewBuilder
+    private var bodyContent: some View {
         if let html = message.htmlBody, !html.isEmpty {
-            return GmailHTMLToText.convert(html)
+            EmailBodyWebView(html: html, contentHeight: $bodyHeight)
+                .frame(height: max(bodyHeight, 60))
+        } else {
+            Text(plainText)
+                .font(.system(size: 13, weight: .regular))
+                .foregroundStyle(Palette.textSecondary)
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+                .textSelection(.enabled)
         }
+    }
+
+    private var plainText: String {
+        if !message.plainBody.isEmpty { return message.plainBody }
         return message.snippet
     }
 
@@ -772,32 +781,177 @@ private struct ComposeView: View {
     }
 }
 
-// MARK: - HTML to text (best-effort)
+// MARK: - Email body web view
 
-private enum GmailHTMLToText {
-    /// Rough HTML → text. Gmail bodies are wildly varied; we just want
-    /// something legible until a full HTML renderer lands. Strips tags,
-    /// preserves <br>/<p> as newlines, and decodes the most common
-    /// entities.
-    static func convert(_ html: String) -> String {
-        var output = html
-            .replacingOccurrences(of: "(?i)<br[^>]*>", with: "\n", options: .regularExpression)
-            .replacingOccurrences(of: "(?i)</p>", with: "\n\n", options: .regularExpression)
-            .replacingOccurrences(of: "(?i)<style[^>]*>.*?</style>", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "(?i)<script[^>]*>.*?</script>", with: "", options: .regularExpression)
-            .replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
-        for (escape, replacement) in [
-            ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"),
-            ("&quot;", "\""), ("&#39;", "'"), ("&nbsp;", " "),
-            ("&mdash;", "—"), ("&ndash;", "–"), ("&hellip;", "…")
-        ] {
-            output = output.replacingOccurrences(of: escape, with: replacement)
+/// Renders an HTML email body inside a sandboxed WKWebView. JavaScript is
+/// disabled in the email's own document. Link clicks open in the user's
+/// default browser instead of navigating the embedded view. A tiny injected
+/// script reports the document's `scrollHeight` back to SwiftUI so the
+/// surrounding `ScrollView` can size the view to its content (no inner
+/// scrolling — wheel events bubble up to the outer scroll view).
+private struct EmailBodyWebView: NSViewRepresentable {
+    let html: String
+    @Binding var contentHeight: CGFloat
+
+    func makeCoordinator() -> Coordinator { Coordinator(self) }
+
+    func makeNSView(context: Context) -> WKWebView {
+        let configuration = WKWebViewConfiguration()
+        configuration.defaultWebpagePreferences.allowsContentJavaScript = false
+
+        let measure = WKUserScript(
+            source: Self.measureScript,
+            injectionTime: .atDocumentEnd,
+            forMainFrameOnly: true
+        )
+        configuration.userContentController.addUserScript(measure)
+        configuration.userContentController.add(context.coordinator, name: "emailHeight")
+
+        let webView = ScrollForwardingWebView(frame: .zero, configuration: configuration)
+        webView.navigationDelegate = context.coordinator
+        webView.setValue(false, forKey: "drawsBackground")
+        webView.allowsBackForwardNavigationGestures = false
+        webView.appearance = NSAppearance(named: .darkAqua)
+        webView.loadHTMLString(Self.wrap(html), baseURL: nil)
+        context.coordinator.lastHTML = html
+        return webView
+    }
+
+    func updateNSView(_ nsView: WKWebView, context: Context) {
+        if context.coordinator.lastHTML != html {
+            context.coordinator.lastHTML = html
+            nsView.loadHTMLString(Self.wrap(html), baseURL: nil)
         }
-        return output
-            .replacingOccurrences(of: "\u{200C}", with: "")
-            .replacingOccurrences(of: "\u{200B}", with: "")
-            .replacingOccurrences(of: "\n{3,}", with: "\n\n", options: .regularExpression)
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static let measureScript = """
+    (function() {
+      function report() {
+        var h = Math.max(
+          document.body ? document.body.scrollHeight : 0,
+          document.documentElement.scrollHeight
+        );
+        try { window.webkit.messageHandlers.emailHeight.postMessage(h); } catch (e) {}
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', report);
+      } else {
+        report();
+      }
+      window.addEventListener('load', report);
+      try {
+        new ResizeObserver(report).observe(document.documentElement);
+        if (document.body) new ResizeObserver(report).observe(document.body);
+      } catch (e) {}
+      Array.prototype.forEach.call(document.images, function(img) {
+        img.addEventListener('load', report);
+        img.addEventListener('error', report);
+      });
+    })();
+    """
+
+    private static func wrap(_ body: String) -> String {
+        """
+        <!doctype html>
+        <html>
+        <head>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <base target="_blank">
+        <style>
+          :root { color-scheme: dark; }
+          html, body {
+            margin: 0;
+            padding: 0;
+            background: transparent;
+            color: rgba(255,255,255,0.86);
+            font: 13px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", Arial, sans-serif;
+            line-height: 1.55;
+            word-wrap: break-word;
+            overflow-wrap: anywhere;
+            -webkit-text-size-adjust: 100%;
+          }
+          img { max-width: 100%; height: auto; }
+          a { color: #7FB1FF; }
+          table { max-width: 100% !important; border-collapse: collapse; }
+          td, th { word-break: break-word; }
+          pre, code {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: ui-monospace, "SF Mono", Menlo, monospace;
+          }
+          blockquote {
+            border-left: 2px solid rgba(255,255,255,0.18);
+            margin: 12px 0;
+            padding-left: 12px;
+            color: rgba(255,255,255,0.62);
+          }
+          hr { border: none; border-top: 1px solid rgba(255,255,255,0.10); }
+          ::selection { background: rgba(255,255,255,0.22); }
+        </style>
+        </head>
+        <body>\(body)</body>
+        </html>
+        """
+    }
+
+    @MainActor
+    final class Coordinator: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
+        var parent: EmailBodyWebView
+        var lastHTML: String = ""
+
+        init(_ parent: EmailBodyWebView) {
+            self.parent = parent
+        }
+
+        func userContentController(
+            _ controller: WKUserContentController,
+            didReceive message: WKScriptMessage
+        ) {
+            guard message.name == "emailHeight" else { return }
+            let value: CGFloat
+            if let n = message.body as? Double { value = CGFloat(n) }
+            else if let n = message.body as? NSNumber { value = CGFloat(truncating: n) }
+            else { return }
+            if abs(value - parent.contentHeight) >= 1 {
+                parent.contentHeight = value
+            }
+        }
+
+        func webView(
+            _ webView: WKWebView,
+            decidePolicyFor navigationAction: WKNavigationAction,
+            decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
+        ) {
+            // Allow the initial in-memory load; route any actual navigation
+            // (link clicks, form submits) to the user's default browser.
+            if navigationAction.navigationType == .linkActivated,
+               let url = navigationAction.request.url {
+                NSWorkspace.shared.open(url)
+                decisionHandler(.cancel)
+                return
+            }
+            if navigationAction.navigationType == .formSubmitted ||
+                navigationAction.navigationType == .formResubmitted {
+                if let url = navigationAction.request.url {
+                    NSWorkspace.shared.open(url)
+                }
+                decisionHandler(.cancel)
+                return
+            }
+            decisionHandler(.allow)
+        }
+    }
+}
+
+/// WKWebView subclass that forwards scroll-wheel events up the responder
+/// chain so the enclosing SwiftUI `ScrollView` can handle them. Without
+/// this, the WebView silently swallows scroll events even when its frame
+/// matches the content (no inner overflow), making the message body feel
+/// "stuck" inside the reader.
+private final class ScrollForwardingWebView: WKWebView {
+    override func scrollWheel(with event: NSEvent) {
+        nextResponder?.scrollWheel(with: event)
     }
 }
 
