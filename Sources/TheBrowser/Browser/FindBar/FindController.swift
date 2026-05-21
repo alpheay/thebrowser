@@ -8,6 +8,13 @@ import Foundation
 /// `document.body.innerText`. The two can drift on pages that hide text
 /// behind `display: none` or move it into shadow DOM, but for normal
 /// articles they line up.
+///
+/// In conversational mode (``isAIMode``), the user types a natural-language
+/// question instead of a literal needle. On submit we send the question plus
+/// the page's visible text to ``ConversationalFindClient``, which returns a
+/// verbatim substring that we then feed through the same WebKit find
+/// pipeline — so highlighting, prev/next, and the "X of Y" counter all keep
+/// working without forking the search code path.
 @MainActor
 final class FindController: ObservableObject {
     @Published var query: String = ""
@@ -18,6 +25,19 @@ final class FindController: ObservableObject {
     /// it's already on screen (matches every other browser's ⌘F behavior).
     @Published private(set) var focusRequestToken: Int = 0
 
+    /// Whether the bar is currently interpreting the input as a conversational
+    /// query rather than a literal substring.
+    @Published var isAIMode: Bool = false
+    /// True while an LLM round-trip for the current query is in flight.
+    @Published private(set) var aiSearching: Bool = false
+    /// The verbatim substring the LLM picked for the most recent AI query.
+    /// Drives ``effectiveNeedle`` (and therefore highlighting and counting).
+    @Published private(set) var aiResolvedPhrase: String?
+    /// User-visible error from the most recent AI query (e.g. "no match",
+    /// missing CLI, empty response). Cleared as soon as the user edits the
+    /// query or resubmits.
+    @Published private(set) var aiError: String?
+
     /// Closure that returns the live `WKWebView` for the owning tab — `nil`
     /// when the tab is hibernated or hasn't mounted yet. Lives as a closure
     /// rather than a stored reference so hibernation/resurrect cycles don't
@@ -25,11 +45,23 @@ final class FindController: ObservableObject {
     var webViewProvider: (() -> WKWebView?)?
 
     private var countTask: Task<Void, Never>?
+    private var aiTask: Task<Void, Never>?
+
+    /// The actual needle passed to WebKit. In literal mode it's the user's
+    /// typed query; in AI mode it's whatever phrase the LLM resolved (or nil
+    /// before the first successful resolution).
+    private var effectiveNeedle: String {
+        if isAIMode {
+            return aiResolvedPhrase ?? ""
+        }
+        return query
+    }
 
     func show() {
         isVisible = true
         focusRequestToken &+= 1
-        if !query.isEmpty {
+        let needle = effectiveNeedle
+        if !needle.isEmpty {
             scheduleCountMatches()
             runFind(forward: true, reset: true)
         }
@@ -39,8 +71,24 @@ final class FindController: ObservableObject {
     /// after page navigation so the counter and highlight reflect fresh
     /// content even while the user's focus is somewhere else (e.g. the
     /// page they just opened).
+    ///
+    /// In AI mode we deliberately drop the resolved phrase on navigation
+    /// rather than re-firing the LLM — the previous answer almost certainly
+    /// doesn't apply to the new page, and silently re-billing would be
+    /// surprising.
     func rerunForNavigation() {
-        guard isVisible, !query.isEmpty else { return }
+        guard isVisible else { return }
+        if isAIMode {
+            aiTask?.cancel()
+            aiSearching = false
+            aiResolvedPhrase = nil
+            aiError = nil
+            totalMatches = 0
+            currentMatch = 0
+            clearWebKitHighlight()
+            return
+        }
+        guard !query.isEmpty else { return }
         totalMatches = 0
         currentMatch = 0
         scheduleCountMatches()
@@ -51,12 +99,26 @@ final class FindController: ObservableObject {
         guard isVisible else { return }
         isVisible = false
         countTask?.cancel()
+        aiTask?.cancel()
+        aiSearching = false
         clearWebKitHighlight()
     }
 
     func updateQuery(_ text: String) {
         guard query != text else { return }
         query = text
+        if isAIMode {
+            // Typing a new question invalidates the previous AI result; we
+            // wait for an explicit submit (Enter) before paying for another
+            // LLM round trip.
+            aiResolvedPhrase = nil
+            aiError = nil
+            totalMatches = 0
+            currentMatch = 0
+            countTask?.cancel()
+            clearWebKitHighlight()
+            return
+        }
         if text.isEmpty {
             totalMatches = 0
             currentMatch = 0
@@ -68,18 +130,105 @@ final class FindController: ObservableObject {
         runFind(forward: true, reset: true)
     }
 
+    /// Toggles between literal and conversational interpretation of the
+    /// input. Either direction clears the find state so the new mode starts
+    /// fresh — keeping a stale highlight from the previous mode would be
+    /// more confusing than starting clean.
+    func toggleAIMode() {
+        setAIMode(!isAIMode)
+    }
+
+    func setAIMode(_ enabled: Bool) {
+        guard isAIMode != enabled else { return }
+        isAIMode = enabled
+        aiTask?.cancel()
+        aiSearching = false
+        aiResolvedPhrase = nil
+        aiError = nil
+        totalMatches = 0
+        currentMatch = 0
+        countTask?.cancel()
+        clearWebKitHighlight()
+    }
+
+    /// Called on Enter. In literal mode this just moves to the next match
+    /// (matching the previous behavior). In AI mode it fires off (or, if a
+    /// resolved phrase already exists for the unchanged query, just advances).
+    func submit() {
+        if isAIMode {
+            if aiResolvedPhrase != nil {
+                next()
+            } else {
+                runAIQuery()
+            }
+        } else {
+            next()
+        }
+    }
+
     func next() {
-        guard !query.isEmpty else { return }
+        guard !effectiveNeedle.isEmpty else { return }
         runFind(forward: true, reset: false)
     }
 
     func previous() {
-        guard !query.isEmpty else { return }
+        guard !effectiveNeedle.isEmpty else { return }
         runFind(forward: false, reset: false)
     }
 
+    /// Sends the user's natural-language query plus the page's visible text
+    /// to the configured fast model, then routes the resolved verbatim phrase
+    /// through the normal WebKit find pipeline.
+    func runAIQuery() {
+        guard isAIMode else { return }
+        let question = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !question.isEmpty else { return }
+        aiTask?.cancel()
+        aiResolvedPhrase = nil
+        aiError = nil
+        totalMatches = 0
+        currentMatch = 0
+        clearWebKitHighlight()
+        aiSearching = true
+
+        aiTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.aiSearching = false }
+            let pageText: String
+            do {
+                pageText = try await self.fetchPageText()
+            } catch {
+                if !Task.isCancelled, self.query.trimmingCharacters(in: .whitespacesAndNewlines) == question {
+                    self.aiError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+                return
+            }
+            if Task.isCancelled { return }
+            let result: ConversationalFindClient.Result
+            do {
+                result = try await ConversationalFindClient.resolve(question: question, pageText: pageText)
+            } catch {
+                if !Task.isCancelled, self.query.trimmingCharacters(in: .whitespacesAndNewlines) == question {
+                    self.aiError = (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+                }
+                return
+            }
+            if Task.isCancelled { return }
+            guard self.query.trimmingCharacters(in: .whitespacesAndNewlines) == question else { return }
+            switch result {
+            case .noMatch:
+                self.aiError = "No match for that on this page."
+            case .phrase(let phrase):
+                self.aiResolvedPhrase = phrase
+                self.scheduleCountMatches()
+                self.runFind(forward: true, reset: true)
+            }
+        }
+    }
+
     private func runFind(forward: Bool, reset: Bool) {
-        guard let webView = webViewProvider?(), !query.isEmpty else {
+        let needle = effectiveNeedle
+        guard let webView = webViewProvider?(), !needle.isEmpty else {
             return
         }
         let configuration = WKFindConfiguration()
@@ -87,10 +236,10 @@ final class FindController: ObservableObject {
         configuration.caseSensitive = false
         configuration.wraps = true
 
-        let issuedQuery = query
-        webView.find(issuedQuery, configuration: configuration) { [weak self] result in
+        let issuedNeedle = needle
+        webView.find(issuedNeedle, configuration: configuration) { [weak self] result in
             Task { @MainActor in
-                guard let self, self.query == issuedQuery else { return }
+                guard let self, self.effectiveNeedle == issuedNeedle else { return }
                 if result.matchFound {
                     if reset {
                         self.currentMatch = 1
@@ -106,6 +255,14 @@ final class FindController: ObservableObject {
                 } else {
                     self.totalMatches = 0
                     self.currentMatch = 0
+                    // In AI mode this means the model returned a phrase that
+                    // isn't actually on the page (it hallucinated or
+                    // paraphrased despite instructions). Surface that as a
+                    // miss rather than silently leaving the bar empty.
+                    if self.isAIMode, self.aiError == nil {
+                        self.aiError = "AI suggested a phrase that isn't on this page."
+                        self.aiResolvedPhrase = nil
+                    }
                 }
             }
         }
@@ -123,18 +280,18 @@ final class FindController: ObservableObject {
         }
     }
 
-    /// Counts occurrences of the current query in the page text via a
-    /// short JS pass. Debounced so rapid typing doesn't spawn many in-flight
-    /// evaluations; the latest task wins.
+    /// Counts occurrences of the current effective needle in the page text
+    /// via a short JS pass. Debounced so rapid typing doesn't spawn many
+    /// in-flight evaluations; the latest task wins.
     private func scheduleCountMatches() {
         countTask?.cancel()
-        let issuedQuery = query
+        let issuedNeedle = effectiveNeedle
         countTask = Task { @MainActor [weak self] in
             try? await Task.sleep(nanoseconds: 80_000_000)
-            guard !Task.isCancelled, let self, self.query == issuedQuery else {
+            guard !Task.isCancelled, let self, self.effectiveNeedle == issuedNeedle else {
                 return
             }
-            await self.countMatches(for: issuedQuery)
+            await self.countMatches(for: issuedNeedle)
         }
     }
 
@@ -167,7 +324,7 @@ final class FindController: ObservableObject {
         } catch {
             return
         }
-        guard self.query == needle else { return }
+        guard self.effectiveNeedle == needle else { return }
         let count = (raw as? Int) ?? ((raw as? NSNumber)?.intValue ?? 0)
         self.totalMatches = count
         if count == 0 {
@@ -177,6 +334,29 @@ final class FindController: ObservableObject {
         } else if self.currentMatch > count {
             self.currentMatch = count
         }
+    }
+
+    /// Pulls the page's visible text for the AI prompt. Mirrors the strategy
+    /// already used by ``countMatches(for:)`` (read `document.body.innerText`)
+    /// so we share whatever fidelity / edge cases the rest of the find code
+    /// has — keeping the literal counter and the AI input grounded in the
+    /// same view of the page.
+    private func fetchPageText() async throws -> String {
+        guard let webView = webViewProvider?() else {
+            throw ConversationalFindError.emptyPage
+        }
+        let script = "(document.body && document.body.innerText) || \"\""
+        let raw: Any?
+        do {
+            raw = try await webView.evaluateJavaScript(script)
+        } catch {
+            throw ConversationalFindError.emptyPage
+        }
+        let text = (raw as? String) ?? ""
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            throw ConversationalFindError.emptyPage
+        }
+        return text
     }
 
     /// Drops the highlight WKWebView leaves behind after a find. Calling
