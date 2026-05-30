@@ -102,23 +102,32 @@ struct MailToolService {
 
     private func show(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
         let args = MailArgs(call.rawArguments)
-        do {
-            if let identifier = call.mailIdentifier {
+        // Always surface the inbox UI first. It owns message loading, progress,
+        // error display, and re-authentication — so "show me my mail" works even
+        // when a silent prefetch can't get a token.
+        openInbox()
+
+        if let identifier = call.mailIdentifier {
+            do {
                 let thread = try await gmail.toolFetchThread(identifier: identifier)
                 gmail.presentThread(thread)
-                openInbox()
-                let subject = thread.last?.subject ?? "(no subject)"
-                return result(call, true, "Opened the inbox to: \(subject)")
+                return result(call, true, "Opened: \(thread.last?.subject ?? "(no subject)")")
+            } catch {
+                return result(call, true, "Opened the inbox. Couldn't preload that thread (\(message(error))) — the inbox view shows its current state.")
             }
-            let mailbox = parseMailbox(args.string("mailbox", "label") ?? call.mailbox) ?? .inbox
-            let query = args.string("query", "q") ?? call.query ?? ""
-            let list = try await gmail.toolSearch(query: query, mailbox: mailbox, maxResults: 30)
-            gmail.presentSearch(summaries: list.summaries, query: query, mailbox: mailbox)
-            openInbox()
-            return result(call, true, "Opened \(mailbox.title)\(query.isEmpty ? "" : " filtered by \"\(query)\"") — \(list.summaries.count) message\(list.summaries.count == 1 ? "" : "s").")
-        } catch {
-            return result(call, false, "Couldn't open the inbox: \(message(error))")
         }
+
+        let mailbox = parseMailbox(args.string("mailbox", "label") ?? call.mailbox) ?? .inbox
+        let query = args.string("query", "q") ?? call.query ?? ""
+        // Drive the store's own load path so the inbox shows a spinner and any
+        // auth/refresh error inline, rather than failing here.
+        gmail.selectMailbox(mailbox)
+        if query.isEmpty {
+            gmail.refreshList(force: true)
+        } else {
+            gmail.setQuery(query)
+        }
+        return result(call, true, "Opened \(mailbox.title)\(query.isEmpty ? "" : " filtered by \"\(query)\"").")
     }
 
     // MARK: - Draft
@@ -350,7 +359,14 @@ struct MailToolService {
     }
 
     private func message(_ error: Error) -> String {
-        (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
+        // handle() already verified the account is signed in, so a notSignedIn
+        // thrown deeper means the access token couldn't be refreshed (expired /
+        // revoked refresh token) — guide the user to reconnect rather than
+        // implying they were never signed in.
+        if let authError = error as? GmailAuthError, case .notSignedIn = authError, gmail.isSignedInForTools {
+            return "Your Gmail session expired. Open the inbox (⇧⌘E), sign out, and sign in again to reconnect."
+        }
+        return (error as? LocalizedError)?.errorDescription ?? error.localizedDescription
     }
 
     private func result(_ call: NativeBrowserToolCall, _ ok: Bool, _ content: String) -> NativeBrowserToolResult {

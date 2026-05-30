@@ -261,7 +261,15 @@ final class GmailStore: ObservableObject {
 extension GmailStore {
     /// A fresh authorized API service, or throws `notSignedIn`.
     func authorizedAPI() async throws -> GmailAPIService {
-        guard account.isSignedIn, let token = await account.currentAccessToken() else {
+        guard account.isSignedIn else { throw GmailAuthError.notSignedIn }
+        if let token = await account.currentAccessToken() {
+            return GmailAPIService(accessToken: token)
+        }
+        // Signed in but no token: the OAuth client may not have been loaded yet
+        // (the inbox overlay was never opened this session, so a token refresh
+        // couldn't run). Reload the client config and retry once before failing.
+        account.reloadCredentials()
+        guard let token = await account.currentAccessToken() else {
             throw GmailAuthError.notSignedIn
         }
         return GmailAPIService(accessToken: token)
