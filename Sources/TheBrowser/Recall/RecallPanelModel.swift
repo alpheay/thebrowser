@@ -15,9 +15,13 @@ final class RecallPanelModel: ObservableObject {
     @Published var selectedIndex = 0
     @Published private(set) var answer: RecallAnswer?
     @Published private(set) var isAnswering = false
+    /// Pages related to the one the user is currently viewing — proactive
+    /// "you've read about this before" connections, shown before they type.
+    @Published private(set) var related: [RecallDocument] = []
 
     private var searchTask: Task<Void, Never>?
     private var answerTask: Task<Void, Never>?
+    private var relatedTask: Task<Void, Never>?
 
     /// Debounce so each keystroke doesn't fire a query; 180ms feels instant
     /// while collapsing a burst of typing into one search.
@@ -26,13 +30,28 @@ final class RecallPanelModel: ObservableObject {
     func reset() {
         searchTask?.cancel()
         answerTask?.cancel()
+        relatedTask?.cancel()
         query = ""
         results = []
         answer = nil
+        related = []
         selectedIndex = 0
         didSearch = false
         isSearching = false
         isAnswering = false
+    }
+
+    /// Loads pages semantically related to the one being viewed, for the
+    /// idle state. Quietly no-ops when semantic search is off or there's no
+    /// page in focus.
+    func loadRelated(to url: URL?) {
+        relatedTask?.cancel()
+        guard let url else { related = []; return }
+        relatedTask = Task { [weak self] in
+            let docs = await RecallController.shared.relatedDocuments(to: url, limit: 4)
+            guard !Task.isCancelled, let self else { return }
+            self.related = docs
+        }
     }
 
     func onQueryChange() {

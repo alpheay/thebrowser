@@ -8,6 +8,7 @@ import SwiftUI
 @MainActor
 struct RecallPanelView: View {
     @ObservedObject var model: RecallPanelModel
+    let currentURL: URL?
     let onOpen: (URL) -> Void
     let onOpenInBackground: (URL) -> Void
     let onClose: () -> Void
@@ -39,6 +40,7 @@ struct RecallPanelView: View {
         }
         .onAppear {
             DispatchQueue.main.async { searchFocused = true }
+            model.loadRelated(to: currentURL)
         }
     }
 
@@ -200,25 +202,61 @@ struct RecallPanelView: View {
         .padding(.horizontal, 30)
     }
 
+    @ViewBuilder
     private var idleHint: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("Find anything you've read")
-                .font(.system(size: 12.5, weight: .semibold))
-                .foregroundStyle(Palette.textSecondary)
-            ForEach(Self.examples, id: \.self) { example in
-                HStack(spacing: 8) {
-                    Image(systemName: "arrow.turn.down.right")
-                        .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(Palette.textFaint)
-                    Text(example)
-                        .font(.system(size: 12, weight: .regular))
-                        .foregroundStyle(Palette.textMuted)
+        VStack(alignment: .leading, spacing: 14) {
+            if !model.related.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    sectionLabel("RELATED TO THIS PAGE")
+                    ForEach(model.related) { doc in
+                        Button {
+                            onOpen(doc.url)
+                            onClose()
+                        } label: {
+                            HStack(spacing: 9) {
+                                if !doc.host.isEmpty {
+                                    FaviconView(host: doc.host).frame(width: 14, height: 14)
+                                }
+                                Text(doc.title.isEmpty ? doc.host : doc.title)
+                                    .font(.system(size: 12.5, weight: .medium))
+                                    .foregroundStyle(Palette.textSecondary)
+                                    .lineLimit(1)
+                                Spacer(minLength: 0)
+                                Image(systemName: "arrow.up.right")
+                                    .font(.system(size: 8.5, weight: .bold))
+                                    .foregroundStyle(Palette.textFaint)
+                            }
+                            .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
+            }
+
+            VStack(alignment: .leading, spacing: 8) {
+                sectionLabel(model.related.isEmpty ? "FIND ANYTHING YOU'VE READ" : "OR ASK")
+                ForEach(Self.examples, id: \.self) { example in
+                    HStack(spacing: 8) {
+                        Image(systemName: "arrow.turn.down.right")
+                            .font(.system(size: 9, weight: .semibold))
+                            .foregroundStyle(Palette.textFaint)
+                        Text(example)
+                            .font(.system(size: 12, weight: .regular))
+                            .foregroundStyle(Palette.textMuted)
+                    }
                 }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(.horizontal, 18)
         .padding(.vertical, 16)
+    }
+
+    private func sectionLabel(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 9.5, weight: .semibold))
+            .tracking(1.4)
+            .foregroundStyle(Palette.textFaint)
     }
 
     private var footer: some View {

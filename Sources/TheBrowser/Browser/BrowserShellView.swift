@@ -221,6 +221,7 @@ struct BrowserShellView: View {
             if isShowingRecall {
                 RecallPanelView(
                     model: recallModel,
+                    currentURL: model.selectedTab.url,
                     onOpen: { url in
                         model.addressDraft = url.absoluteString
                         model.navigateSelected(to: url.absoluteString)
