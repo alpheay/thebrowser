@@ -6,6 +6,7 @@ import SwiftUI
 struct ContentBlockingSettingsContent: View {
     @StateObject private var controller = ContentBlockingController.shared
     @State private var newSite = ""
+    @State private var newPopupSite = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 28) {
@@ -19,6 +20,17 @@ struct ContentBlockingSettingsContent: View {
                     CBToggle(isOn: Binding(
                         get: { controller.isEnabled },
                         set: { controller.setEnabled($0) }
+                    ))
+                }
+
+                CBDivider()
+                CBRow(
+                    label: "Block pop-ups",
+                    help: "Allow user-opened links, but stop scripted windows unless a site is allowed."
+                ) {
+                    CBToggle(isOn: Binding(
+                        get: { controller.isPopupBlockingEnabled },
+                        set: { controller.setPopupBlockingEnabled($0) }
                     ))
                 }
             }
@@ -38,6 +50,8 @@ struct ContentBlockingSettingsContent: View {
             .disabled(!controller.isEnabled)
 
             allowlistSection
+
+            popupAllowlistSection
 
             statusFooter
         }
@@ -104,6 +118,56 @@ struct ContentBlockingSettingsContent: View {
         let candidate = newSite
         newSite = ""
         controller.allow(candidate)
+    }
+
+    private var popupAllowlistSection: some View {
+        CBSection("Pop-up Exceptions") {
+            CBRow(
+                label: "Allow pop-ups from",
+                help: "Sites here can open new windows for sign-in, checkout, and dashboards."
+            ) {
+                HStack(spacing: 8) {
+                    TextField("example.com", text: $newPopupSite)
+                        .textFieldStyle(.plain)
+                        .font(.system(size: 12.5))
+                        .foregroundStyle(Palette.textPrimary)
+                        .padding(.horizontal, 10)
+                        .frame(height: 30)
+                        .background {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .fill(Palette.bgRaised)
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                .stroke(Palette.stroke, lineWidth: 1)
+                        }
+                        .onSubmit(addPopupSite)
+                    CBSmallButton(title: "Add", action: addPopupSite)
+                        .disabled(SiteAllowList.normalize(newPopupSite) == nil)
+                }
+            }
+
+            if controller.popupAllowedSites.isEmpty {
+                CBDivider()
+                Text("No pop-up exceptions.")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(Palette.textMuted)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+            } else {
+                ForEach(controller.popupAllowedSites, id: \.self) { site in
+                    CBDivider()
+                    AllowedSiteRow(site: site) { controller.removePopupAllow(site) }
+                }
+            }
+        }
+    }
+
+    private func addPopupSite() {
+        let candidate = newPopupSite
+        newPopupSite = ""
+        controller.allowPopups(candidate)
     }
 
     // MARK: - Status

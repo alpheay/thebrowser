@@ -68,6 +68,8 @@ final class ContentBlockingController: ObservableObject {
 
     var isEnabled: Bool { preferences.isEnabled }
     var allowedSites: [String] { preferences.allowList.sortedDomains }
+    var isPopupBlockingEnabled: Bool { preferences.popupBlockingEnabled }
+    var popupAllowedSites: [String] { preferences.popupAllowList.sortedDomains }
 
     func isEnabled(_ category: BlockListCategory) -> Bool {
         preferences.isEnabled(category)
@@ -75,6 +77,10 @@ final class ContentBlockingController: ObservableObject {
 
     func isAllowlisted(_ host: String) -> Bool {
         preferences.allowList.contains(host)
+    }
+
+    func isPopupAllowlisted(_ host: String) -> Bool {
+        preferences.popupAllowList.contains(host)
     }
 
     // MARK: - Preference mutations
@@ -105,6 +111,26 @@ final class ContentBlockingController: ObservableObject {
         persistAndRecompile()
     }
 
+    func setPopupBlockingEnabled(_ enabled: Bool) {
+        guard preferences.popupBlockingEnabled != enabled else { return }
+        preferences.popupBlockingEnabled = enabled
+        persistOnly()
+    }
+
+    func allowPopups(_ hostOrURL: String) {
+        let before = preferences.popupAllowList
+        preferences.popupAllowList.insert(hostOrURL)
+        guard preferences.popupAllowList != before else { return }
+        persistOnly()
+    }
+
+    func removePopupAllow(_ host: String) {
+        let before = preferences.popupAllowList
+        preferences.popupAllowList.remove(host)
+        guard preferences.popupAllowList != before else { return }
+        persistOnly()
+    }
+
     /// Per-site convenience: flip blocking for a page's host. Used by toolbar /
     /// shield affordances that act on the current tab.
     func toggleAllowlist(for url: URL) {
@@ -129,11 +155,30 @@ final class ContentBlockingController: ObservableObject {
         }
     }
 
+    func shouldBlockPopup(
+        openerURL: URL?,
+        targetURL: URL?,
+        navigationType: WKNavigationType
+    ) -> Bool {
+        let userActivated = navigationType == .linkActivated || navigationType == .formSubmitted
+        return PopupBlockingPolicy.shouldBlock(
+            isEnabled: preferences.popupBlockingEnabled,
+            openerHost: openerURL?.host(percentEncoded: false),
+            targetHost: targetURL?.host(percentEncoded: false),
+            isUserActivated: userActivated,
+            allowList: preferences.popupAllowList
+        )
+    }
+
     // MARK: - Compilation
 
     private func persistAndRecompile() {
         preferences.save(to: defaults)
         recompile()
+    }
+
+    private func persistOnly() {
+        preferences.save(to: defaults)
     }
 
     private func recompile() {

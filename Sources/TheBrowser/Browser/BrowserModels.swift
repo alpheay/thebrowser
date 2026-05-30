@@ -642,6 +642,52 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         return true
     }
 
+    @discardableResult
+    private func blockPopupIfNeeded(_ navigationAction: WKNavigationAction, in webView: WKWebView) -> Bool {
+        guard navigationAction.targetFrame == nil,
+              ContentBlockingController.shared.shouldBlockPopup(
+                openerURL: webView.url ?? url,
+                targetURL: navigationAction.request.url,
+                navigationType: navigationAction.navigationType
+              ) else {
+            return false
+        }
+
+        notifyPopupBlocked(openerURL: webView.url ?? url, targetURL: navigationAction.request.url)
+        return true
+    }
+
+    private func notifyPopupBlocked(openerURL: URL?, targetURL: URL?) {
+        let openerHost = openerURL?.host(percentEncoded: false)
+        let targetHost = targetURL?.host(percentEncoded: false)
+        let message = targetHost.map { "Blocked \($0) from opening a new window." }
+            ?? "Blocked a scripted request to open a new window."
+        let action: (@MainActor () -> Void)?
+        if let openerHost {
+            action = {
+                ContentBlockingController.shared.allowPopups(openerHost)
+                _ = AppNotificationCenter.shared.post(
+                    title: "Pop-ups allowed",
+                    message: "Future pop-ups from \(openerHost) will open.",
+                    icon: "rectangle.on.rectangle",
+                    kind: .success
+                )
+            }
+        } else {
+            action = nil
+        }
+
+        AppNotificationCenter.shared.post(
+            title: "Pop-up blocked",
+            message: message,
+            icon: "rectangle.on.rectangle.slash",
+            kind: .info,
+            duration: 5,
+            actionLabel: openerHost == nil ? nil : "Allow site",
+            action: action
+        )
+    }
+
     private func load(_ target: URL) {
         guard Self.isYouTubeURL(target),
               let cookie = Self.youtubeDarkModeCookie else {
@@ -1343,10 +1389,15 @@ extension BrowserTab: WKNavigationDelegate {
                 return
             }
 
-            if navigationAction.targetFrame == nil,
-               self.handleNewWindowRequest(navigationAction.request) {
-                decisionHandler(.cancel)
-                return
+            if navigationAction.targetFrame == nil {
+                if self.blockPopupIfNeeded(navigationAction, in: webView) {
+                    decisionHandler(.cancel)
+                    return
+                }
+                if self.handleNewWindowRequest(navigationAction.request) {
+                    decisionHandler(.cancel)
+                    return
+                }
             }
 
             decisionHandler(.allow)
@@ -1443,6 +1494,9 @@ extension BrowserTab: WKUIDelegate {
                              windowFeatures: WKWindowFeatures) -> WKWebView? {
         Task { @MainActor [weak self] in
             guard navigationAction.targetFrame == nil else { return }
+            if self?.blockPopupIfNeeded(navigationAction, in: webView) == true {
+                return
+            }
             _ = self?.handleNewWindowRequest(navigationAction.request)
         }
         return nil

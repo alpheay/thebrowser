@@ -278,6 +278,54 @@ struct ContentBlockingPreferencesTests {
     }
 }
 
+@Suite("PopupBlockingPolicy")
+struct PopupBlockingPolicyTests {
+    @Test("Scripted pop-ups are blocked by default")
+    func blocksScriptedPopups() {
+        #expect(PopupBlockingPolicy.shouldBlock(
+            isEnabled: true,
+            openerHost: "example.com",
+            targetHost: "ads.example",
+            isUserActivated: false,
+            allowList: SiteAllowList()
+        ))
+    }
+
+    @Test("User-activated new windows are allowed")
+    func allowsUserActivatedPopups() {
+        #expect(!PopupBlockingPolicy.shouldBlock(
+            isEnabled: true,
+            openerHost: "example.com",
+            targetHost: "docs.example",
+            isUserActivated: true,
+            allowList: SiteAllowList()
+        ))
+    }
+
+    @Test("Allowed opener sites can open pop-ups")
+    func allowsAllowlistedOpeners() {
+        let allowList = SiteAllowList(domains: ["example.com"])
+        #expect(!PopupBlockingPolicy.shouldBlock(
+            isEnabled: true,
+            openerHost: "checkout.example.com",
+            targetHost: "pay.example",
+            isUserActivated: false,
+            allowList: allowList
+        ))
+    }
+
+    @Test("Disabled popup blocking allows everything")
+    func disabledAllows() {
+        #expect(!PopupBlockingPolicy.shouldBlock(
+            isEnabled: false,
+            openerHost: "example.com",
+            targetHost: "ads.example",
+            isUserActivated: false,
+            allowList: SiteAllowList()
+        ))
+    }
+}
+
 @Suite("ContentRuleCompiler encoding")
 struct ContentRuleCompilerTests {
     private func triggers(_ json: String) throws -> [[String: Any]] {
