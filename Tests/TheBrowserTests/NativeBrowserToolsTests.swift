@@ -160,7 +160,7 @@ struct NativeBrowserToolsTests {
         #expect(call.rawInput == "Click the first result and summarize it.")
     }
 
-    @Test("mail_search parses query mailbox and max results")
+    @Test("mail_search parses raw query, mailbox, and max results")
     func mailSearchParsesArguments() throws {
         let call = try #require(NativeBrowserToolCall.parse(from: #"{"tool":"mail_search","query":"from:alex newer_than:7d","mailbox":"inbox","max_results":5}"#))
 
@@ -168,7 +168,7 @@ struct NativeBrowserToolsTests {
         #expect(call.query == "from:alex newer_than:7d")
         #expect(call.mailbox == "inbox")
         #expect(call.maxResults == 5)
-        #expect(call.rawInput == "inbox: from:alex newer_than:7d")
+        #expect(call.rawInput == "inbox from:alex newer_than:7d")
     }
 
     @Test("mail_search accepts a mailbox without a query")
@@ -181,6 +181,117 @@ struct NativeBrowserToolsTests {
         #expect(call.rawInput == "inbox")
     }
 
+    @Test("mail_search parses structured filters")
+    func mailSearchParsesStructuredFilters() throws {
+        let json = #"""
+        {
+            "tool": "mail_search",
+            "mailbox": "inbox",
+            "from": "alice@example.com",
+            "subject": "invoice",
+            "has_attachment": true,
+            "unread_only": true,
+            "newer_than": "7d",
+            "after": "2025-01-01",
+            "before": "2025-06-30",
+            "format": "detailed"
+        }
+        """#
+        let call = try #require(NativeBrowserToolCall.parse(from: json))
+
+        #expect(call.name == .mailSearch)
+        #expect(call.mailFrom == "alice@example.com")
+        #expect(call.mailSubject == "invoice")
+        #expect(call.mailHasAttachment == true)
+        #expect(call.mailUnreadOnly == true)
+        #expect(call.mailNewerThan == "7d")
+        #expect(call.mailAfter == "2025-01-01")
+        #expect(call.mailBefore == "2025-06-30")
+        #expect(call.mailFormat == "detailed")
+    }
+
+    @Test("MailSearchOptions builds a valid Gmail query string")
+    func mailSearchOptionsBuildQuery() {
+        let options = MailSearchOptions(
+            mailbox: .inbox,
+            rawQuery: nil,
+            from: "Alice Smith",
+            to: nil,
+            subject: "invoice",
+            keyword: nil,
+            label: nil,
+            hasAttachment: true,
+            unreadOnly: true,
+            starredOnly: nil,
+            newerThan: "7d",
+            olderThan: nil,
+            after: "2025-01-01",
+            before: nil,
+            maxResults: 20,
+            format: .compact
+        )
+
+        let query = options.gmailQueryString()
+        #expect(query.contains("from:\"Alice Smith\""))
+        #expect(query.contains("subject:invoice"))
+        #expect(query.contains("has:attachment"))
+        #expect(query.contains("is:unread"))
+        #expect(query.contains("newer_than:7d"))
+        #expect(query.contains("after:2025/01/01"))
+    }
+
+    @Test("MailSearchOptions rejects malformed dates and durations")
+    func mailSearchOptionsRejectsMalformed() {
+        let options = MailSearchOptions(
+            mailbox: nil,
+            rawQuery: nil,
+            from: nil,
+            to: nil,
+            subject: nil,
+            keyword: "hello",
+            label: nil,
+            hasAttachment: nil,
+            unreadOnly: nil,
+            starredOnly: nil,
+            newerThan: "two weeks",
+            olderThan: nil,
+            after: "January 1",
+            before: nil,
+            maxResults: 10,
+            format: .compact
+        )
+
+        let query = options.gmailQueryString()
+        #expect(query == "hello")
+        #expect(options.validationError?.contains("newer_than") == true)
+        #expect(options.validationError?.contains("after") == true)
+    }
+
+    @Test("MailSearchOptions ignores inactive false boolean filters")
+    func mailSearchOptionsIgnoreFalseBooleans() {
+        let options = MailSearchOptions(
+            mailbox: nil,
+            rawQuery: nil,
+            from: nil,
+            to: nil,
+            subject: nil,
+            keyword: nil,
+            label: nil,
+            hasAttachment: false,
+            unreadOnly: false,
+            starredOnly: false,
+            newerThan: nil,
+            olderThan: nil,
+            after: nil,
+            before: nil,
+            maxResults: 10,
+            format: .compact
+        )
+
+        #expect(!options.hasAnyFilter)
+        #expect(options.gmailQueryString().isEmpty)
+    }
+
     @Test("mail_read_thread parses message id")
     func mailReadThreadParsesMessageID() throws {
         let call = try #require(NativeBrowserToolCall.parse(from: #"{"tool":"mail_read_thread","message_id":"msg-123"}"#))
@@ -188,6 +299,30 @@ struct NativeBrowserToolsTests {
         #expect(call.name == .mailReadThread)
         #expect(call.mailIdentifier == MailToolMessageIdentifier(kind: .message, value: "msg-123"))
         #expect(call.rawInput == "message:msg-123")
+    }
+
+    @Test("mail_read_thread parses batch identifiers and body options")
+    func mailReadThreadParsesBatch() throws {
+        let json = #"""
+        {
+            "tool": "mail_read_thread",
+            "message_ids": ["msg:msg-a", "msg-b"],
+            "thread_ids": ["thr-c", "thread:thr-d"],
+            "include_body": false,
+            "max_body_chars": 500
+        }
+        """#
+        let call = try #require(NativeBrowserToolCall.parse(from: json))
+
+        #expect(call.name == .mailReadThread)
+        let identifiers = call.mailIdentifiers
+        #expect(identifiers.count == 4)
+        #expect(identifiers[0] == MailToolMessageIdentifier(kind: .message, value: "msg-a"))
+        #expect(identifiers[1] == MailToolMessageIdentifier(kind: .message, value: "msg-b"))
+        #expect(identifiers[2] == MailToolMessageIdentifier(kind: .thread, value: "thr-c"))
+        #expect(identifiers[3] == MailToolMessageIdentifier(kind: .thread, value: "thr-d"))
+        #expect(call.mailIncludeBody == false)
+        #expect(call.mailMaxBodyChars == 500)
     }
 
     @Test("mail_draft_reply parses thread id and body")
@@ -277,8 +412,7 @@ struct NativeBrowserToolsTests {
     @Test("mail_search opens Gmail overlay and formats results")
     func mailSearchInvokesMailBridge() async {
         var openedMail = false
-        var receivedQuery = ""
-        var receivedMailbox: GmailMailbox?
+        var receivedOptions: MailSearchOptions?
         let executor = NativeBrowserToolExecutor(
             openURL: { _ in },
             readTabsContent: { _ in "" },
@@ -287,9 +421,8 @@ struct NativeBrowserToolsTests {
             openMailIntegration: {
                 openedMail = true
             },
-            searchMail: { query, mailbox, _ in
-                receivedQuery = query
-                receivedMailbox = mailbox
+            searchMail: { options in
+                receivedOptions = options
                 return [
                     GmailMessageSummary(
                         id: "msg-123",
@@ -309,15 +442,165 @@ struct NativeBrowserToolsTests {
         )
 
         let result = await executor.execute(
-            NativeBrowserToolCall(name: .mailSearch, query: "", mailbox: "inbox")
+            NativeBrowserToolCall(name: .mailSearch, mailbox: "inbox")
         )
 
         #expect(openedMail)
-        #expect(receivedQuery == "")
-        #expect(receivedMailbox == .inbox)
+        #expect(receivedOptions?.mailbox == .inbox)
+        #expect(receivedOptions?.gmailQueryString() == "")
         #expect(result.succeeded)
-        #expect(result.content.contains("Message ID: msg-123"))
+        #expect(result.content.contains("msg:msg-123"))
+        #expect(result.content.contains("Planning"))
+        #expect(result.content.contains("Mailbox: Inbox"))
         #expect(result.invocation.tool == "mail_search")
+    }
+
+    @MainActor
+    @Test("mail_search rejects empty filter set with helpful message")
+    func mailSearchRejectsEmptyFilters() async {
+        var openedMail = false
+        let executor = NativeBrowserToolExecutor(
+            openURL: { _ in },
+            readTabsContent: { _ in "" },
+            readHighlightsContent: { _ in "" },
+            smartReadContent: { "" },
+            openMailIntegration: { openedMail = true },
+            searchMail: { _ in
+                Issue.record("searchMail should not be invoked when no filter is supplied")
+                return []
+            },
+            saveAndOpenArtifact: { _, _ in URL(fileURLWithPath: "/tmp/unused.html") }
+        )
+
+        let result = await executor.execute(NativeBrowserToolCall(name: .mailSearch))
+
+        #expect(!result.succeeded)
+        #expect(openedMail)
+        #expect(result.content.contains("at least one filter"))
+    }
+
+    @MainActor
+    @Test("mail_search rejects invalid structured filters before searching")
+    func mailSearchRejectsInvalidFilters() async {
+        var searched = false
+        let executor = NativeBrowserToolExecutor(
+            openURL: { _ in },
+            readTabsContent: { _ in "" },
+            readHighlightsContent: { _ in "" },
+            smartReadContent: { "" },
+            searchMail: { _ in
+                searched = true
+                return []
+            },
+            saveAndOpenArtifact: { _, _ in URL(fileURLWithPath: "/tmp/unused.html") }
+        )
+
+        let result = await executor.execute(
+            NativeBrowserToolCall(name: .mailSearch, mailNewerThan: "two weeks", mailAfter: "2025-02-31")
+        )
+
+        #expect(!result.succeeded)
+        #expect(!searched)
+        #expect(result.content.contains("invalid filters"))
+        #expect(result.content.contains("newer_than"))
+        #expect(result.content.contains("after"))
+    }
+
+    @MainActor
+    @Test("mail_read_thread fans out across batched identifiers")
+    func mailReadThreadBatch() async {
+        var receivedOptions: MailReadOptions?
+        let executor = NativeBrowserToolExecutor(
+            openURL: { _ in },
+            readTabsContent: { _ in "" },
+            readHighlightsContent: { _ in "" },
+            smartReadContent: { "" },
+            openMailIntegration: {},
+            readMail: { options in
+                receivedOptions = options
+                return options.identifiers.map { identifier in
+                    [
+                        GmailMessage(
+                            id: identifier.value,
+                            threadId: "thr-\(identifier.value)",
+                            subject: "Subject \(identifier.value)",
+                            fromName: "Sender",
+                            fromAddress: "sender@example.com",
+                            to: "me@example.com",
+                            cc: nil,
+                            date: Date(timeIntervalSince1970: 0),
+                            snippet: "snippet",
+                            plainBody: String(repeating: "x", count: 3_000),
+                            htmlBody: nil,
+                            labelIDs: [],
+                            unread: false
+                        )
+                    ]
+                }
+            },
+            saveAndOpenArtifact: { _, _ in URL(fileURLWithPath: "/tmp/unused.html") }
+        )
+
+        let result = await executor.execute(
+            NativeBrowserToolCall(
+                name: .mailReadThread,
+                messageIDs: ["msg-a", "msg-b"],
+                mailIncludeBody: true,
+                mailMaxBodyChars: 200
+            )
+        )
+
+        #expect(result.succeeded)
+        #expect(receivedOptions?.identifiers.count == 2)
+        #expect(receivedOptions?.maxBodyChars == 200)
+        #expect(result.content.contains("Read 2 threads."))
+        #expect(result.content.contains("msg:msg-a"))
+        #expect(result.content.contains("msg:msg-b"))
+        #expect(result.content.contains("body truncated at 200 chars"))
+    }
+
+    @MainActor
+    @Test("mail_read_thread headers-only skips body block")
+    func mailReadThreadHeadersOnly() async {
+        let executor = NativeBrowserToolExecutor(
+            openURL: { _ in },
+            readTabsContent: { _ in "" },
+            readHighlightsContent: { _ in "" },
+            smartReadContent: { "" },
+            openMailIntegration: {},
+            readMail: { _ in
+                [[
+                    GmailMessage(
+                        id: "msg-x",
+                        threadId: "thr-x",
+                        subject: "Subject X",
+                        fromName: "Sender",
+                        fromAddress: "sender@example.com",
+                        to: "me@example.com",
+                        cc: nil,
+                        date: Date(timeIntervalSince1970: 0),
+                        snippet: "snip",
+                        plainBody: "Real body content that we don't want to see.",
+                        htmlBody: nil,
+                        labelIDs: [],
+                        unread: false
+                    )
+                ]]
+            },
+            saveAndOpenArtifact: { _, _ in URL(fileURLWithPath: "/tmp/unused.html") }
+        )
+
+        let result = await executor.execute(
+            NativeBrowserToolCall(
+                name: .mailReadThread,
+                messageID: "msg-x",
+                mailIncludeBody: false
+            )
+        )
+
+        #expect(result.succeeded)
+        #expect(result.content.contains("headers only"))
+        #expect(!result.content.contains("Real body content"))
     }
 
     @MainActor
