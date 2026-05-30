@@ -33,6 +33,7 @@ struct GmailMessage: Identifiable, Hashable {
     let htmlBody: String?
     let labelIDs: [String]
     var unread: Bool
+    var attachments: [MailAttachment] = []
 
     var hasHTML: Bool { htmlBody?.isEmpty == false }
 }

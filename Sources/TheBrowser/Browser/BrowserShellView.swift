@@ -11,6 +11,7 @@ struct BrowserShellView: View {
     @StateObject private var integrations = IntegrationsModel()
     @StateObject private var gmailAccount = GmailAccountStore.shared
     @StateObject private var gmailStore = GmailStore(account: GmailAccountStore.shared)
+    @StateObject private var mailModel = MailModel.shared
     @StateObject private var artifactGallery = ArtifactGalleryModel()
 
     @AppStorage(PreferenceKey.toggleChatShortcut) private var toggleChatShortcut = "command+j"
@@ -84,18 +85,17 @@ struct BrowserShellView: View {
                                     integrations.open(.gmail)
                                 }
                             },
-                            searchMail: { query, mailbox, maxResults in
-                                try await gmailStore.searchForTool(
-                                    query: query,
-                                    mailbox: mailbox,
-                                    maxResults: maxResults
+                            runMailTool: { call in
+                                let service = MailToolService(
+                                    gmail: gmailStore,
+                                    mail: mailModel,
+                                    openOverlay: {
+                                        withAnimation(Motion.springSnap) {
+                                            integrations.open(.gmail)
+                                        }
+                                    }
                                 )
-                            },
-                            readMailThread: { identifier in
-                                try await gmailStore.readThreadForTool(identifier: identifier)
-                            },
-                            draftMailReply: { identifier, body in
-                                try await gmailStore.draftReplyForTool(identifier: identifier, body: body)
+                                return await service.handle(call)
                             },
                             saveAndOpenArtifact: { title, html in
                                 let url = try ArtifactStore.shared.save(title: title, html: html)
@@ -202,7 +202,8 @@ struct BrowserShellView: View {
                 IntegrationsOverlay(
                     model: integrations,
                     gmailAccount: gmailAccount,
-                    gmailStore: gmailStore
+                    gmailStore: gmailStore,
+                    mailModel: mailModel
                 )
                     .ignoresSafeArea()
                     .transition(.opacity)

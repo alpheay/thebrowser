@@ -71,6 +71,24 @@ enum PreferenceKey {
     /// ``ContentBlockingPreferences/load(from:key:)``, which supplies its own
     /// defaults, so this key needs no `register(defaults:)` entry.
     static let contentBlocking = "contentBlocking.preferences"
+
+    // MARK: - Mail (intelligent inbox)
+    /// What the AI is allowed to do when sending mail (`MailSendMode`).
+    static let mailSendMode = "mail.sendMode"
+    /// Provider the mail sub-agent runs on ("codex"/"claude"). Empty = follow
+    /// the user's main chat provider. The model is always that provider's fast
+    /// model (gpt-5.4-mini / claude-haiku-4-5).
+    static let mailSubagentProvider = "mail.subagentProvider"
+    /// Whether incoming inbox mail is auto-classified into AI labels.
+    static let mailTriageEnabled = "mail.triageEnabled"
+    /// Whether AI labels are also mirrored to real Gmail labels.
+    static let mailMirrorLabelsToGmail = "mail.mirrorLabelsToGmail"
+    /// Whether the dropped-ball scanner nudges on stale awaiting-reply threads.
+    static let mailDroppedBallEnabled = "mail.droppedBallEnabled"
+    /// Days an inbox thread can sit awaiting your reply before it's a dropped ball.
+    static let mailDroppedBallDays = "mail.droppedBallDays"
+    /// Whether the assistant may auto-extract memories from mail it reads/sends.
+    static let mailMemoryAutoExtract = "mail.memoryAutoExtract"
 }
 
 /// Modifier choices for Hover Preview. Raw values are stored in
@@ -183,7 +201,14 @@ enum AppDefaults {
             PreferenceKey.toolbarShowClipboard: false,
             PreferenceKey.toolbarShowTabRailToggle: true,
             PreferenceKey.toolbarShowChatToggle: true,
-            PreferenceKey.tabHibernationMinutes: 30
+            PreferenceKey.tabHibernationMinutes: 30,
+            PreferenceKey.mailSendMode: MailSendMode.draftOnly.rawValue,
+            PreferenceKey.mailSubagentProvider: "",
+            PreferenceKey.mailTriageEnabled: true,
+            PreferenceKey.mailMirrorLabelsToGmail: false,
+            PreferenceKey.mailDroppedBallEnabled: true,
+            PreferenceKey.mailDroppedBallDays: 1,
+            PreferenceKey.mailMemoryAutoExtract: true
         ])
     }
 

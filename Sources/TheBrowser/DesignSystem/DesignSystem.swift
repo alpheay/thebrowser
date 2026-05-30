@@ -39,6 +39,16 @@ enum Palette {
     static let accent = Color.white
     static let accentSoft = Color.white.opacity(0.14)
     static let accentGlow = Color.white.opacity(0.22)
+
+    // Inset field/chip plates — used by composer-adjacent controls (mail draft
+    // card, inline editors) that sit on top of `surface` and need a slightly
+    // recessed background.
+    static let inputBackground = Color(hex: 0x0F0F0F)
+    static let chipBackground = Color.white.opacity(0.05)
+
+    // The one non-monochrome accent: a muted red reserved for genuine failure
+    // states (matches the notification error tint). Use sparingly.
+    static let danger = Color(red: 1.0, green: 0.55, blue: 0.55)
 }
 
 enum Typography {
