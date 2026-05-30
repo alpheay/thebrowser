@@ -194,6 +194,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         configuration.userContentController.add(bridge, name: TextSelectionBridge.messageName)
         configuration.userContentController.add(citedBridge, name: CitedClipboardBridge.messageName)
         configuration.userContentController.add(hoverBridge, name: LinkHoverBridge.messageName)
+        // Ad/tracker blocking: applies whatever the shared controller has
+        // compiled so far. The first tab at launch may get an empty set; it's
+        // topped up via ``refreshContentBlocking()`` once compilation lands.
+        configuration.userContentController.applyContentBlocking()
 
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.customUserAgent = Self.userAgent
@@ -241,6 +245,15 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             "window.__theBrowserHoverPreview && window.__theBrowserHoverPreview.setEnabled(\(enabled ? "true" : "false"));",
             completionHandler: nil
         )
+    }
+
+    /// Re-applies the shared content-blocking rule lists to this tab's live
+    /// WKWebView. Only touches tabs with a mounted view — hibernated tabs get
+    /// fresh rules when they resurrect through ``mountWebViewStack``, so this
+    /// never silently wakes one.
+    func refreshContentBlocking() {
+        guard let view = _webView else { return }
+        view.configuration.userContentController.applyContentBlocking()
     }
 
     func applySelectionInfo(_ info: TextSelectionInfo?) {
