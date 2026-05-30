@@ -19,6 +19,7 @@ state.
 | ⬜ | **App Shell & Window** | `@main` entry, layout orchestrator, keyboard, settings | `#E2E8F0` / `#475569` |
 | 🟦 | **Browser Core** | tab model, navigation, toolbar, tab rail, home page | `#DBEAFE` / `#2563EB` |
 | 🟩 | **Web Content & JS Bridges** | `WKWebView` + scripts injected into every page | `#CCFBF1` / `#0D9488` |
+| 🟢 | **Privacy & Blocking** | content/ad/tracker rule lists, compiler, allowlist | `#DCFCE7` / `#16A34A` |
 | 🟨 | **Reading & Capture** | reader mode, smart read, hover preview, find, cited clipboard | `#FEF9C3` / `#CA8A04` |
 | 🟪 | **AI Assistant & Agent** | chat UI, agent harness, provider client, tools, sessions | `#EDE9FE` / `#7C3AED` |
 | 🟧 | **Search** | engines, results rendering, fast inline AI answer | `#FFEDD5` / `#EA580C` |
@@ -56,6 +57,13 @@ flowchart TB
         SelBridge["TextSelectionBridge"]
         ClipBridge["CitedClipboardBridge"]
         HoverBridge["LinkHoverBridge"]
+    end
+
+    subgraph BLOCK["🟢 Privacy &amp; Blocking"]
+        CBController["ContentBlockingController<br/>compile · apply · allowlist"]
+        CBCatalog["BlockListCatalog<br/>bundled ad/tracker lists"]
+        CBCompiler["ContentRuleCompiler<br/>→ WKContentRuleList"]
+        CBPrefs["ContentBlockingPreferences<br/>+ SiteAllowList"]
     end
 
     subgraph FEAT["🟨 Reading &amp; Capture"]
@@ -127,6 +135,15 @@ flowchart TB
     HoverBridge --> Hover
     ClipCtl --> ClipStore
 
+    %% Privacy & blocking (compiled rule lists ride on every tab's config)
+    Settings --> CBController
+    CBController --> CBCatalog
+    CBController --> CBCompiler
+    CBController --> CBPrefs
+    CBPrefs --> Defaults
+    CBCompiler -.->|WKContentRuleList| WK
+    CBController -.->|recompiled → refresh tabs| Model
+
     %% Reading features
     Tab --> Reader
     Tab --> Smart
@@ -166,6 +183,7 @@ flowchart TB
     classDef shell  fill:#E2E8F0,stroke:#475569,color:#0F172A;
     classDef core   fill:#DBEAFE,stroke:#2563EB,color:#0F172A;
     classDef web    fill:#CCFBF1,stroke:#0D9488,color:#0F172A;
+    classDef block  fill:#DCFCE7,stroke:#16A34A,color:#0F172A;
     classDef feat   fill:#FEF9C3,stroke:#CA8A04,color:#0F172A;
     classDef ai     fill:#EDE9FE,stroke:#7C3AED,color:#0F172A;
     classDef search fill:#FFEDD5,stroke:#EA580C,color:#0F172A;
@@ -175,6 +193,7 @@ flowchart TB
     class App,Shell,Keys,Settings shell;
     class Model,Tab,Toolbar,Rail,Home core;
     class WK,SelBridge,ClipBridge,HoverBridge web;
+    class CBController,CBCatalog,CBCompiler,CBPrefs block;
     class Reader,Smart,Hover,Find,ClipCtl,SelWidget feat;
     class Chat,Harness,Provider,Parser,Tools,Sessions,Artifacts ai;
     class Engine,Results,Answer search;
@@ -245,6 +264,48 @@ flowchart LR
 
 ---
 
+## 4 · Content blocking pipeline
+
+Ad/tracker blocking is a self-contained module under
+[`ContentBlocking/`](Sources/TheBrowser/ContentBlocking). It leans on WebKit's
+native `WKContentRuleList` — declarative rules compiled to a bytecode matcher
+that runs in the networking process, **before** a request leaves the device.
+The catalog ships bundled so blocking works offline on first launch; the
+per-site allowlist is folded in as `unless-domain` at compile time, so toggling
+a site is a recompile, not a rebuild.
+
+```mermaid
+flowchart LR
+    Toggle["Settings toggles<br/>master · categories"] --> Ctl
+    Allow["Per-site allowlist<br/>SiteAllowList"] --> Ctl
+    Ctl["ContentBlockingController"] --> Pick["Enabled lists<br/>from BlockListCatalog"]
+    Ctl --> Inject["Inject allowlist<br/>as unless-domain"]
+    Pick --> Comp["ContentRuleCompiler"]
+    Inject --> Comp
+    Comp --> Store["WKContentRuleListStore<br/>compile + cache"]
+    Store --> Lists["WKContentRuleList × N"]
+    Lists -.->|apply to userContentController| Tabs["Every tab's WKWebView"]
+    Tabs --> WebKit["WebKit networking process<br/>blocks before load"]
+
+    classDef block fill:#DCFCE7,stroke:#16A34A,color:#0F172A;
+    classDef core  fill:#DBEAFE,stroke:#2563EB,color:#0F172A;
+    classDef ext   fill:#FEE2E2,stroke:#DC2626,color:#0F172A;
+    class Toggle,Allow,Ctl,Pick,Inject,Comp,Store,Lists block;
+    class Tabs core;
+    class WebKit ext;
+```
+
+Each piece is its own file: the rule model ([`BlockRule`](Sources/TheBrowser/ContentBlocking/BlockRule.swift)),
+the category taxonomy, the bundled
+[`BlockListCatalog`](Sources/TheBrowser/ContentBlocking/BlockListCatalog.swift),
+the [`ContentRuleCompiler`](Sources/TheBrowser/ContentBlocking/ContentRuleCompiler.swift),
+preferences + allowlist persistence, the
+[`ContentBlockingController`](Sources/TheBrowser/ContentBlocking/ContentBlockingController.swift)
+that ties them together, and the settings pane. The browser touches it through a
+single `userContentController.applyContentBlocking()` call in `mountWebViewStack`.
+
+---
+
 ## Subsystem reference
 
 | 🎨 | Subsystem | Key files | Responsibility |
@@ -252,6 +313,7 @@ flowchart LR
 | ⬜ | App Shell | [TheBrowserApp.swift](Sources/TheBrowser/App/TheBrowserApp.swift), [BrowserShellView.swift](Sources/TheBrowser/Browser/BrowserShellView.swift), [KeyboardShortcuts.swift](Sources/TheBrowser/App/KeyboardShortcuts.swift) | Entry point, master `rail │ center │ chat` layout, global ⌘-bindings |
 | 🟦 | Browser Core | [BrowserModel.swift](Sources/TheBrowser/Browser/BrowserModel.swift), [BrowserModels.swift](Sources/TheBrowser/Browser/BrowserModels.swift), [BrowserToolbar.swift](Sources/TheBrowser/Browser/BrowserToolbar.swift), [TabRailView.swift](Sources/TheBrowser/Browser/TabRailView.swift) | Tab/navigation state, per-tab `WKWebView` lifecycle, idle-tab hibernation |
 | 🟩 | Web & Bridges | [BrowserWebView.swift](Sources/TheBrowser/Browser/BrowserWebView.swift), [TextSelectionBridge.swift](Sources/TheBrowser/Browser/TextSelectionBridge.swift), [CitedClipboardBridge.swift](Sources/TheBrowser/Clipboard/CitedClipboardBridge.swift) | WebKit host + `postMessage` bridges for selection, copy, link-hover |
+| 🟢 | Privacy & Blocking | [ContentBlockingController.swift](Sources/TheBrowser/ContentBlocking/ContentBlockingController.swift), [BlockListCatalog.swift](Sources/TheBrowser/ContentBlocking/BlockListCatalog.swift), [ContentRuleCompiler.swift](Sources/TheBrowser/ContentBlocking/ContentRuleCompiler.swift), [ContentBlocking/](Sources/TheBrowser/ContentBlocking) | Native ad/tracker/annoyance blocking via `WKContentRuleList`; per-category toggles + per-site allowlist |
 | 🟨 | Reading & Capture | [SmartReadView.swift](Sources/TheBrowser/Browser/SmartReadView.swift), [ReaderModeView.swift](Sources/TheBrowser/Browser/ReaderModeView.swift), [CitedClipboardController.swift](Sources/TheBrowser/Clipboard/CitedClipboardController.swift), [HoverPreview/](Sources/TheBrowser/Browser/HoverPreview), [FindBar/](Sources/TheBrowser/Browser/FindBar) | AI summaries, distraction-free reading, citations, link previews, ⌘F |
 | 🟪 | AI Assistant | [AIChatPanel.swift](Sources/TheBrowser/Chat/AIChatPanel.swift), [AgentHarness.swift](Sources/TheBrowser/Chat/AgentHarness.swift), [AIProviderClient.swift](Sources/TheBrowser/Chat/AIProviderClient.swift), [NativeBrowserTools/](Sources/TheBrowser/Chat/NativeBrowserTools) | Chat state, CLI invoke + stream parse, tool-call loop, model picker |
 | 🟧 | Search | [SearchEngine.swift](Sources/TheBrowser/Search/SearchEngine.swift), [SearchResultsView.swift](Sources/TheBrowser/Search/SearchResultsView.swift), [AIAnswerClient.swift](Sources/TheBrowser/Search/AIAnswerClient.swift) | Pluggable engines, results rendering, fast inline AI answer card |
@@ -268,6 +330,7 @@ flowchart LR
 | Generated artifacts | `~/.thebrowser/artifacts/` | HTML files |
 | OAuth tokens | macOS Keychain | Secure storage |
 | Preferences | `com.venehealth.thebrowser` plist | UserDefaults |
+| Compiled block rules | WebKit rule-list store | `WKContentRuleListStore` (system) |
 
 ---
 
