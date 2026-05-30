@@ -65,6 +65,11 @@ enum PreferenceKey {
     /// survive; selecting the tab reloads the page. Set to zero to
     /// disable hibernation entirely.
     static let tabHibernationMinutes = "tabs.hibernationMinutes"
+    /// Content-blocking state — the master switch, enabled categories, and the
+    /// per-site allowlist — persisted as one JSON blob. Decoded by
+    /// ``ContentBlockingPreferences/load(from:key:)``, which supplies its own
+    /// defaults, so this key needs no `register(defaults:)` entry.
+    static let contentBlocking = "contentBlocking.preferences"
 }
 
 /// Modifier choices for Hover Preview. Raw values are stored in
