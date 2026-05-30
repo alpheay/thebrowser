@@ -1,4 +1,4 @@
-# TheBrowser — Systems & Interaction Map
+# TheBrowser — Systems & Interaction Map v1.0
 
 A color-coded map of the subsystems inside TheBrowser and how they talk to each
 other. TheBrowser is a **single-process native macOS app** (Swift 6 · SwiftUI ·
