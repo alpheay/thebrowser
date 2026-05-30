@@ -194,6 +194,10 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         configuration.userContentController.add(bridge, name: TextSelectionBridge.messageName)
         configuration.userContentController.add(citedBridge, name: CitedClipboardBridge.messageName)
         configuration.userContentController.add(hoverBridge, name: LinkHoverBridge.messageName)
+        // Ad/tracker blocking: applies whatever the shared controller has
+        // compiled so far. The first tab at launch may get an empty set; it's
+        // topped up via ``refreshContentBlocking()`` once compilation lands.
+        configuration.userContentController.applyContentBlocking()
 
         let view = WKWebView(frame: .zero, configuration: configuration)
         view.customUserAgent = Self.userAgent
@@ -241,6 +245,15 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             "window.__theBrowserHoverPreview && window.__theBrowserHoverPreview.setEnabled(\(enabled ? "true" : "false"));",
             completionHandler: nil
         )
+    }
+
+    /// Re-applies the shared content-blocking rule lists to this tab's live
+    /// WKWebView. Only touches tabs with a mounted view — hibernated tabs get
+    /// fresh rules when they resurrect through ``mountWebViewStack``, so this
+    /// never silently wakes one.
+    func refreshContentBlocking() {
+        guard let view = _webView else { return }
+        view.configuration.userContentController.applyContentBlocking()
     }
 
     func applySelectionInfo(_ info: TextSelectionInfo?) {
@@ -359,7 +372,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         }
 
         switch destination {
-        case .url(let target):
+        case .url(let resolvedTarget):
+            let target = ContentBlockingController.shared.sanitizedNavigationURL(resolvedTarget)
             if let searchPage {
                 searchBackStack.append(searchPage)
             } else {
@@ -613,7 +627,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     @discardableResult
     private func handleNewWindowRequest(_ request: URLRequest) -> Bool {
-        guard let target = request.url else { return false }
+        guard let rawTarget = request.url else { return false }
+        let shouldSanitize = (request.httpMethod?.uppercased() ?? "GET") == "GET"
+        let target = shouldSanitize ? ContentBlockingController.shared.sanitizedNavigationURL(rawTarget) : rawTarget
+        var request = request
+        request.url = target
 
         if let newWindowHandler {
             newWindowHandler(self, request)
@@ -629,7 +647,68 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         return true
     }
 
+    @discardableResult
+    private func blockPopupIfNeeded(_ navigationAction: WKNavigationAction, in webView: WKWebView) -> Bool {
+        guard navigationAction.targetFrame == nil,
+              ContentBlockingController.shared.shouldBlockPopup(
+                openerURL: webView.url ?? url,
+                targetURL: navigationAction.request.url,
+                navigationType: navigationAction.navigationType
+              ) else {
+            return false
+        }
+
+        notifyPopupBlocked(openerURL: webView.url ?? url, targetURL: navigationAction.request.url)
+        return true
+    }
+
+    private func notifyPopupBlocked(openerURL: URL?, targetURL: URL?) {
+        let openerHost = openerURL?.host(percentEncoded: false)
+        let targetHost = targetURL?.host(percentEncoded: false)
+        let message = targetHost.map { "Blocked \($0) from opening a new window." }
+            ?? "Blocked a scripted request to open a new window."
+        let action: (@MainActor () -> Void)?
+        if let openerHost {
+            action = {
+                ContentBlockingController.shared.allowPopups(openerHost)
+                _ = AppNotificationCenter.shared.post(
+                    title: "Pop-ups allowed",
+                    message: "Future pop-ups from \(openerHost) will open.",
+                    icon: "rectangle.on.rectangle",
+                    kind: .success
+                )
+            }
+        } else {
+            action = nil
+        }
+
+        AppNotificationCenter.shared.post(
+            title: "Pop-up blocked",
+            message: message,
+            icon: "rectangle.on.rectangle.slash",
+            kind: .info,
+            duration: 5,
+            actionLabel: openerHost == nil ? nil : "Allow site",
+            action: action
+        )
+    }
+
+    private func sanitizedNavigationRequest(_ request: URLRequest) -> URLRequest? {
+        guard (request.httpMethod?.uppercased() ?? "GET") == "GET",
+              let url = request.url else {
+            return nil
+        }
+
+        let sanitizedURL = ContentBlockingController.shared.sanitizedNavigationURL(url)
+        guard sanitizedURL != url else { return nil }
+
+        var sanitizedRequest = request
+        sanitizedRequest.url = sanitizedURL
+        return sanitizedRequest
+    }
+
     private func load(_ target: URL) {
+        let target = ContentBlockingController.shared.sanitizedNavigationURL(target)
         guard Self.isYouTubeURL(target),
               let cookie = Self.youtubeDarkModeCookie else {
             webView.load(URLRequest(url: target))
@@ -1330,9 +1409,21 @@ extension BrowserTab: WKNavigationDelegate {
                 return
             }
 
-            if navigationAction.targetFrame == nil,
-               self.handleNewWindowRequest(navigationAction.request) {
+            if navigationAction.targetFrame == nil {
+                if self.blockPopupIfNeeded(navigationAction, in: webView) {
+                    decisionHandler(.cancel)
+                    return
+                }
+                if self.handleNewWindowRequest(navigationAction.request) {
+                    decisionHandler(.cancel)
+                    return
+                }
+            }
+
+            if navigationAction.targetFrame?.isMainFrame == true,
+               let sanitizedRequest = self.sanitizedNavigationRequest(navigationAction.request) {
                 decisionHandler(.cancel)
+                webView.load(sanitizedRequest)
                 return
             }
 
@@ -1430,6 +1521,9 @@ extension BrowserTab: WKUIDelegate {
                              windowFeatures: WKWindowFeatures) -> WKWebView? {
         Task { @MainActor [weak self] in
             guard navigationAction.targetFrame == nil else { return }
+            if self?.blockPopupIfNeeded(navigationAction, in: webView) == true {
+                return
+            }
             _ = self?.handleNewWindowRequest(navigationAction.request)
         }
         return nil

@@ -57,6 +57,7 @@ struct SettingsView: View {
     @StateObject private var mailMemories = MailModel.shared.memories
     @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
     @AppStorage(PreferenceKey.openHistoryShortcut) private var openHistoryShortcut = "command+y"
+    @AppStorage(PreferenceKey.openArtifactsShortcut) private var openArtifactsShortcut = "shift+command+a"
 
     var body: some View {
         HStack(spacing: 0) {
@@ -129,6 +130,8 @@ struct SettingsView: View {
             mailSettings
         case .clipboard:
             CitedClipboardSettingsContent()
+        case .contentBlocking:
+            ContentBlockingSettingsContent()
         case .keybindings:
             keybindingsSettings
         case .migration:
@@ -584,6 +587,9 @@ struct SettingsView: View {
                 row(label: "Open history", help: "Browse and search every page you've visited.") {
                     ShortcutRecorder(value: $openHistoryShortcut)
                 }
+                row(label: "Open artifacts", help: "Browse every document the AI has generated for you.") {
+                    ShortcutRecorder(value: $openArtifactsShortcut)
+                }
             }
         }
     }
@@ -740,6 +746,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case ai
     case mail
     case clipboard
+    case contentBlocking
     case keybindings
     case migration
 
@@ -753,6 +760,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .ai: "AI Engine"
         case .mail: "Mail"
         case .clipboard: "Clipboard"
+        case .contentBlocking: "Content Blocking"
         case .keybindings: "Keybindings"
         case .migration: "Migration"
         }
@@ -766,6 +774,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .ai: "sparkles"
         case .mail: "envelope"
         case .clipboard: "doc.on.clipboard"
+        case .contentBlocking: "shield.lefthalf.filled"
         case .keybindings: "keyboard"
         case .migration: "arrow.triangle.2.circlepath"
         }

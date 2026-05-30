@@ -12,6 +12,7 @@ struct BrowserShellView: View {
     @StateObject private var gmailAccount = GmailAccountStore.shared
     @StateObject private var gmailStore = GmailStore(account: GmailAccountStore.shared)
     @StateObject private var mailModel = MailModel.shared
+    @StateObject private var artifactGallery = ArtifactGalleryModel()
 
     @AppStorage(PreferenceKey.toggleChatShortcut) private var toggleChatShortcut = "command+j"
     @AppStorage(PreferenceKey.toggleTabsShortcut) private var toggleTabsShortcut = "command+b"
@@ -23,6 +24,7 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.pasteWithCitationShortcut) private var pasteWithCitationShortcut = "shift+command+v"
     @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
     @AppStorage(PreferenceKey.openHistoryShortcut) private var openHistoryShortcut = "command+y"
+    @AppStorage(PreferenceKey.openArtifactsShortcut) private var openArtifactsShortcut = "shift+command+a"
     @AppStorage(PreferenceKey.openIntegrationsShortcut) private var openIntegrationsShortcut = "shift+command+e"
     @AppStorage(PreferenceKey.aiFavoriteModels) private var aiFavoriteModelsRaw = ""
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
@@ -35,6 +37,7 @@ struct BrowserShellView: View {
     @State private var isShowingMigrationPrompt = false
     @State private var isClipboardPopoverPresented = false
     @State private var isShowingHistoryModal = false
+    @State private var isShowingArtifactGallery = false
 
     private var railOverlayVisible: Bool {
         model.isTabRailVisible || isPeekingRail
@@ -49,7 +52,10 @@ struct BrowserShellView: View {
             // Layer 1: main HStack — rail | center | chat, all full height
             HStack(spacing: 0) {
                 if model.isTabRailVisible {
-                    TabRailView(model: model)
+                    TabRailView(
+                        model: model,
+                        onOpenArtifacts: { isShowingArtifactGallery = true }
+                    )
                 }
 
                 centerColumn
@@ -115,7 +121,10 @@ struct BrowserShellView: View {
             // Layer 2: hover-peek rail overlay (only when rail is hidden)
             if !model.isTabRailVisible && isPeekingRail {
                 HStack(spacing: 0) {
-                    TabRailView(model: model)
+                    TabRailView(
+                        model: model,
+                        onOpenArtifacts: { isShowingArtifactGallery = true }
+                    )
                         .transition(.move(edge: .leading).combined(with: .opacity))
                         .onHover { hovering in
                             if hovering {
@@ -267,6 +276,34 @@ struct BrowserShellView: View {
                 }
             )
             .frame(minWidth: 880, idealWidth: 1000, minHeight: 580, idealHeight: 680)
+            .preferredColorScheme(.dark)
+        }
+        .sheet(isPresented: $isShowingArtifactGallery) {
+            ArtifactGalleryView(
+                model: artifactGallery,
+                onClose: { isShowingArtifactGallery = false },
+                onOpen: { url in
+                    isShowingArtifactGallery = false
+                    model.openOrFocusArtifact(at: url)
+                },
+                onOpenInBackground: { url in
+                    model.openArtifact(at: url)
+                },
+                onReveal: { url in
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                },
+                onDelete: { artifact in
+                    ArtifactStore.shared.delete(artifact.url)
+                },
+                onOpenChat: { session in
+                    isShowingArtifactGallery = false
+                    if !model.isChatVisible {
+                        withAnimation(Motion.springSnap) { model.toggleChat() }
+                    }
+                    chatModel.resume(sessionID: session.sessionID, context: model.selectedContext)
+                }
+            )
+            .frame(minWidth: 880, idealWidth: 1040, minHeight: 580, idealHeight: 700)
             .preferredColorScheme(.dark)
         }
         .animation(Motion.springSnap, value: model.isChatVisible)
@@ -546,6 +583,7 @@ struct BrowserShellView: View {
             (pasteWithCitationShortcut, { CitedClipboardCursorPanelController.shared.toggle() }),
             (openDiscordShortcut, { model.openOrFocusDiscord() }),
             (openHistoryShortcut, { isShowingHistoryModal.toggle() }),
+            (openArtifactsShortcut, { isShowingArtifactGallery.toggle() }),
             (openIntegrationsShortcut, { integrations.toggle() }),
             // Find in Page — fixed shortcuts, no Settings UI on purpose
             // since every browser ships these unchanged.

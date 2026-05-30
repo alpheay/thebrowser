@@ -18,6 +18,11 @@ final class BrowserModel: ObservableObject {
     private static let hibernationSweepInterval: UInt64 = 60_000_000_000
     private var hibernationSweepTask: Task<Void, Never>?
     private var tabChangeCancellables: [BrowserTab.ID: AnyCancellable] = [:]
+    /// Cancels with the model. Listens for content-blocking recompiles so
+    /// already-live tabs pick up the new rule lists. Routed through a
+    /// notification rather than the controller's WebKit-typed publisher so this
+    /// file stays free of any `WebKit` import.
+    private var contentBlockingCancellable: AnyCancellable?
 
     init() {
         let firstTab = BrowserTab()
@@ -25,6 +30,7 @@ final class BrowserModel: ObservableObject {
         selectedTabID = firstTab.id
         configure(firstTab)
         startHibernationSweep()
+        observeContentBlocking()
     }
 
     deinit {
@@ -313,6 +319,28 @@ final class BrowserModel: ObservableObject {
         tabChangeCancellables[tab.id] = AnyCancellable {
             tabSink.cancel()
             findSink.cancel()
+        }
+    }
+
+    // MARK: - Content blocking
+
+    /// Subscribes to content-blocking recompiles. When the shared controller
+    /// publishes a new (or empty) set of rule lists, every tab with a live
+    /// WKWebView re-applies it; hibernated tabs are skipped and pick the rules
+    /// up on resurrection.
+    private func observeContentBlocking() {
+        contentBlockingCancellable = NotificationCenter.default
+            .publisher(for: ContentBlockingController.didChangeNotification)
+            .sink { [weak self] _ in
+                Task { @MainActor [weak self] in
+                    self?.refreshContentBlocking()
+                }
+            }
+    }
+
+    private func refreshContentBlocking() {
+        for tab in tabs {
+            tab.refreshContentBlocking()
         }
     }
 

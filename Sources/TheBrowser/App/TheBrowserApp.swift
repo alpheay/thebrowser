@@ -11,6 +11,9 @@ struct TheBrowserApp: App {
             // Prime the cited-clipboard controller so its NSWorkspace
             // activation observer is installed before the user's first copy.
             _ = CitedClipboardController.shared
+            // Compile the content-blocking rule lists at launch so tabs have
+            // them ready; live tabs refresh once the first compile lands.
+            ContentBlockingController.shared.start()
         }
     }
 
