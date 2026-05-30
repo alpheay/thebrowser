@@ -70,6 +70,7 @@ final class ContentBlockingController: ObservableObject {
     var allowedSites: [String] { preferences.allowList.sortedDomains }
     var isPopupBlockingEnabled: Bool { preferences.popupBlockingEnabled }
     var popupAllowedSites: [String] { preferences.popupAllowList.sortedDomains }
+    var isTrackingParameterStrippingEnabled: Bool { preferences.stripTrackingParameters }
 
     func isEnabled(_ category: BlockListCategory) -> Bool {
         preferences.isEnabled(category)
@@ -131,6 +132,12 @@ final class ContentBlockingController: ObservableObject {
         persistOnly()
     }
 
+    func setTrackingParameterStrippingEnabled(_ enabled: Bool) {
+        guard preferences.stripTrackingParameters != enabled else { return }
+        preferences.stripTrackingParameters = enabled
+        persistOnly()
+    }
+
     /// Per-site convenience: flip blocking for a page's host. Used by toolbar /
     /// shield affordances that act on the current tab.
     func toggleAllowlist(for url: URL) {
@@ -168,6 +175,11 @@ final class ContentBlockingController: ObservableObject {
             isUserActivated: userActivated,
             allowList: preferences.popupAllowList
         )
+    }
+
+    func sanitizedNavigationURL(_ url: URL) -> URL {
+        guard preferences.stripTrackingParameters else { return url }
+        return URLTrackingSanitizer.sanitized(url)
     }
 
     // MARK: - Compilation

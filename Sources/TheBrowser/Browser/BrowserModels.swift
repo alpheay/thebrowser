@@ -372,7 +372,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         }
 
         switch destination {
-        case .url(let target):
+        case .url(let resolvedTarget):
+            let target = ContentBlockingController.shared.sanitizedNavigationURL(resolvedTarget)
             if let searchPage {
                 searchBackStack.append(searchPage)
             } else {
@@ -626,7 +627,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
 
     @discardableResult
     private func handleNewWindowRequest(_ request: URLRequest) -> Bool {
-        guard let target = request.url else { return false }
+        guard let rawTarget = request.url else { return false }
+        let shouldSanitize = (request.httpMethod?.uppercased() ?? "GET") == "GET"
+        let target = shouldSanitize ? ContentBlockingController.shared.sanitizedNavigationURL(rawTarget) : rawTarget
+        var request = request
+        request.url = target
 
         if let newWindowHandler {
             newWindowHandler(self, request)
@@ -688,7 +693,22 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
         )
     }
 
+    private func sanitizedNavigationRequest(_ request: URLRequest) -> URLRequest? {
+        guard (request.httpMethod?.uppercased() ?? "GET") == "GET",
+              let url = request.url else {
+            return nil
+        }
+
+        let sanitizedURL = ContentBlockingController.shared.sanitizedNavigationURL(url)
+        guard sanitizedURL != url else { return nil }
+
+        var sanitizedRequest = request
+        sanitizedRequest.url = sanitizedURL
+        return sanitizedRequest
+    }
+
     private func load(_ target: URL) {
+        let target = ContentBlockingController.shared.sanitizedNavigationURL(target)
         guard Self.isYouTubeURL(target),
               let cookie = Self.youtubeDarkModeCookie else {
             webView.load(URLRequest(url: target))
@@ -1398,6 +1418,13 @@ extension BrowserTab: WKNavigationDelegate {
                     decisionHandler(.cancel)
                     return
                 }
+            }
+
+            if navigationAction.targetFrame?.isMainFrame == true,
+               let sanitizedRequest = self.sanitizedNavigationRequest(navigationAction.request) {
+                decisionHandler(.cancel)
+                webView.load(sanitizedRequest)
+                return
             }
 
             decisionHandler(.allow)

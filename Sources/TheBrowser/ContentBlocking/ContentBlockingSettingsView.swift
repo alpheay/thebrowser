@@ -33,6 +33,17 @@ struct ContentBlockingSettingsContent: View {
                         set: { controller.setPopupBlockingEnabled($0) }
                     ))
                 }
+
+                CBDivider()
+                CBRow(
+                    label: "Strip tracking links",
+                    help: "Remove known click IDs and UTM tags from top-level navigations."
+                ) {
+                    CBToggle(isOn: Binding(
+                        get: { controller.isTrackingParameterStrippingEnabled },
+                        set: { controller.setTrackingParameterStrippingEnabled($0) }
+                    ))
+                }
             }
 
             CBSection("Categories") {

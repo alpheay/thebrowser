@@ -326,6 +326,41 @@ struct PopupBlockingPolicyTests {
     }
 }
 
+@Suite("URLTrackingSanitizer")
+struct URLTrackingSanitizerTests {
+    @Test("Strips common attribution parameters")
+    func stripsTrackingParameters() throws {
+        let input = try #require(URL(string: "https://example.com/story?utm_source=news&fbclid=abc&id=42#section"))
+        let sanitized = URLTrackingSanitizer.sanitized(input)
+
+        #expect(sanitized.absoluteString == "https://example.com/story?id=42#section")
+    }
+
+    @Test("Tracking parameter detection is case-insensitive")
+    func trackingNamesAreCaseInsensitive() {
+        #expect(URLTrackingSanitizer.isTrackingParameter("UTM_Campaign"))
+        #expect(URLTrackingSanitizer.isTrackingParameter("MSCLKID"))
+        #expect(!URLTrackingSanitizer.isTrackingParameter("session_id"))
+    }
+
+    @Test("Leaves ordinary and non-web URLs unchanged")
+    func leavesOrdinaryURLs() throws {
+        let ordinary = try #require(URL(string: "https://example.com/search?q=boots&page=2"))
+        let file = try #require(URL(string: "file:///tmp/example.html?utm_source=x"))
+
+        #expect(URLTrackingSanitizer.sanitized(ordinary) == ordinary)
+        #expect(URLTrackingSanitizer.sanitized(file) == file)
+    }
+
+    @Test("Drops the whole query when only trackers remain")
+    func dropsEmptyQuery() throws {
+        let input = try #require(URL(string: "https://example.com/?gclid=abc&utm_medium=cpc"))
+        let sanitized = URLTrackingSanitizer.sanitized(input)
+
+        #expect(sanitized.absoluteString == "https://example.com/")
+    }
+}
+
 @Suite("ContentRuleCompiler encoding")
 struct ContentRuleCompilerTests {
     private func triggers(_ json: String) throws -> [[String: Any]] {
