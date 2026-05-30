@@ -182,11 +182,15 @@ struct ContentBlockingPreferencesTests {
     @Test("Defaults enable blocking with the default-on categories")
     func defaults() {
         let prefs = ContentBlockingPreferences.defaults
+        #expect(prefs.schemaVersion == ContentBlockingPreferences.currentSchemaVersion)
         #expect(prefs.isEnabled)
         #expect(prefs.isEnabled(.ads))
         #expect(prefs.isEnabled(.trackers))
         #expect(!prefs.isEnabled(.annoyances))
         #expect(prefs.allowList.isEmpty)
+        #expect(prefs.popupBlockingEnabled)
+        #expect(prefs.popupAllowList.isEmpty)
+        #expect(prefs.stripTrackingParameters)
     }
 
     @Test("setCategory flips membership")
@@ -202,10 +206,31 @@ struct ContentBlockingPreferencesTests {
     func roundTrip() throws {
         var prefs = ContentBlockingPreferences.defaults
         prefs.allowList.insert("example.com")
+        prefs.popupAllowList.insert("popups.example")
         prefs.setCategory(.social, enabled: true)
         let data = try JSONEncoder().encode(prefs)
         let decoded = try JSONDecoder().decode(ContentBlockingPreferences.self, from: data)
         #expect(decoded == prefs)
+    }
+
+    @Test("Legacy blobs fill missing privacy fields")
+    func legacyDecode() throws {
+        let data = Data("""
+        {
+          "isEnabled": true,
+          "enabledCategories": ["ads"],
+          "allowList": { "domains": ["example.com"] }
+        }
+        """.utf8)
+
+        let decoded = try JSONDecoder().decode(ContentBlockingPreferences.self, from: data)
+
+        #expect(decoded.schemaVersion == ContentBlockingPreferences.currentSchemaVersion)
+        #expect(decoded.enabledCategories == ["ads"])
+        #expect(decoded.allowList.contains("www.example.com"))
+        #expect(decoded.popupBlockingEnabled)
+        #expect(decoded.popupAllowList.isEmpty)
+        #expect(decoded.stripTrackingParameters)
     }
 
     @Test("Load falls back to defaults when storage is empty")
