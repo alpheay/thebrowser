@@ -28,7 +28,13 @@ struct AgentStatusLabelTests {
             (.readSmartRead, "Reading Smart Read…"),
             (.mailSearch, "Searching mail…"),
             (.mailReadThread, "Reading mail thread…"),
-            (.mailDraftReply, "Drafting reply…"),
+            (.mailShow, "Opening mail…"),
+            (.mailDraft, "Drafting reply…"),
+            (.mailSend, "Sending mail…"),
+            (.mailModify, "Organizing mail…"),
+            (.mailTriage, "Triaging inbox…"),
+            (.mailMemory, "Updating memory…"),
+            (.mailRemind, "Setting reminder…"),
             (.createArtifact, "Saving artifact…"),
             (.webControl, "Controlling page…")
         ]

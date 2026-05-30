@@ -13,9 +13,12 @@ import SwiftUI
 struct GmailIntegrationView: View {
     @ObservedObject var store: GmailStore
     @ObservedObject var account: GmailAccountStore
+    @ObservedObject var mailModel: MailModel
     let onClose: () -> Void
 
     @FocusState private var searchFocused: Bool
+    @State private var readerSummary: String?
+    @State private var isSummarizing = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -52,6 +55,18 @@ struct GmailIntegrationView: View {
                 store.refreshList()
             }
             DispatchQueue.main.async { searchFocused = true }
+        }
+        .onChange(of: store.messages.map(\.id)) { _, _ in
+            guard account.isSignedIn, !store.messages.isEmpty else { return }
+            let summaries = store.messages
+            Task {
+                await mailModel.triage(summaries, gmail: store)
+                _ = mailModel.scanDroppedBalls(in: summaries, accountEmail: store.accountEmail)
+            }
+        }
+        .onChange(of: store.paneMode) { _, _ in
+            // Reset the per-message AI summary when the reader changes.
+            readerSummary = nil
         }
     }
 
@@ -218,6 +233,7 @@ struct GmailIntegrationView: View {
             ComposeView(
                 draft: draft,
                 isSending: store.phase == .sending,
+                mailModel: mailModel,
                 onUpdate: { transform in store.updateDraft(transform) },
                 onCancel: { store.cancelCompose() },
                 onSend: { store.sendCurrentDraft() }
@@ -242,13 +258,26 @@ struct GmailIntegrationView: View {
             } else {
                 ScrollView {
                     LazyVStack(spacing: 0, pinnedViews: []) {
+                        let due = mailModel.dueReminders()
+                        if !due.isEmpty {
+                            MailRemindersBanner(
+                                reminders: due,
+                                onOpen: { reminder in openThread(reminder.threadId) },
+                                onDismiss: { reminder in mailModel.dismissReminder(id: reminder.id) }
+                            )
+                            .padding(.horizontal, 10)
+                            .padding(.bottom, 4)
+                        }
                         ForEach(groupedMessages, id: \.bucket) { group in
                             sectionHeader(group.bucket.title)
                             ForEach(group.items) { summary in
                                 MessageRow(
                                     summary: summary,
+                                    aiLabels: aiLabels(for: summary),
+                                    allLabels: mailModel.enabledLabels,
                                     onOpen: { store.openMessage(id: summary.id) },
-                                    onToggleStar: { store.toggleStar(summary) }
+                                    onToggleStar: { store.toggleStar(summary) },
+                                    onReclassify: { name in reclassify(summary, to: name) }
                                 )
                                 .padding(.horizontal, 6)
                                 Divider().opacity(0.18).padding(.leading, 18)
@@ -273,8 +302,12 @@ struct GmailIntegrationView: View {
             if let message = store.openMessage {
                 MessageReader(
                     message: message,
+                    summary: readerSummary,
+                    isSummarizing: isSummarizing,
                     onBack: { store.backToList() },
                     onReply: { store.startCompose(replyingTo: message) },
+                    onAIReply: { aiReply(to: message) },
+                    onSummarize: { summarize(message) },
                     onArchive: { store.archiveCurrent() }
                 )
                 .id(message.id)
@@ -282,6 +315,52 @@ struct GmailIntegrationView: View {
                 placeholder(icon: "ellipsis", title: "Loading message…", message: "")
             } else {
                 placeholder(icon: "envelope", title: "Pick a message", message: "Select something from the inbox to read it here.")
+            }
+        }
+    }
+
+    // MARK: - AI helpers
+
+    private func aiLabels(for summary: GmailMessageSummary) -> [AILabel] {
+        mailModel.labelNames(forMessageID: summary.id).compactMap { mailModel.label(named: $0) }
+    }
+
+    private func reclassify(_ summary: GmailMessageSummary, to name: String) {
+        Task { await mailModel.reclassify(messageID: summary.id, to: name, input: TriageInput(summary: summary), gmail: store) }
+    }
+
+    private func openThread(_ threadId: String) {
+        Task {
+            if let thread = try? await store.toolFetchThread(identifier: MailToolMessageIdentifier(kind: .thread, value: threadId)) {
+                store.presentThread(thread)
+            }
+        }
+    }
+
+    private func summarize(_ message: GmailMessage) {
+        isSummarizing = true
+        Task {
+            defer { isSummarizing = false }
+            let thread = (try? await store.toolFetchThread(identifier: MailToolMessageIdentifier(kind: .message, value: message.id))) ?? [message]
+            let text = thread.map { "\($0.fromName.isEmpty ? $0.fromAddress : $0.fromName): \(MailText.stripQuotedReply($0.plainBody))" }
+                .joined(separator: "\n\n")
+            readerSummary = await mailModel.agent.summarizeThread(text)
+        }
+    }
+
+    private func aiReply(to message: GmailMessage) {
+        Task {
+            await mailModel.ensureVoiceProfile(gmail: store)
+            let thread = (try? await store.toolFetchThread(identifier: MailToolMessageIdentifier(kind: .message, value: message.id))) ?? [message]
+            let threadText = thread.map { "\($0.fromName): \(MailText.stripQuotedReply($0.plainBody))" }.joined(separator: "\n\n")
+            let recipient = message.fromAddress
+            let memories = mailModel.relevantMemories(forRecipient: recipient)
+            store.startCompose(replyingTo: message)
+            if let content = await mailModel.agent.draft(
+                threadText: threadText, instructions: nil, suggestedSubject: nil,
+                recipient: recipient, voice: mailModel.voice, memories: memories, style: nil
+            ) {
+                store.updateDraft { $0.body = content.body }
             }
         }
     }
@@ -490,8 +569,11 @@ private struct MailboxRow: View {
 
 private struct MessageRow: View {
     let summary: GmailMessageSummary
+    var aiLabels: [AILabel] = []
+    var allLabels: [AILabel] = []
     let onOpen: () -> Void
     let onToggleStar: () -> Void
+    var onReclassify: (String) -> Void = { _ in }
 
     @State private var isHovering = false
 
@@ -525,6 +607,7 @@ private struct MessageRow: View {
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(Palette.textMuted)
                         .lineLimit(2)
+                    AILabelRow(labels: aiLabels)
                 }
 
                 Button(action: onToggleStar) {
@@ -547,6 +630,14 @@ private struct MessageRow: View {
             }
         }
         .buttonStyle(.plain)
+        .contextMenu {
+            if !allLabels.isEmpty {
+                Text("Set AI label")
+                ForEach(allLabels) { label in
+                    Button(label.name) { onReclassify(label.name) }
+                }
+            }
+        }
         .onHover { isHovering = $0 }
         .animation(Motion.hoverFade, value: isHovering)
     }
@@ -576,8 +667,12 @@ private struct MessageRow: View {
 
 private struct MessageReader: View {
     let message: GmailMessage
+    var summary: String? = nil
+    var isSummarizing: Bool = false
     let onBack: () -> Void
     let onReply: () -> Void
+    var onAIReply: () -> Void = {}
+    var onSummarize: () -> Void = {}
     let onArchive: () -> Void
 
     @State private var bodyHeight: CGFloat = 60
@@ -599,6 +694,31 @@ private struct MessageReader: View {
                 }
                 .buttonStyle(IconButtonStyle(size: 26))
                 .help("Archive")
+
+                Button(action: onSummarize) {
+                    Image(systemName: "text.alignleft")
+                }
+                .buttonStyle(IconButtonStyle(size: 26))
+                .help("Summarize thread")
+                .disabled(isSummarizing)
+
+                Button(action: onAIReply) {
+                    HStack(spacing: 5) {
+                        Image(systemName: "sparkles").font(.system(size: 11, weight: .semibold))
+                        Text("AI Reply").font(.system(size: 12, weight: .semibold))
+                    }
+                    .padding(.horizontal, 10)
+                    .frame(height: 28)
+                    .background {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Palette.surface)
+                    }
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(Palette.stroke, lineWidth: 1)
+                    }
+                    .foregroundStyle(Palette.textPrimary)
+                }
+                .buttonStyle(.plain)
+                .help("Draft a reply with AI")
 
                 Button(action: onReply) {
                     HStack(spacing: 6) {
@@ -647,6 +767,8 @@ private struct MessageReader: View {
 
                     Divider().background(Palette.strokeFaint)
 
+                    if isSummarizing || summary != nil { summaryBanner }
+
                     bodyContent
                 }
                 .padding(20)
@@ -654,6 +776,31 @@ private struct MessageReader: View {
             }
             .scrollIndicators(.hidden)
         }
+    }
+
+    @ViewBuilder
+    private var summaryBanner: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "sparkles")
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(Palette.textMuted)
+                .padding(.top, 1)
+            if isSummarizing {
+                Text("Summarizing…")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Palette.textMuted)
+            } else if let summary {
+                Text(summary)
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Palette.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(10)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Palette.bgRaised))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).stroke(Palette.stroke, lineWidth: 1))
     }
 
     @ViewBuilder
@@ -686,73 +833,165 @@ private struct MessageReader: View {
 private struct ComposeView: View {
     let draft: GmailPaneMode.Draft
     let isSending: Bool
+    let mailModel: MailModel
     let onUpdate: ((inout GmailPaneMode.Draft) -> Void) -> Void
     let onCancel: () -> Void
     let onSend: () -> Void
 
+    @State private var isWorking = false
+    @State private var workingLabel = ""
+    @State private var rating: DraftRating?
+    @State private var customInstruction = ""
+    @State private var showCustomPrompt = false
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Text(draft.inReplyTo == nil ? "New Message" : "Reply")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Palette.textPrimary)
-                Spacer()
-                Button(action: onCancel) {
-                    Text("Cancel").font(.system(size: 12, weight: .semibold))
-                }
-                .buttonStyle(PillButtonStyle())
-                Button(action: onSend) {
-                    HStack(spacing: 6) {
-                        if isSending {
-                            ProgressView().controlSize(.small).tint(.black)
-                        } else {
-                            Image(systemName: "paperplane.fill")
-                                .font(.system(size: 11, weight: .semibold))
-                        }
-                        Text(isSending ? "Sending…" : "Send")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .padding(.horizontal, 12)
-                    .frame(height: 28)
-                    .background {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(Color.white.opacity(0.92))
-                    }
-                    .foregroundStyle(.black)
-                }
-                .buttonStyle(.plain)
-                .disabled(isSending)
-            }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 10)
-
+            header
             Divider().background(Palette.stroke)
-
             VStack(spacing: 8) {
-                composeField(label: "To", text: Binding(
-                    get: { draft.to },
-                    set: { value in onUpdate { $0.to = value } }
-                ))
-                composeField(label: "Subject", text: Binding(
-                    get: { draft.subject },
-                    set: { value in onUpdate { $0.subject = value } }
-                ))
-
-                TextEditor(text: Binding(
-                    get: { draft.body },
-                    set: { value in onUpdate { $0.body = value } }
-                ))
-                .font(.system(size: 13, weight: .regular))
-                .scrollContentBackground(.hidden)
-                .background(Palette.bg)
-                .padding(8)
+                composeField(label: "To", text: bindTo)
+                composeField(label: "Subject", text: bindSubject)
+                editToolbar
+                if let rating { ratingBanner(rating) }
+                GhostTextEditor(
+                    text: bindBody,
+                    isEnabled: mailModel.autocompleteEnabled,
+                    throttle: mailModel.autocompleteThrottle,
+                    onRequestCompletion: { prefix in
+                        await mailModel.agent.autocomplete(
+                            threadText: draft.inReplyTo?.plainBody ?? "",
+                            recipient: draft.to,
+                            draftSoFar: prefix,
+                            memories: mailModel.relevantMemories(forRecipient: draft.to)
+                        )
+                    }
+                )
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Palette.bg))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                        .stroke(Palette.stroke, lineWidth: 1)
+                    RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(Palette.stroke, lineWidth: 1)
+                }
+                if mailModel.autocompleteEnabled {
+                    Text("Ghost text appears as you type — Tab to accept · ⌘\\ to suggest now")
+                        .font(.system(size: 9.5, weight: .medium))
+                        .foregroundStyle(Palette.textFaint)
+                        .frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
             .padding(16)
+        }
+        .alert("Custom edit", isPresented: $showCustomPrompt) {
+            TextField("e.g. make it warmer", text: $customInstruction)
+            Button("Apply") { runEdit(.custom) }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            Text(draft.inReplyTo == nil ? "New Message" : "Reply")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Palette.textPrimary)
+            if isWorking {
+                HStack(spacing: 4) {
+                    ProgressView().controlSize(.small)
+                    Text(workingLabel).font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.textFaint)
+                }
+            }
+            Spacer()
+            Button(action: onCancel) {
+                Text("Cancel").font(.system(size: 12, weight: .semibold))
+            }
+            .buttonStyle(PillButtonStyle())
+            Button(action: onSend) {
+                HStack(spacing: 6) {
+                    if isSending {
+                        ProgressView().controlSize(.small).tint(.black)
+                    } else {
+                        Image(systemName: "paperplane.fill")
+                            .font(.system(size: 11, weight: .semibold))
+                    }
+                    Text(isSending ? "Sending…" : "Send")
+                        .font(.system(size: 12, weight: .semibold))
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 28)
+                .background {
+                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                        .fill(Color.white.opacity(0.92))
+                }
+                .foregroundStyle(.black)
+            }
+            .buttonStyle(.plain)
+            .disabled(isSending)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+    }
+
+    private var editToolbar: some View {
+        HStack(spacing: 6) {
+            ForEach([DraftEditAction.improve, .shorten, .lengthen, .fixGrammar], id: \.self) { action in
+                Button { runEdit(action) } label: {
+                    Image(systemName: action.symbol).font(.system(size: 11, weight: .semibold))
+                }
+                .buttonStyle(IconButtonStyle(size: 26))
+                .help(action.title)
+                .disabled(isWorking)
+            }
+            Button { showCustomPrompt = true } label: {
+                Image(systemName: DraftEditAction.custom.symbol).font(.system(size: 11, weight: .semibold))
+            }
+            .buttonStyle(IconButtonStyle(size: 26))
+            .help("Custom edit")
+            .disabled(isWorking)
+
+            Spacer()
+
+            Button { rateDraft() } label: {
+                Label("Rate", systemImage: "checklist").font(.system(size: 11, weight: .semibold))
+            }
+            .buttonStyle(PillButtonStyle())
+            .disabled(isWorking)
+        }
+    }
+
+    private func ratingBanner(_ rating: DraftRating) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Score \(rating.score)/100 · \(rating.inferredGoal)")
+                .font(.system(size: 10.5, weight: .semibold))
+                .foregroundStyle(Palette.textSecondary)
+                .lineLimit(2)
+            ForEach(Array(rating.suggestions.prefix(2).enumerated()), id: \.offset) { _, suggestion in
+                Text("• \(suggestion)").font(.system(size: 10, weight: .medium)).foregroundStyle(Palette.textFaint)
+            }
+        }
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Palette.bgRaised))
+    }
+
+    private var bindTo: Binding<String> { Binding(get: { draft.to }, set: { v in onUpdate { $0.to = v } }) }
+    private var bindSubject: Binding<String> { Binding(get: { draft.subject }, set: { v in onUpdate { $0.subject = v } }) }
+    private var bindBody: Binding<String> { Binding(get: { draft.body }, set: { v in onUpdate { $0.body = v } }) }
+
+    private func runEdit(_ action: DraftEditAction) {
+        Task {
+            isWorking = true; workingLabel = action.title
+            defer { isWorking = false }
+            let custom = action == .custom ? customInstruction : nil
+            if let edited = await mailModel.agent.editDraft(draft.body, action: action, customInstruction: custom, threadText: draft.inReplyTo?.plainBody, voice: mailModel.voice) {
+                onUpdate { $0.body = edited }
+            }
+            customInstruction = ""
+        }
+    }
+
+    private func rateDraft() {
+        Task {
+            isWorking = true; workingLabel = "Rating"
+            defer { isWorking = false }
+            rating = await mailModel.agent.rateDraft(draft.body, goalHint: nil, threadText: draft.inReplyTo?.plainBody)
         }
     }
 

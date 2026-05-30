@@ -7,6 +7,7 @@ struct IntegrationsOverlay: View {
     @ObservedObject var model: IntegrationsModel
     @ObservedObject var gmailAccount: GmailAccountStore
     @ObservedObject var gmailStore: GmailStore
+    @ObservedObject var mailModel: MailModel
 
     var body: some View {
         ZStack {
@@ -42,6 +43,7 @@ struct IntegrationsOverlay: View {
             GmailIntegrationView(
                 store: gmailStore,
                 account: gmailAccount,
+                mailModel: mailModel,
                 onClose: { model.close() }
             )
         }

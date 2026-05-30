@@ -282,6 +282,47 @@ struct AIProviderClient {
         }.value
     }
 
+    /// One-shot completion pinned to an explicit provider + model, independent
+    /// of the user's chat settings. The Mail sub-agent uses this so it can run
+    /// on a fast model (and optionally a different provider) without mutating
+    /// saved preferences. Runs read-only in `workspace` with no native/MCP
+    /// tools — it's a pure prompt → text round trip.
+    func complete(
+        prompt: String,
+        provider: AIProviderKind,
+        model: String,
+        systemPrompt: String? = nil,
+        workspace: URL? = nil,
+        reasoningEffort: String = "",
+        runHandle: AgentRunHandle? = nil
+    ) async throws -> String {
+        var configuration = AIHarnessConfiguration.current()
+        configuration.provider = provider
+        switch provider {
+        case .codex:
+            configuration.cliPath = UserDefaults.standard.string(forKey: PreferenceKey.codexCLIPath)
+                ?? AppDefaults.defaultCodexCLIPath()
+        case .claude:
+            configuration.cliPath = UserDefaults.standard.string(forKey: PreferenceKey.claudeCLIPath)
+                ?? AppDefaults.defaultClaudeCLIPath()
+        }
+        configuration.model = model
+        configuration.sandbox = "read-only"
+        configuration.reasoningEffort = reasoningEffort
+        configuration.tools = ""
+        configuration.allowedTools = ""
+        configuration.disallowedTools = ""
+        configuration.mcpConfigPath = ""
+        configuration.extraArguments = ""
+        if let systemPrompt { configuration.systemPrompt = systemPrompt }
+        if let workspace { configuration.workspacePath = workspace.path }
+
+        let resolved = configuration
+        return try await Task.detached(priority: .userInitiated) {
+            try runProvider(configuration: resolved, prompt: prompt, runHandle: runHandle)
+        }.value
+    }
+
     static func prompt(
         for message: String,
         context: BrowserPageContext,

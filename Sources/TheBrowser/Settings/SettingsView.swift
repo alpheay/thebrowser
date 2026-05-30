@@ -37,6 +37,16 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.toolbarShowTabRailToggle) private var toolbarShowTabRailToggle = true
     @AppStorage(PreferenceKey.toolbarShowChatToggle) private var toolbarShowChatToggle = true
     @AppStorage(PreferenceKey.tabHibernationMinutes) private var tabHibernationMinutes = 30
+    @AppStorage(PreferenceKey.mailSendMode) private var mailSendMode = MailSendMode.draftOnly.rawValue
+    @AppStorage(PreferenceKey.mailSubagentProvider) private var mailSubagentProvider = ""
+    @AppStorage(PreferenceKey.mailTriageEnabled) private var mailTriageEnabled = true
+    @AppStorage(PreferenceKey.mailTriageConfidence) private var mailTriageConfidence = 0.6
+    @AppStorage(PreferenceKey.mailMirrorLabelsToGmail) private var mailMirrorLabelsToGmail = false
+    @AppStorage(PreferenceKey.mailAutoDraftEnabled) private var mailAutoDraftEnabled = false
+    @AppStorage(PreferenceKey.mailAutocompleteEnabled) private var mailAutocompleteEnabled = true
+    @AppStorage(PreferenceKey.mailAutocompleteThrottleSeconds) private var mailAutocompleteThrottleSeconds = 5
+    @AppStorage(PreferenceKey.mailReadMode) private var mailReadMode = false
+    @AppStorage(PreferenceKey.mailMemoryAutoExtract) private var mailMemoryAutoExtract = false
 
     @State private var selectedTab: SettingsTab = .general
     @State private var showClearAllConfirm = false
@@ -113,6 +123,8 @@ struct SettingsView: View {
             generalSettings
         case .account:
             accountSettings
+        case .mail:
+            mailSettings
         case .toolbar:
             toolbarSettings
         case .ai:
@@ -149,6 +161,65 @@ struct SettingsView: View {
                     .tracking(1.8)
                     .foregroundStyle(Palette.textFaint)
                 DiscordAccountView(store: discordAccountStore)
+            }
+        }
+    }
+
+    // MARK: - Mail
+
+    private var mailSettings: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            pageHeader(title: "Mail", subtitle: "An intelligent inbox — AI triage, voice-matched drafts, and inline autocomplete, all on a fast model. No new Google permissions needed.")
+
+            section("Connection") {
+                row(label: "Gmail", help: "Uses your existing Google sign-in. Tokens stay in your macOS Keychain.") {
+                    GmailConnectionRow(store: gmailAccountStore)
+                }
+            }
+
+            section("Sending") {
+                row(label: "Send mode", help: "Drafting is always automatic; only sending is gated.") {
+                    SegmentPicker(selection: $mailSendMode, options: MailSendMode.allCases.map { ($0.rawValue, $0.title) })
+                }
+                row(label: "Read Mode", help: "Restrict the agent to read, search, and draft — no sending or organizing.") {
+                    HStack { Spacer(); ToggleSwitch(isOn: $mailReadMode) }
+                }
+            }
+
+            section("Triage") {
+                row(label: "Auto-label inbox", help: "Classify incoming mail into AI labels as the inbox loads.") {
+                    HStack { Spacer(); ToggleSwitch(isOn: $mailTriageEnabled) }
+                }
+                row(label: "Confidence", help: "How sure the classifier must be before applying a label.") {
+                    SegmentPicker(selection: $mailTriageConfidence, options: [(0.4, "Loose"), (0.6, "Balanced"), (0.8, "Strict")])
+                }
+                row(label: "Mirror to Gmail", help: "Also create matching labels in your real Gmail (synced to phone/web). Off keeps AI labels local to this app.") {
+                    HStack { Spacer(); ToggleSwitch(isOn: $mailMirrorLabelsToGmail) }
+                }
+            }
+
+            section("Writing") {
+                row(label: "Inline autocomplete", help: "Ghost-text suggestions while you write a reply. Tab to accept, ⌘\\ to suggest now.") {
+                    HStack { Spacer(); ToggleSwitch(isOn: $mailAutocompleteEnabled) }
+                }
+                row(label: "Autocomplete pace", help: "Minimum gap between suggestions while typing — slower is cheaper.") {
+                    SegmentPicker(selection: $mailAutocompleteThrottleSeconds, options: [(3, "Fast"), (5, "Balanced"), (8, "Relaxed")])
+                }
+                row(label: "Auto-draft replies", help: "Generate a draft when you open an actionable message.") {
+                    HStack { Spacer(); ToggleSwitch(isOn: $mailAutoDraftEnabled) }
+                }
+            }
+
+            section("Memory") {
+                row(label: "Auto-extract memories", help: "Suggest durable facts from threads you read — you approve each one.") {
+                    HStack { Spacer(); ToggleSwitch(isOn: $mailMemoryAutoExtract) }
+                }
+            }
+
+            section("Model") {
+                row(label: "Sub-agent", help: "Which provider powers mail AI. \u{201C}Follow\u{201D} uses your main AI provider's fast model (Codex → GPT-5.4 Mini, Claude → Haiku 4.5).") {
+                    SegmentPicker(selection: $mailSubagentProvider, options: [("", "Follow"), (AIProviderKind.codex.rawValue, "Codex"), (AIProviderKind.claude.rawValue, "Claude")])
+                }
             }
         }
     }
@@ -646,6 +717,7 @@ private struct GmailConnectionRow: View {
 private enum SettingsTab: String, CaseIterable, Identifiable {
     case general
     case account
+    case mail
     case toolbar
     case ai
     case clipboard
@@ -659,6 +731,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: "General"
         case .account: "Account"
+        case .mail: "Mail"
         case .toolbar: "Toolbar"
         case .ai: "AI Engine"
         case .clipboard: "Clipboard"
@@ -672,6 +745,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         switch self {
         case .general: "slider.horizontal.3"
         case .account: "person.crop.circle"
+        case .mail: "tray.full"
         case .toolbar: "square.topthird.inset.filled"
         case .ai: "sparkles"
         case .clipboard: "doc.on.clipboard"

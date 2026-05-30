@@ -837,6 +837,8 @@ final class ChatViewModel: ObservableObject {
 struct AIChatPanel: View {
     @ObservedObject var viewModel: ChatViewModel
     @ObservedObject var smartReadModel: SmartReadModel
+    @ObservedObject var mailModel: MailModel
+    var gmailStore: GmailStore
     var context: BrowserPageContext
     var tabs: [TabManifestEntry]
     var nativeTools: NativeBrowserToolExecutor
@@ -942,7 +944,9 @@ struct AIChatPanel: View {
         if smartReadModel.isPresented
             || !viewModel.messages.isEmpty
             || viewModel.liveMessage != nil
-            || viewModel.isSending {
+            || viewModel.isSending
+            || !mailModel.pendingDrafts.isEmpty
+            || !mailModel.memorySuggestions.isEmpty {
             messageList
         } else {
             EmptyChatState(
@@ -976,6 +980,22 @@ struct AIChatPanel: View {
                             insertion: .opacity.combined(with: .offset(y: -6)),
                             removal: .opacity.combined(with: .scale(scale: 0.98, anchor: .top))
                         ))
+                    }
+
+                    ForEach(mailModel.pendingDrafts) { draft in
+                        MailDraftCard(draft: draft, mail: mailModel, gmail: gmailStore)
+                            .id("mail-draft-\(draft.id)")
+                            .transition(.opacity.combined(with: .offset(y: -6)))
+                    }
+
+                    ForEach(mailModel.memorySuggestions) { suggestion in
+                        MemorySuggestionToast(
+                            memory: suggestion,
+                            onKeep: { mailModel.acceptMemorySuggestion(id: suggestion.id) },
+                            onDismiss: { mailModel.dismissMemorySuggestion(id: suggestion.id) }
+                        )
+                        .id("mail-memory-\(suggestion.id)")
+                        .transition(.opacity)
                     }
 
                     ForEach(viewModel.messages) { message in
