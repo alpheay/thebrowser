@@ -7,11 +7,27 @@ import Foundation
 final class ArtifactStore {
     static let shared = ArtifactStore()
 
-    static let rootURL: URL = {
+    /// Posted (on the main actor) whenever the artifact collection changes —
+    /// a new artifact is saved or an existing one is deleted. The artifact
+    /// gallery observes this to refresh, mirroring `HistoryStore.didChangeNotification`.
+    static let didChangeNotification = Notification.Name("ArtifactStore.didChange")
+
+    nonisolated static let rootURL: URL = {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".thebrowser", isDirectory: true)
             .appendingPathComponent("web_artifacts", isDirectory: true)
     }()
+
+    /// Cached thumbnail PNGs live under a hidden subfolder of the artifacts
+    /// root. `enumerate()` skips hidden files, so they never show up as
+    /// artifacts. Owned here (not by the renderer) so `delete` can clean them up.
+    nonisolated static let thumbnailsRootURL: URL = rootURL.appendingPathComponent(".thumbnails", isDirectory: true)
+
+    /// Disk location of the cached thumbnail for an artifact file name, e.g.
+    /// `2026-05-22_…_market-brief.html` -> `<thumbnails>/2026-05-22_…_market-brief.html.png`.
+    nonisolated static func thumbnailURL(forArtifactNamed fileName: String) -> URL {
+        thumbnailsRootURL.appendingPathComponent(fileName + ".png", isDirectory: false)
+    }
 
     private let root: URL
 
@@ -30,7 +46,33 @@ final class ArtifactStore {
         let filename = "\(Self.timestamp())_\(slug).html"
         let url = root.appendingPathComponent(filename, isDirectory: false)
         try html.write(to: url, atomically: true, encoding: .utf8)
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
         return url
+    }
+
+    /// Enumerates every saved artifact, newest first. Hidden files (the
+    /// `.thumbnails` cache) are skipped, and non-HTML entries are ignored.
+    /// `session` and `thumbnailURL` are left unset — the gallery model joins
+    /// the chat-session index and the renderer resolves thumbnails.
+    func enumerate() -> [ArtifactMetadata] {
+        guard let urls = try? FileManager.default.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.fileSizeKey, .creationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [] }
+
+        return urls
+            .compactMap { ArtifactMetadata.make(url: $0) }
+            .sorted { $0.createdAt > $1.createdAt }
+    }
+
+    /// Removes an artifact's `.html` file and its cached thumbnail, then
+    /// posts ``didChangeNotification``. Past chat tool-rows that reference the
+    /// file become dead links — acceptable for now.
+    func delete(_ url: URL) {
+        try? FileManager.default.removeItem(at: url)
+        try? FileManager.default.removeItem(at: Self.thumbnailURL(forArtifactNamed: url.lastPathComponent))
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: nil)
     }
 
     private static func timestamp() -> String {

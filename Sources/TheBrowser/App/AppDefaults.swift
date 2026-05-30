@@ -34,6 +34,7 @@ enum PreferenceKey {
     static let discordOAuthClientID = "discord.oauth.clientID"
     static let openDiscordShortcut = "shortcut.openDiscord"
     static let openHistoryShortcut = "shortcut.openHistory"
+    static let openArtifactsShortcut = "shortcut.openArtifacts"
     static let openIntegrationsShortcut = "shortcut.openIntegrations"
     /// Set true after the first-launch backfill of imported history into
     /// the SQLite ``HistoryStore``. Mirrors the bookmarks one-time flag
@@ -158,6 +159,7 @@ enum AppDefaults {
             PreferenceKey.discordOAuthClientID: "",
             PreferenceKey.openDiscordShortcut: "command+d",
             PreferenceKey.openHistoryShortcut: "command+y",
+            PreferenceKey.openArtifactsShortcut: "shift+command+a",
             PreferenceKey.openIntegrationsShortcut: "shift+command+e",
             PreferenceKey.historyImportBackfillCompleted: false,
             PreferenceKey.clipboardEnabled: true,
