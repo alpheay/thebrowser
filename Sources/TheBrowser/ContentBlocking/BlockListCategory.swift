@@ -9,6 +9,7 @@ import Foundation
 enum BlockListCategory: String, CaseIterable, Identifiable, Codable, Sendable {
     case ads
     case trackers
+    case cookies
     case annoyances
     case social
 
@@ -18,6 +19,7 @@ enum BlockListCategory: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .ads: "Advertising"
         case .trackers: "Trackers & Analytics"
+        case .cookies: "Third-party Cookies"
         case .annoyances: "Annoyances"
         case .social: "Social Widgets"
         }
@@ -29,6 +31,8 @@ enum BlockListCategory: String, CaseIterable, Identifiable, Codable, Sendable {
             "Block ad networks — the requests that fetch banners, pop-ups, and video pre-rolls."
         case .trackers:
             "Stop analytics, fingerprinting, and cross-site tracking beacons from loading."
+        case .cookies:
+            "Strip cookies from third-party requests to reduce cross-site profiling."
         case .annoyances:
             "Hide cookie-consent bars and other on-page clutter. May affect site layout."
         case .social:
@@ -40,6 +44,7 @@ enum BlockListCategory: String, CaseIterable, Identifiable, Codable, Sendable {
         switch self {
         case .ads: "rectangle.slash"
         case .trackers: "eye.slash"
+        case .cookies: "circle.hexagongrid.circle"
         case .annoyances: "hand.raised"
         case .social: "bubble.left.and.bubble.right"
         }
@@ -51,7 +56,7 @@ enum BlockListCategory: String, CaseIterable, Identifiable, Codable, Sendable {
     /// wanted embed, so they're opt-in.
     var isOnByDefault: Bool {
         switch self {
-        case .ads, .trackers: true
+        case .ads, .trackers, .cookies: true
         case .annoyances, .social: false
         }
     }

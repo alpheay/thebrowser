@@ -31,6 +31,10 @@ final class ContentBlockingController: ObservableObject {
     /// WebKit evaluates rules in its networking process and does not report
     /// per-request hits, so there is intentionally no "blocked today" counter.
     @Published private(set) var activeRuleCount = 0
+    /// Names of enabled lists that failed to compile in the most recent pass.
+    /// The browser still applies whatever did compile, but Settings surfaces
+    /// this so the shield never implies full coverage after a partial failure.
+    @Published private(set) var failedListNames: [String] = []
 
     /// Every available list, regardless of enabled state — drives the Settings
     /// category rows.
@@ -139,6 +143,7 @@ final class ContentBlockingController: ObservableObject {
         guard preferences.isEnabled else {
             compiledLists = []
             activeRuleCount = 0
+            failedListNames = []
             isCompiling = false
             broadcastChange()
             return
@@ -147,10 +152,12 @@ final class ContentBlockingController: ObservableObject {
         let lists = catalog.filter { preferences.isEnabled($0.category) }
         let allowlist = preferences.allowList.unlessDomainPatterns
         isCompiling = true
+        failedListNames = []
 
         Task { @MainActor in
             var compiled: [WKContentRuleList] = []
             var ruleCount = 0
+            var failures: [String] = []
             for list in lists {
                 do {
                     compiled.append(try await compiler.compile(list, allowlistPatterns: allowlist))
@@ -158,6 +165,7 @@ final class ContentBlockingController: ObservableObject {
                 } catch {
                     // One bad list shouldn't sink the rest — skip it and keep
                     // whatever else compiles.
+                    failures.append(list.name)
                     continue
                 }
             }
@@ -165,6 +173,7 @@ final class ContentBlockingController: ObservableObject {
             guard generation == compileGeneration else { return }
             compiledLists = compiled
             activeRuleCount = ruleCount
+            failedListNames = failures
             isCompiling = false
             broadcastChange()
         }

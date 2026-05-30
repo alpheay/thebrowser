@@ -100,6 +100,16 @@ extension BlockRule {
         )
     }
 
+    /// Removes cookies from third-party requests without blocking the request
+    /// itself. This preserves more site functionality than blocking every
+    /// unknown third-party host, while still limiting passive cross-site state.
+    static func blockThirdPartyCookies() -> BlockRule {
+        BlockRule(
+            trigger: Trigger(urlFilter: ".*", loadType: [.thirdParty]),
+            action: Action(type: .blockCookies)
+        )
+    }
+
     /// Hides DOM nodes matching `selector` on every page (subject to the
     /// allowlist). Used for cosmetic annoyance filtering — cookie bars and the
     /// like — where there is no network request to intercept.

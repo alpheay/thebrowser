@@ -117,6 +117,9 @@ struct ContentBlockingSettingsContent: View {
             } else if !controller.isEnabled {
                 Image(systemName: "shield.slash")
                 Text("Blocking is off.")
+            } else if !controller.failedListNames.isEmpty {
+                Image(systemName: "exclamationmark.shield")
+                Text("\(controller.activeRuleCount) rules active; \(controller.failedListNames.count) lists failed.")
             } else {
                 Image(systemName: "shield.lefthalf.filled")
                 Text("\(controller.activeRuleCount) rules active across \(controller.compiledLists.count) lists.")
@@ -124,6 +127,7 @@ struct ContentBlockingSettingsContent: View {
         }
         .font(.system(size: 11.5, weight: .medium))
         .foregroundStyle(Palette.textMuted)
+        .help(controller.failedListNames.joined(separator: ", "))
     }
 }
 

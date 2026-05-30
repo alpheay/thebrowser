@@ -12,7 +12,7 @@ import Foundation
 enum BlockListCatalog {
     /// Every bundled list, one per category.
     static func defaultLists() -> [BlockList] {
-        [adsList(), trackersList(), annoyancesList(), socialList()]
+        [adsList(), trackersList(), cookiesList(), annoyancesList(), socialList()]
     }
 
     static func adsList() -> BlockList {
@@ -32,6 +32,16 @@ enum BlockListCatalog {
             category: .trackers,
             source: "Bundled",
             rules: trackerDomains.map(BlockRule.blockThirdParty(host:))
+        )
+    }
+
+    static func cookiesList() -> BlockList {
+        BlockList(
+            id: "thebrowser.third-party-cookies",
+            name: "Third-party Cookies",
+            category: .cookies,
+            source: "Bundled",
+            rules: [.blockThirdPartyCookies()]
         )
     }
 

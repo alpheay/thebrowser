@@ -37,6 +37,18 @@ struct BlockRuleTests {
         #expect(action["selector"] as? String == ".cookie-bar")
     }
 
+    @Test("Third-party cookie rule strips cookies without blocking")
+    func blockCookiesEncoding() throws {
+        let dict = try encodedRule(.blockThirdPartyCookies())
+        let trigger = try #require(dict["trigger"] as? [String: Any])
+        let action = try #require(dict["action"] as? [String: Any])
+
+        #expect(trigger["url-filter"] as? String == ".*")
+        #expect(trigger["load-type"] as? [String] == ["third-party"])
+        #expect(action["type"] as? String == "block-cookies")
+    }
+
+
     @Test("Host filter anchors at the scheme and escapes dots")
     func hostFilter() {
         #expect(BlockRule.hostURLFilter("ads.example.co.uk") == "^https?://([^/]+\\.)?ads\\.example\\.co\\.uk([/:?#]|$)")
@@ -98,6 +110,13 @@ struct BlockListCatalogTests {
         #expect(list.rules.first?.action.type == .cssDisplayNone)
     }
 
+    @Test("Cookie list strips third-party cookies")
+    func cookiesShape() {
+        let list = BlockListCatalog.cookiesList()
+        #expect(list.rules.count == 1)
+        #expect(list.rules.first?.action.type == .blockCookies)
+    }
+
     @Test("No domain appears in more than one network list")
     func noCrossListDuplicates() {
         let network = BlockListCatalog.adDomains + BlockListCatalog.trackerDomains + BlockListCatalog.socialDomains
@@ -107,10 +126,11 @@ struct BlockListCatalogTests {
 
 @Suite("BlockListCategory")
 struct BlockListCategoryTests {
-    @Test("Ads and trackers default on; annoyances and social are opt-in")
+    @Test("Network protections default on; cosmetic and social are opt-in")
     func defaults() {
         #expect(BlockListCategory.ads.isOnByDefault)
         #expect(BlockListCategory.trackers.isOnByDefault)
+        #expect(BlockListCategory.cookies.isOnByDefault)
         #expect(!BlockListCategory.annoyances.isOnByDefault)
         #expect(!BlockListCategory.social.isOnByDefault)
     }
@@ -186,6 +206,7 @@ struct ContentBlockingPreferencesTests {
         #expect(prefs.isEnabled)
         #expect(prefs.isEnabled(.ads))
         #expect(prefs.isEnabled(.trackers))
+        #expect(prefs.isEnabled(.cookies))
         #expect(!prefs.isEnabled(.annoyances))
         #expect(prefs.allowList.isEmpty)
         #expect(prefs.popupBlockingEnabled)
