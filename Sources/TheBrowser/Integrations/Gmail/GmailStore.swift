@@ -265,14 +265,16 @@ extension GmailStore {
         if let token = await account.currentAccessToken() {
             return GmailAPIService(accessToken: token)
         }
-        // Signed in but no token: the OAuth client may not have been loaded yet
-        // (the inbox overlay was never opened this session, so a token refresh
-        // couldn't run). Reload the client config and retry once before failing.
-        account.reloadCredentials()
-        guard let token = await account.currentAccessToken() else {
-            throw GmailAuthError.notSignedIn
+        // Retry once ONLY if the OAuth client wasn't loaded (e.g. the inbox was
+        // never opened this session). If it was loaded, a nil token means the
+        // refresh itself failed — retrying would just re-hit the token endpoint.
+        if account.credentialsState.clientID == nil {
+            account.reloadCredentials()
+            if let token = await account.currentAccessToken() {
+                return GmailAPIService(accessToken: token)
+            }
         }
-        return GmailAPIService(accessToken: token)
+        throw GmailAuthError.notSignedIn
     }
 
     var accountEmail: String? { account.identity?.email }

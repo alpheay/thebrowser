@@ -74,14 +74,26 @@ struct GmailAPIService {
             return ListResult(summaries: [], nextPageToken: list.nextPageToken)
         }
 
+        // Fetch summaries with bounded concurrency. Firing all 30 metadata
+        // gets at once can trip Gmail's per-user rate limit (429); a small
+        // window keeps the inbox fast without the burst.
+        let maxConcurrent = 6
         let summaries = try await withThrowingTaskGroup(of: GmailMessageSummary?.self) { group in
-            for ref in refs {
-                group.addTask { try await self.fetchSummary(id: ref.id) }
-            }
             var collected: [GmailMessageSummary] = []
             collected.reserveCapacity(refs.count)
-            for try await maybe in group {
+            var next = 0
+            while next < min(maxConcurrent, refs.count) {
+                let id = refs[next].id
+                group.addTask { try await self.fetchSummary(id: id) }
+                next += 1
+            }
+            while let maybe = try await group.next() {
                 if let summary = maybe { collected.append(summary) }
+                if next < refs.count {
+                    let id = refs[next].id
+                    group.addTask { try await self.fetchSummary(id: id) }
+                    next += 1
+                }
             }
             // Stable order: newest first (matches `messages.list` ordering).
             let ordering = Dictionary(uniqueKeysWithValues: refs.enumerated().map { ($1.id, $0) })

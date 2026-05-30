@@ -49,6 +49,10 @@ final class GmailAccountStore: ObservableObject {
     private var cachedAccessToken: String?
     private var cachedRefreshToken: String?
     private var accessTokenExpiry: Date?
+    /// In-flight token refresh. Concurrent callers await this instead of each
+    /// firing their own refresh — otherwise a burst of requests hammers the
+    /// token endpoint (429) and races the refresh-token rotation (invalid_grant).
+    private var refreshTask: Task<String?, Never>?
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -139,12 +143,26 @@ final class GmailAccountStore: ObservableObject {
             return token
         }
         guard case .ready = credentialsState else { return nil }
+
+        // Coalesce: if a refresh is already running, await its result rather
+        // than starting a second one.
+        if let existing = refreshTask {
+            return await existing.value
+        }
+        let task = Task { [weak self] () -> String? in
+            await self?.performRefresh(using: refresh) ?? nil
+        }
+        refreshTask = task
+        defer { refreshTask = nil }
+        return await task.value
+    }
+
+    private func performRefresh(using refreshToken: String) async -> String? {
         phase = .refreshing
         defer { phase = .idle }
-
         let service = GmailOAuthService(clientID: clientID, clientSecret: clientSecret)
         do {
-            let refreshed = try await service.refresh(refreshToken: refresh)
+            let refreshed = try await service.refresh(refreshToken: refreshToken)
             try persistTokens(refreshed)
             return refreshed.accessToken
         } catch {
