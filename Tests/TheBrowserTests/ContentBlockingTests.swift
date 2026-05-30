@@ -18,7 +18,7 @@ struct BlockRuleTests {
         let trigger = try #require(dict["trigger"] as? [String: Any])
         let action = try #require(dict["action"] as? [String: Any])
 
-        #expect(trigger["url-filter"] as? String == "^https?://([^/]+\\.)?doubleclick\\.net")
+        #expect(trigger["url-filter"] as? String == "^https?://([^/]+\\.)?doubleclick\\.net([/:?#]|$)")
         #expect(trigger["load-type"] as? [String] == ["third-party"])
         #expect(action["type"] as? String == "block")
         // Optional fields stay absent when nil.
@@ -39,7 +39,31 @@ struct BlockRuleTests {
 
     @Test("Host filter anchors at the scheme and escapes dots")
     func hostFilter() {
-        #expect(BlockRule.hostURLFilter("ads.example.co.uk") == "^https?://([^/]+\\.)?ads\\.example\\.co\\.uk")
+        #expect(BlockRule.hostURLFilter("ads.example.co.uk") == "^https?://([^/]+\\.)?ads\\.example\\.co\\.uk([/:?#]|$)")
+    }
+
+    @Test("Host filter matches only real host boundaries")
+    func hostFilterBoundaries() {
+        let pattern = BlockRule.hostURLFilter("doubleclick.net")
+        let matching = [
+            "https://doubleclick.net",
+            "https://doubleclick.net/ad.js",
+            "https://doubleclick.net:443/ad.js",
+            "https://doubleclick.net?slot=1",
+            "https://foo.doubleclick.net/ad.js"
+        ]
+        let nonMatching = [
+            "https://doubleclick.net.evil.test/ad.js",
+            "https://notdoubleclick.net/ad.js",
+            "https://example.com/path/doubleclick.net/ad.js"
+        ]
+
+        for url in matching {
+            #expect(url.range(of: pattern, options: .regularExpression) != nil)
+        }
+        for url in nonMatching {
+            #expect(url.range(of: pattern, options: .regularExpression) == nil)
+        }
     }
 }
 

@@ -112,10 +112,10 @@ extension BlockRule {
 
     /// Builds a host-anchored URL filter for `domain` and its subdomains.
     /// `^https?://` pins the match to the scheme; `([^/]+\.)?` optionally
-    /// consumes leading subdomain labels without crossing a `/`, so the match
-    /// can't escape into the path.
+    /// consumes leading subdomain labels without crossing a `/`; and the final
+    /// boundary prevents lookalikes such as `example.com.evil.test`.
     static func hostURLFilter(_ domain: String) -> String {
         let escaped = domain.replacingOccurrences(of: ".", with: "\\.")
-        return "^https?://([^/]+\\.)?\(escaped)"
+        return "^https?://([^/]+\\.)?\(escaped)([/:?#]|$)"
     }
 }
