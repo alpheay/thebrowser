@@ -186,6 +186,56 @@ final class ChatSessionStore {
         return summaries.sorted { $0.updatedAt > $1.updatedAt }
     }
 
+    /// Maps each artifact's **file name** to the chat session that produced
+    /// it, by scanning every persisted session for tool invocations carrying
+    /// an `artifactURL`. Keyed by `lastPathComponent` (not the absolute path)
+    /// so it joins cleanly against ``ArtifactMetadata/id`` regardless of how
+    /// the path was spelled when persisted. When two sessions reference the
+    /// same file, the most recently updated one wins.
+    func artifactSessionIndex() -> [String: ArtifactSessionRef] {
+        let fileManager = FileManager.default
+        guard let entries = try? fileManager.contentsOfDirectory(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ) else { return [:] }
+
+        var index: [String: ArtifactSessionRef] = [:]
+
+        for dir in entries {
+            let isDirectory = (try? dir.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory ?? false
+            guard isDirectory else { continue }
+
+            let file = dir.appendingPathComponent("messages.json")
+            guard let data = try? Data(contentsOf: file),
+                  let payload = try? decoder.decode(SessionPayload.self, from: data)
+            else { continue }
+
+            let firstUser = payload.messages.first(where: { $0.role == "user" })?.text
+            let ref = ArtifactSessionRef(
+                sessionID: payload.id,
+                pageTitle: payload.pageTitle,
+                firstUserMessage: firstUser,
+                updatedAt: payload.updatedAt
+            )
+
+            for message in payload.messages {
+                guard let chain = message.toolChain else { continue }
+                for tool in chain {
+                    guard let urlString = tool.artifactURL,
+                          let fileName = URL(string: urlString)?.lastPathComponent,
+                          !fileName.isEmpty else { continue }
+                    if let existing = index[fileName], existing.updatedAt >= ref.updatedAt {
+                        continue
+                    }
+                    index[fileName] = ref
+                }
+            }
+        }
+
+        return index
+    }
+
     func load(sessionID: String) -> [ChatMessage] {
         let file = directory(for: sessionID).appendingPathComponent("messages.json")
         guard let data = try? Data(contentsOf: file),

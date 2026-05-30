@@ -2,6 +2,7 @@ import SwiftUI
 
 struct TabRailView: View {
     @ObservedObject var model: BrowserModel
+    var onOpenArtifacts: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -22,6 +23,11 @@ struct TabRailView: View {
                 .padding(.bottom, 4)
 
             tabList
+
+            ArtifactsRailButton(action: onOpenArtifacts)
+                .padding(.horizontal, 12)
+                .padding(.top, 2)
+                .padding(.bottom, 10)
 
             footer
         }
@@ -216,6 +222,50 @@ private struct NewTabButtonLabel: View {
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .stroke(isHovering ? Palette.strokeStrong : Palette.stroke, lineWidth: 1)
         )
+    }
+}
+
+// MARK: - Artifacts button
+
+/// Pinned to the bottom of the rail, above the keycap hints. Opens the
+/// artifact gallery — the single entry point to everything the AI has built.
+private struct ArtifactsRailButton: View {
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                ArtifactMark()
+                    .foregroundStyle(Palette.textPrimary)
+                    .frame(width: 16, height: 16)
+
+                Text("Artifacts")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(Palette.textPrimary)
+
+                Spacer(minLength: 4)
+
+                KeycapHint(text: "⇧⌘A")
+                    .opacity(isHovering ? 1.0 : 0.55)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 32)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(isHovering ? Palette.surfaceHover : Palette.surface)
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .stroke(isHovering ? Palette.strokeStrong : Palette.stroke, lineWidth: 1)
+            )
+        }
+        .buttonStyle(NewTabButtonStyle())
+        .onHover { isHovering = $0 }
+        .animation(Motion.hoverFade, value: isHovering)
+        .help("Browse generated artifacts")
     }
 }
 

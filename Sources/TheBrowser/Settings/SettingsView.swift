@@ -48,6 +48,7 @@ struct SettingsView: View {
     @StateObject private var discordAccountStore = DiscordAccountStore.shared
     @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
     @AppStorage(PreferenceKey.openHistoryShortcut) private var openHistoryShortcut = "command+y"
+    @AppStorage(PreferenceKey.openArtifactsShortcut) private var openArtifactsShortcut = "shift+command+a"
 
     var body: some View {
         HStack(spacing: 0) {
@@ -487,6 +488,9 @@ struct SettingsView: View {
                 }
                 row(label: "Open history", help: "Browse and search every page you've visited.") {
                     ShortcutRecorder(value: $openHistoryShortcut)
+                }
+                row(label: "Open artifacts", help: "Browse every document the AI has generated for you.") {
+                    ShortcutRecorder(value: $openArtifactsShortcut)
                 }
             }
         }
