@@ -85,4 +85,3 @@ struct HomePageView: View {
         query = ""
     }
 }
-
