@@ -12,6 +12,7 @@ enum NativeBrowserToolName: String, Equatable, Sendable {
     case mailDraftReply = "mail_draft_reply"
     case createArtifact = "create_artifact"
     case webControl = "web_control"
+    case recall
 }
 
 struct MailToolMessageIdentifier: Equatable, Sendable {
@@ -44,6 +45,7 @@ struct NativeBrowserToolCall: Equatable, Sendable {
     var threadID: String? = nil
     var body: String? = nil
     var maxResults: Int? = nil
+    var sinceDays: Int? = nil
 
     static func parse(from text: String) -> NativeBrowserToolCall? {
         for candidate in jsonObjectCandidates(in: text) {
@@ -90,6 +92,8 @@ struct NativeBrowserToolCall: Equatable, Sendable {
                 .joined(separator: " | ")
         case .createArtifact:
             return title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "artifact"
+        case .recall:
+            return query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         }
     }
 
@@ -154,6 +158,9 @@ struct NativeBrowserToolCall: Equatable, Sendable {
         let maxResults = intValue(named: "max_results", in: dictionary, arguments: arguments)
             ?? intValue(named: "maxResults", in: dictionary, arguments: arguments)
             ?? intValue(named: "limit", in: dictionary, arguments: arguments)
+        let sinceDays = intValue(named: "since_days", in: dictionary, arguments: arguments)
+            ?? intValue(named: "sinceDays", in: dictionary, arguments: arguments)
+            ?? intValue(named: "days", in: dictionary, arguments: arguments)
 
         let call = NativeBrowserToolCall(
             name: name,
@@ -167,7 +174,8 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             messageID: messageID,
             threadID: threadID,
             body: body,
-            maxResults: maxResults
+            maxResults: maxResults,
+            sinceDays: sinceDays
         )
 
         switch name {
@@ -183,6 +191,8 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             return call.mailIdentifier == nil || (body?.isEmpty ?? true) ? nil : call
         case .createArtifact:
             return (html?.isEmpty == false) ? call : nil
+        case .recall:
+            return (call.rawInput.isEmpty && call.sinceDays == nil) ? nil : call
         }
     }
 
@@ -602,6 +612,11 @@ struct NativeBrowserToolExecutor {
     var draftMailReply: @MainActor (_ identifier: MailToolMessageIdentifier, _ body: String) async throws -> GmailMessage
     var saveAndOpenArtifact: @MainActor (_ title: String, _ html: String) async throws -> URL
     var runWebControl: @MainActor (_ task: String) async -> WebControlAgentOutcome
+    /// Searches the local Recall index (the readable content of pages the user
+    /// has actually visited) and returns ranked passages with source and
+    /// timestamp. Implemented in the shell so the executor itself never has to
+    /// know about ``RecallController``.
+    var searchHistory: @MainActor (_ query: String, _ sinceDays: Int?, _ maxResults: Int) async -> [RecallHit]
 
     init(
         openURL: @escaping @MainActor (URL) -> Void,
@@ -625,7 +640,8 @@ struct NativeBrowserToolExecutor {
                 summary: "Web control is not configured in this browser surface.",
                 stepCount: 0
             )
-        }
+        },
+        searchHistory: @escaping @MainActor (_ query: String, _ sinceDays: Int?, _ maxResults: Int) async -> [RecallHit] = { _, _, _ in [] }
     ) {
         self.openURL = openURL
         self.readTabsContent = readTabsContent
@@ -637,6 +653,7 @@ struct NativeBrowserToolExecutor {
         self.draftMailReply = draftMailReply
         self.saveAndOpenArtifact = saveAndOpenArtifact
         self.runWebControl = runWebControl
+        self.searchHistory = searchHistory
     }
 
     func execute(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
@@ -663,6 +680,8 @@ struct NativeBrowserToolExecutor {
             return await createArtifact(call)
         case .webControl:
             return await webControl(call)
+        case .recall:
+            return await recall(call)
         }
     }
 }
@@ -681,6 +700,7 @@ enum NativeBrowserToolPrompt {
     - mail_draft_reply: opens the Gmail overlay composer with a reply draft. Pass either `message_id` or `thread_id`, plus `body` containing the exact reply draft text. This does not send mail; the user reviews and sends.
     - create_artifact: saves a fully self-contained HTML document under ~/.thebrowser/web_artifacts/ and opens it in a new tab. Use this when the user asks for an "artifact", "document", "report", "dashboard", "summary", or anything similar that should be rendered as a standalone page.
     - web_control: delegates a bounded task to a separate web-control agent and live-page harness that can click, type, press keys, scroll, wait, navigate, and inspect the current WKWebView without adding its step-by-step context to this chat. Use it when the user asks you to interact with a live site or web app on their behalf: click links/buttons, fill fields/forms, operate menus, submit searches, complete a workflow, or play a browser game such as Wordle. Pass a concise `task` string describing the user's goal and any constraints. The harness will show an "Agent is Working" overlay while it controls the page.
+    - recall: searches the user's OWN browsing history — the readable content of pages they have actually visited and read, indexed locally on this Mac. Use whenever the user refers to something they saw, read, or visited before: "that transformers article I read last week", "the pricing page I looked at", "what was that site about X", "find the post where they mentioned Y". Pass `query` with the keywords and any time words the user used (e.g. "transformers attention last week" — keep "last week" in the query; it is parsed into a date filter). Optional `since_days` limits to the last N days; optional `max_results` (default ~8). Returns matching passages with the page title, URL, and when it was last read — cite these in your answer and offer to reopen the page. If recall returns no strong match, tell the user it is not in their history rather than guessing. This searches local history only, never the live web (use search/fetch for that).
 
     To use a tool, reply with only one JSON object and no prose:
     {"tool":"open","url":"https://example.com"}
@@ -696,6 +716,7 @@ enum NativeBrowserToolPrompt {
     {"tool":"mail_draft_reply","message_id":"message-id-from-search","body":"Thanks — I can do Thursday at 2 PM."}
     {"tool":"create_artifact","title":"Market Overview","html":"<!doctype html><html>…</html>"}
     {"tool":"web_control","task":"On the current page, play one game of Wordle and report the outcome."}
+    {"tool":"recall","query":"transformers attention article last week","max_results":8}
 
     CRITICAL tool-call rules — follow these or the dispatcher will treat your tool call as plain chat text and the action will silently fail:
     1. EXACTLY ONE tool call per response. Never emit two JSON objects in the same response. If you need read_tabs THEN create_artifact, emit only the read_tabs call now and wait for the result before emitting create_artifact in your next turn.

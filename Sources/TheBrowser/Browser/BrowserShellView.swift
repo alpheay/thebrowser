@@ -104,6 +104,11 @@ struct BrowserShellView: View {
                             },
                             runWebControl: { task in
                                 await model.runWebControl(task: task, sessionDirectory: chatModel.sessionDirectory)
+                            },
+                            searchHistory: { query, sinceDays, maxResults in
+                                await RecallController.shared.search(
+                                    query, sinceDays: sinceDays, limit: maxResults
+                                )
                             }
                         ),
                         onOpenArtifact: { url in

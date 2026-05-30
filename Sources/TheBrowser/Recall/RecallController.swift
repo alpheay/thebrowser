@@ -113,10 +113,16 @@ final class RecallController: ObservableObject {
     /// Runs a hybrid recall query. Parses temporal/host filters, embeds the
     /// keywords on-device (when semantic search is on), and asks the store for
     /// ranked passages. Everything here is local.
-    func search(_ rawQuery: String, limit: Int = 12, now: Date = Date()) async -> [RecallHit] {
+    func search(_ rawQuery: String, sinceDays: Int? = nil, limit: Int = 12, now: Date = Date()) async -> [RecallHit] {
         let trimmed = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return [] }
-        let plan = RecallQueryPlanner.parse(trimmed, now: now)
+        guard !trimmed.isEmpty || (sinceDays ?? 0) > 0 else { return [] }
+        var plan = RecallQueryPlanner.parse(trimmed, now: now)
+        if let sinceDays, sinceDays > 0 {
+            // An explicit since_days from the model tightens (or sets) the
+            // parsed date floor.
+            let explicit = now.addingTimeInterval(-Double(sinceDays) * 86_400)
+            plan.since = plan.since.map { max($0, explicit) } ?? explicit
+        }
 
         var vector: [Float]?
         if semanticEnabled, plan.hasTextQuery, let embedder = await RecallEmbedder.sharedIfAvailable() {
