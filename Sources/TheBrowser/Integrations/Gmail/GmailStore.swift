@@ -269,6 +269,181 @@ final class GmailStore: ObservableObject {
         return target
     }
 
+    // MARK: - Intelligent inbox tool support
+
+    /// Paginated search for the rebuilt mail tools. Returns the page (summaries
+    /// + nextPageToken). On a fresh search (`pageToken == nil`) it replaces the
+    /// overlay list; on a follow-up page it appends, so "load more" works in
+    /// the UI too. Unlike the old tool path it does NOT force the overlay open.
+    func searchPaged(
+        query: String,
+        mailbox: GmailMailbox?,
+        maxResults: Int,
+        pageToken: String?
+    ) async throws -> GmailAPIService.ListResult {
+        guard account.isSignedIn else { throw GmailAuthError.notSignedIn }
+        guard let token = await account.currentAccessToken() else { throw GmailAuthError.notSignedIn }
+
+        phase = .loadingList
+        defer { phase = .idle }
+
+        let api = GmailAPIService(accessToken: token)
+        let resolvedMailbox = mailbox ?? .all
+        let trimmed = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let result = try await api.listMessages(
+            mailbox: resolvedMailbox,
+            query: trimmed.isEmpty ? nil : trimmed,
+            maxResults: maxResults,
+            pageToken: pageToken
+        )
+
+        selectedMailbox = resolvedMailbox
+        self.query = trimmed
+        if pageToken == nil {
+            messages = result.summaries
+        } else {
+            let existing = Set(messages.map(\.id))
+            messages.append(contentsOf: result.summaries.filter { !existing.contains($0.id) })
+        }
+        openMessage = nil
+        paneMode = .list
+        lastError = nil
+        return result
+    }
+
+    /// Batch label modify (archive, mark read/unread, star, add/remove labels)
+    /// for the `mail_modify` tool. Applies the change to every id concurrently,
+    /// then reconciles the in-memory list optimistically.
+    func modify(messageIDs: [String], add: [String] = [], remove: [String] = []) async throws {
+        let ids = messageIDs.filter { !$0.isEmpty }
+        guard !ids.isEmpty else { return }
+        guard let token = await account.currentAccessToken() else { throw GmailAuthError.notSignedIn }
+        let api = GmailAPIService(accessToken: token)
+
+        try await withThrowingTaskGroup(of: Void.self) { group in
+            for id in ids {
+                group.addTask { _ = try await api.modifyLabels(messageID: id, add: add, remove: remove) }
+            }
+            try await group.waitForAll()
+        }
+
+        // Optimistic local reconcile so the overlay reflects the change
+        // before the next refresh.
+        if remove.contains("INBOX") {
+            messages.removeAll { ids.contains($0.id) }
+        }
+        for id in ids {
+            updateSummary(id: id) { current in
+                var unread = current.unread
+                var starred = current.starred
+                if add.contains("UNREAD") { unread = true }
+                if remove.contains("UNREAD") { unread = false }
+                if add.contains("STARRED") { starred = true }
+                if remove.contains("STARRED") { starred = false }
+                var labels = Set(current.labelIDs)
+                labels.formUnion(add)
+                labels.subtract(remove)
+                return GmailMessageSummary(
+                    id: current.id,
+                    threadId: current.threadId,
+                    snippet: current.snippet,
+                    subject: current.subject,
+                    fromName: current.fromName,
+                    fromAddress: current.fromAddress,
+                    date: current.date,
+                    unread: unread,
+                    starred: starred,
+                    labelIDs: Array(labels)
+                )
+            }
+        }
+    }
+
+    /// Sends a message from raw fields (the `mail_send` tool's "ask"/"auto"
+    /// paths). Replies thread when `threadId` / `inReplyToMessageId` are set.
+    @discardableResult
+    func sendMessage(
+        to: String,
+        cc: String?,
+        subject: String,
+        body: String,
+        threadId: String?,
+        inReplyToMessageId: String?
+    ) async throws -> String {
+        guard let token = await account.currentAccessToken(),
+              let from = account.identity?.email else {
+            throw GmailAuthError.notSignedIn
+        }
+        phase = .sending
+        defer { phase = .idle }
+        let api = GmailAPIService(accessToken: token)
+        let id = try await api.send(
+            to: to,
+            cc: cc,
+            subject: subject,
+            body: body,
+            threadId: threadId,
+            inReplyToMessageId: inReplyToMessageId,
+            from: from
+        )
+        if selectedMailbox == .sent { refreshList(force: true) }
+        return id
+    }
+
+    /// Stages a draft in the composer (the draft-only send mode). Opens the
+    /// compose pane pre-filled; the user reviews and sends from the UI.
+    func stageDraft(
+        to: String,
+        cc: String?,
+        subject: String,
+        body: String,
+        replyToMessageId: String?,
+        threadId: String?
+    ) {
+        var draft = GmailPaneMode.Draft(to: to, subject: subject, body: body)
+        if let openMessage, openMessage.id == replyToMessageId || openMessage.threadId == threadId {
+            draft.inReplyTo = openMessage
+        }
+        paneMode = .composing(draft)
+    }
+
+    /// Returns the top (non-quoted) text of recent Sent messages, used once to
+    /// distill the user's voice profile. Strips quoted replies so the sample
+    /// reflects what the user actually wrote.
+    func recentSentBodies(limit: Int = 40) async throws -> [String] {
+        guard let token = await account.currentAccessToken() else { throw GmailAuthError.notSignedIn }
+        let api = GmailAPIService(accessToken: token)
+        let list = try await api.listMessages(mailbox: .sent, query: nil, maxResults: limit)
+        return try await withThrowingTaskGroup(of: String?.self) { group in
+            for summary in list.summaries {
+                group.addTask {
+                    let full = try? await api.fetchMessage(id: summary.id)
+                    return full.map { Self.topReplyText($0.plainBody) }
+                }
+            }
+            var bodies: [String] = []
+            for try await body in group {
+                if let body, body.count > 20 { bodies.append(body) }
+            }
+            return bodies
+        }
+    }
+
+    /// Keeps the lines a person actually typed at the top of a reply, dropping
+    /// the quoted history ("On … wrote:", lines beginning with ">").
+    nonisolated private static func topReplyText(_ body: String) -> String {
+        var kept: [String] = []
+        for rawLine in body.split(separator: "\n", omittingEmptySubsequences: false) {
+            let line = String(rawLine)
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix(">") { break }
+            if trimmed.range(of: #"^On .+ wrote:$"#, options: .regularExpression) != nil { break }
+            if trimmed.range(of: #"^-{2,}\s*Forwarded message"#, options: .regularExpression) != nil { break }
+            kept.append(line)
+        }
+        return kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: - Internals
 
     private func performRefresh() async {

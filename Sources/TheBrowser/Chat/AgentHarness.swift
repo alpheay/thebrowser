@@ -111,8 +111,20 @@ enum AgentStatusLabel {
             return "Searching mail…"
         case .mailReadThread:
             return "Reading mail thread…"
-        case .mailDraftReply:
+        case .mailShow:
+            return "Opening mail…"
+        case .mailDraft:
             return "Drafting reply…"
+        case .mailSend:
+            return "Sending mail…"
+        case .mailModify:
+            return "Updating mail…"
+        case .mailTriage:
+            return "Triaging inbox…"
+        case .mailRemind:
+            return "Setting a reminder…"
+        case .mailMemory:
+            return "Updating memory…"
         case .createArtifact:
             return "Saving artifact…"
         case .webControl:

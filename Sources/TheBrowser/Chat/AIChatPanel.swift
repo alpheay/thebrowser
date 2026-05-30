@@ -149,6 +149,10 @@ final class ChatViewModel: ObservableObject {
     /// preset's drafting rubric to the prompt sent to the model. Cleared
     /// after a successful send or when the user dismisses the bar.
     @Published var draftPreset: CitedClipDraftPreset?
+    /// The most recent AI-composed email draft awaiting the user's action,
+    /// surfaced as a card above the composer. Set when a mail tool returns a
+    /// `.draft` payload; cleared on send/dismiss. Ephemeral (not persisted).
+    @Published var pendingDraft: MailDraftPreview?
     @Published private(set) var sessionID: String
 
     private let client = AIProviderClient()
@@ -433,7 +437,17 @@ final class ChatViewModel: ObservableObject {
                 output: result.invocation.output,
                 artifactURL: result.invocation.artifactURL
             )
+            applyMailPayload(result)
             finalizeLiveMessage(text: result.content, context: context)
+        }
+    }
+
+    /// Surfaces a mail tool's rich payload. A `.draft` payload becomes the
+    /// `pendingDraft` card above the composer so the user can edit, regenerate,
+    /// or send it.
+    private func applyMailPayload(_ result: NativeBrowserToolResult) {
+        if case .draft(let preview) = result.mailPayload {
+            withAnimation(Motion.springSnap) { pendingDraft = preview }
         }
     }
 
@@ -532,6 +546,7 @@ final class ChatViewModel: ObservableObject {
 
                     let result = await nativeTools.execute(call)
                     collectedResults.append(result)
+                    applyMailPayload(result)
                     completeLiveTool(
                         status: result.succeeded ? .completed : .failed,
                         output: result.invocation.output,
@@ -846,6 +861,7 @@ struct AIChatPanel: View {
     @AppStorage(PreferenceKey.aiProvider) private var aiProvider = AIProviderKind.codex.rawValue
     @AppStorage(PreferenceKey.aiModel) private var aiModel = ""
     @AppStorage(PreferenceKey.aiShowToolChain) private var showToolChain = true
+    @AppStorage(PreferenceKey.mailSendMode) private var mailSendModeRaw = MailSendMode.draftOnly.rawValue
     @FocusState private var composerFocused: Bool
     @State private var showingModelPicker = false
     @State private var showingHistoryPicker = false
@@ -854,6 +870,19 @@ struct AIChatPanel: View {
         VStack(spacing: 0) {
             header
             content
+            if let preview = viewModel.pendingDraft {
+                MailDraftCard(
+                    preview: preview,
+                    sendModeTitle: MailSendMode(rawValue: mailSendModeRaw)?.title ?? MailSendMode.draftOnly.title,
+                    runMailTool: nativeTools.runMailTool,
+                    onDismiss: {
+                        withAnimation(Motion.springSnap) { viewModel.pendingDraft = nil }
+                    }
+                )
+                .padding(.horizontal, 12)
+                .padding(.bottom, 4)
+                .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
             composer
         }
         .frame(width: Metrics.chatWidth)
@@ -1827,7 +1856,13 @@ private struct ToolCallRow: View {
         case "read_smart_read": return "read smart read"
         case "mail_search": return "mail search"
         case "mail_read_thread": return "mail read"
-        case "mail_draft_reply": return "mail draft"
+        case "mail_draft": return "mail draft"
+        case "mail_send": return "mail send"
+        case "mail_modify": return "mail organize"
+        case "mail_triage": return "mail triage"
+        case "mail_remind": return "mail remind"
+        case "mail_memory": return "mail memory"
+        case "mail_show": return "mail open"
         case "create_artifact": return "artifact"
         case "web_control": return "web control"
         default: return invocation.tool.replacingOccurrences(of: "_", with: " ")

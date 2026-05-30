@@ -13,7 +13,13 @@ import SwiftUI
 struct GmailIntegrationView: View {
     @ObservedObject var store: GmailStore
     @ObservedObject var account: GmailAccountStore
+    @ObservedObject var mailModel: MailModel
     let onClose: () -> Void
+
+    /// Active AI-label filter chip, or nil for "all".
+    @State private var selectedLabelID: String?
+    /// "Needs reply" filter — scopes the list to threads with a reminder.
+    @State private var needsReplyOnly = false
 
     @FocusState private var searchFocused: Bool
 

@@ -160,6 +160,38 @@ struct AIHarnessConfiguration: Sendable {
 }
 
 extension AIHarnessConfiguration {
+    /// A focused, tool-less configuration for the mail sub-agent. Runs on the
+    /// provider's fast model with a read-only sandbox and an isolated
+    /// workspace so the one-shot inbox calls can't see or touch the user's
+    /// projects. The system prompt is supplied per call by `MailAgent`.
+    static func mailSubagent(
+        provider: AIProviderKind,
+        systemPrompt: String,
+        defaults: UserDefaults = .standard
+    ) -> AIHarnessConfiguration {
+        let cliPath: String
+        switch provider {
+        case .codex:
+            cliPath = defaults.string(forKey: PreferenceKey.codexCLIPath) ?? AppDefaults.defaultCodexCLIPath()
+        case .claude:
+            cliPath = defaults.string(forKey: PreferenceKey.claudeCLIPath) ?? AppDefaults.defaultClaudeCLIPath()
+        }
+        return AIHarnessConfiguration(
+            provider: provider,
+            cliPath: cliPath,
+            workspacePath: MailStorage.agentWorkspacePath,
+            model: provider.fastModelID,
+            sandbox: "read-only",
+            systemPrompt: systemPrompt,
+            tools: "",
+            allowedTools: "",
+            disallowedTools: "",
+            mcpConfigPath: "",
+            extraArguments: "",
+            reasoningEffort: ""
+        )
+    }
+
     var promptIdentity: String {
         let modelID = model.trimmingCharacters(in: .whitespacesAndNewlines)
         let modelName: String
@@ -279,6 +311,26 @@ struct AIProviderClient {
         let resolvedConfig = configuration
         return try await Task.detached(priority: .userInitiated) {
             try runProvider(configuration: resolvedConfig, prompt: prompt, runHandle: runHandle)
+        }.value
+    }
+
+    /// One-shot completion on a specific provider's FAST model, used by the
+    /// mail sub-agent. No chat history, no tools, no session persistence —
+    /// just prompt in, text out. Runs on gpt-5.4-mini (codex) /
+    /// claude-haiku-4-5 (claude) so inbox intelligence stays cheap and fast
+    /// regardless of the user's main chat model.
+    func complete(
+        prompt: String,
+        provider: AIProviderKind,
+        systemPrompt: String,
+        runHandle: AgentRunHandle? = nil
+    ) async throws -> String {
+        let configuration = AIHarnessConfiguration.mailSubagent(
+            provider: provider,
+            systemPrompt: systemPrompt
+        )
+        return try await Task.detached(priority: .userInitiated) {
+            try runProvider(configuration: configuration, prompt: prompt, runHandle: runHandle)
         }.value
     }
 

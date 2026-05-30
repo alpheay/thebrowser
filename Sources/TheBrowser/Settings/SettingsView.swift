@@ -37,6 +37,13 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.toolbarShowTabRailToggle) private var toolbarShowTabRailToggle = true
     @AppStorage(PreferenceKey.toolbarShowChatToggle) private var toolbarShowChatToggle = true
     @AppStorage(PreferenceKey.tabHibernationMinutes) private var tabHibernationMinutes = 30
+    @AppStorage(PreferenceKey.mailSendMode) private var mailSendMode = MailSendMode.draftOnly.rawValue
+    @AppStorage(PreferenceKey.mailSubagentProvider) private var mailSubagentProvider = ""
+    @AppStorage(PreferenceKey.mailTriageEnabled) private var mailTriageEnabled = true
+    @AppStorage(PreferenceKey.mailMirrorLabelsToGmail) private var mailMirrorLabelsToGmail = false
+    @AppStorage(PreferenceKey.mailDroppedBallEnabled) private var mailDroppedBallEnabled = true
+    @AppStorage(PreferenceKey.mailDroppedBallDays) private var mailDroppedBallDays = 1
+    @AppStorage(PreferenceKey.mailMemoryAutoExtract) private var mailMemoryAutoExtract = true
 
     @State private var selectedTab: SettingsTab = .general
     @State private var showClearAllConfirm = false
@@ -46,6 +53,8 @@ struct SettingsView: View {
     @StateObject private var googleAccountStore = GoogleAccountStore.shared
     @StateObject private var gmailAccountStore = GmailAccountStore.shared
     @StateObject private var discordAccountStore = DiscordAccountStore.shared
+    @StateObject private var mailTriage = MailModel.shared.triage
+    @StateObject private var mailMemories = MailModel.shared.memories
     @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
     @AppStorage(PreferenceKey.openHistoryShortcut) private var openHistoryShortcut = "command+y"
 
@@ -116,6 +125,8 @@ struct SettingsView: View {
             toolbarSettings
         case .ai:
             aiSettings
+        case .mail:
+            mailSettings
         case .clipboard:
             CitedClipboardSettingsContent()
         case .keybindings:
@@ -461,6 +472,91 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - Mail
+
+    private var mailSettings: some View {
+        VStack(alignment: .leading, spacing: 28) {
+            pageHeader(title: "Mail", subtitle: "Your intelligent inbox. Triage, drafts, and reminders run on a fast model so they stay quick and cheap.")
+
+            section("Sending") {
+                row(label: "When the AI sends email", help: sendModeHelp) {
+                    SegmentPicker(selection: $mailSendMode, options: MailSendMode.allCases.map { ($0.rawValue, $0.title) })
+                }
+            }
+
+            section("Engine") {
+                row(label: "Mail model", help: "Which fast model powers triage, drafts, and search. Auto follows your main AI provider (GPT-5.4 Mini for Codex, Claude Haiku 4.5 for Claude).") {
+                    SegmentPicker(selection: $mailSubagentProvider, options: [
+                        ("", "Auto"),
+                        (AIProviderKind.codex.rawValue, "GPT-5.4 Mini"),
+                        (AIProviderKind.claude.rawValue, "Haiku 4.5")
+                    ])
+                }
+            }
+
+            section("Triage") {
+                row(label: "Auto-label incoming mail", help: "Classify new inbox messages into AI labels (Important, Billing, Newsletter…) as they arrive.") {
+                    HStack { Spacer(); ToggleSwitch(isOn: $mailTriageEnabled) }
+                }
+                row(label: "Mirror labels to Gmail", help: "Also apply AI labels as real Gmail labels, visible in Gmail and other clients. Off keeps them local to The Browser.") {
+                    HStack { Spacer(); ToggleSwitch(isOn: $mailMirrorLabelsToGmail) }
+                }
+            }
+
+            section("Labels") {
+                ForEach(mailTriage.labels) { label in
+                    row(label: label.name, help: label.instruction) {
+                        HStack {
+                            Spacer()
+                            ToggleSwitch(isOn: Binding(
+                                get: { label.enabled },
+                                set: { newValue in
+                                    var updated = label
+                                    updated.enabled = newValue
+                                    mailTriage.setLabel(updated)
+                                }
+                            ))
+                        }
+                    }
+                }
+            }
+
+            section("Follow-ups") {
+                row(label: "Dropped-ball nudges", help: "Remind you about inbox threads that are awaiting your reply.") {
+                    HStack { Spacer(); ToggleSwitch(isOn: $mailDroppedBallEnabled) }
+                }
+                if mailDroppedBallEnabled {
+                    row(label: "Nudge after", help: "How long a thread can sit unanswered before it's flagged.") {
+                        NumericStepperField(value: $mailDroppedBallDays, range: 1...30, step: 1, suffix: mailDroppedBallDays == 1 ? "day" : "days")
+                    }
+                }
+            }
+
+            section("Memory") {
+                row(label: "Learn from your mail", help: "Let the assistant remember durable facts and preferences from email you read and send. You confirm each one before it's kept.") {
+                    HStack { Spacer(); ToggleSwitch(isOn: $mailMemoryAutoExtract) }
+                }
+                row(label: "Stored memories", help: "Facts the assistant remembers to personalize drafts and triage.") {
+                    HStack(spacing: 8) {
+                        Spacer()
+                        Text("\(mailMemories.memories.count)")
+                            .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(Palette.textMuted)
+                        if !mailMemories.memories.isEmpty {
+                            DestructiveButton(title: "Clear all") {
+                                for memory in mailMemories.memories { mailMemories.delete(id: memory.id) }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private var sendModeHelp: String {
+        MailSendMode(rawValue: mailSendMode)?.detail ?? MailSendMode.draftOnly.detail
+    }
+
     // MARK: - Keybindings
 
     private var keybindingsSettings: some View {
@@ -642,6 +738,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case account
     case toolbar
     case ai
+    case mail
     case clipboard
     case keybindings
     case migration
@@ -654,6 +751,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .account: "Account"
         case .toolbar: "Toolbar"
         case .ai: "AI Engine"
+        case .mail: "Mail"
         case .clipboard: "Clipboard"
         case .keybindings: "Keybindings"
         case .migration: "Migration"
@@ -666,6 +764,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .account: "person.crop.circle"
         case .toolbar: "square.topthird.inset.filled"
         case .ai: "sparkles"
+        case .mail: "envelope"
         case .clipboard: "doc.on.clipboard"
         case .keybindings: "keyboard"
         case .migration: "arrow.triangle.2.circlepath"

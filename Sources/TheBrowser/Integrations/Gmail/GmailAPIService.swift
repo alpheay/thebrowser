@@ -146,6 +146,47 @@ struct GmailAPIService {
         return decoded.id
     }
 
+    /// Sends a fresh message from raw fields. Used by the `mail_send` tool,
+    /// which carries plain strings (not a `GmailMessage`). When `threadId` /
+    /// `inReplyToMessageId` are set the reply threads correctly with
+    /// `In-Reply-To` / `References` headers and a pinned `threadId`.
+    @discardableResult
+    func send(
+        to: String,
+        cc: String?,
+        subject: String,
+        body: String,
+        threadId: String?,
+        inReplyToMessageId: String?,
+        from: String
+    ) async throws -> String {
+        let mime = buildMIME(
+            to: to,
+            cc: cc,
+            subject: subject,
+            body: body,
+            inReplyToMessageId: inReplyToMessageId,
+            from: from
+        )
+        let raw = Data(mime.utf8).base64URLEncodedString()
+        var payload: [String: Any] = ["raw": raw]
+        if let threadId, !threadId.isEmpty { payload["threadId"] = threadId }
+
+        var request = URLRequest(url: URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: payload, options: [])
+
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw GmailAPIError.http((response as? HTTPURLResponse)?.statusCode ?? -1, body)
+        }
+        struct SendResponse: Decodable { let id: String }
+        return try JSONDecoder().decode(SendResponse.self, from: data).id
+    }
+
     // MARK: - Label toggles
 
     @discardableResult
@@ -185,21 +226,40 @@ struct GmailAPIService {
     }
 
     private func buildMIME(draft: GmailPaneMode.Draft, from: String) -> String {
+        buildMIME(
+            to: draft.to,
+            cc: nil,
+            subject: draft.subject,
+            body: draft.body,
+            inReplyToMessageId: draft.inReplyTo?.id,
+            from: from
+        )
+    }
+
+    private func buildMIME(
+        to: String,
+        cc: String?,
+        subject: String,
+        body: String,
+        inReplyToMessageId: String?,
+        from: String
+    ) -> String {
         var headers: [(String, String)] = [
             ("From", from),
-            ("To", draft.to),
-            ("Subject", draft.subject),
-            ("MIME-Version", "1.0"),
-            ("Content-Type", "text/plain; charset=UTF-8")
+            ("To", to)
         ]
-        if let reply = draft.inReplyTo {
-            headers.append(("In-Reply-To", "<\(reply.id)@mail.gmail.com>"))
-            headers.append(("References", "<\(reply.id)@mail.gmail.com>"))
+        if let cc, !cc.isEmpty { headers.append(("Cc", cc)) }
+        headers.append(("Subject", subject))
+        headers.append(("MIME-Version", "1.0"))
+        headers.append(("Content-Type", "text/plain; charset=UTF-8"))
+        if let messageId = inReplyToMessageId, !messageId.isEmpty {
+            headers.append(("In-Reply-To", "<\(messageId)@mail.gmail.com>"))
+            headers.append(("References", "<\(messageId)@mail.gmail.com>"))
         }
         let headerBlock = headers
             .map { "\($0.0): \($0.1)" }
             .joined(separator: "\r\n")
-        return headerBlock + "\r\n\r\n" + draft.body
+        return headerBlock + "\r\n\r\n" + body
     }
 }
 
@@ -221,6 +281,7 @@ private struct RawMessage: Decodable {
 
     struct Payload: Decodable {
         let mimeType: String?
+        let filename: String?
         let headers: [Header]?
         let body: Body?
         let parts: [Payload]?
@@ -232,6 +293,7 @@ private struct RawMessage: Decodable {
     struct Body: Decodable {
         let data: String?
         let size: Int?
+        let attachmentId: String?
     }
 
     func header(_ name: String) -> String? {
@@ -274,8 +336,30 @@ private struct RawMessage: Decodable {
             plainBody: plain ?? "",
             htmlBody: html,
             labelIDs: labelIds ?? [],
-            unread: (labelIds ?? []).contains("UNREAD")
+            unread: (labelIds ?? []).contains("UNREAD"),
+            attachments: collectAttachments()
         )
+    }
+
+    /// Walks the MIME tree collecting parts that carry a filename — i.e. real
+    /// attachments — so the reader/assistant can surface "contract.pdf
+    /// (240 KB)" without downloading the bytes.
+    private func collectAttachments() -> [MailAttachment] {
+        guard let payload else { return [] }
+        var result: [MailAttachment] = []
+        func walk(_ part: Payload) {
+            if let name = part.filename, !name.isEmpty {
+                result.append(MailAttachment(
+                    filename: name,
+                    mimeType: part.mimeType ?? "application/octet-stream",
+                    size: part.body?.size ?? 0,
+                    attachmentId: part.body?.attachmentId ?? ""
+                ))
+            }
+            for child in part.parts ?? [] { walk(child) }
+        }
+        walk(payload)
+        return result
     }
 
     private func parsedDate() -> Date {
