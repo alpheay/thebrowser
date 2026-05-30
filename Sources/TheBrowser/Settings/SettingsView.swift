@@ -118,6 +118,8 @@ struct SettingsView: View {
             aiSettings
         case .clipboard:
             CitedClipboardSettingsContent()
+        case .contentBlocking:
+            ContentBlockingSettingsContent()
         case .keybindings:
             keybindingsSettings
         case .migration:
@@ -643,6 +645,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
     case toolbar
     case ai
     case clipboard
+    case contentBlocking
     case keybindings
     case migration
 
@@ -655,6 +658,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .toolbar: "Toolbar"
         case .ai: "AI Engine"
         case .clipboard: "Clipboard"
+        case .contentBlocking: "Content Blocking"
         case .keybindings: "Keybindings"
         case .migration: "Migration"
         }
@@ -667,6 +671,7 @@ private enum SettingsTab: String, CaseIterable, Identifiable {
         case .toolbar: "square.topthird.inset.filled"
         case .ai: "sparkles"
         case .clipboard: "doc.on.clipboard"
+        case .contentBlocking: "shield.lefthalf.filled"
         case .keybindings: "keyboard"
         case .migration: "arrow.triangle.2.circlepath"
         }
