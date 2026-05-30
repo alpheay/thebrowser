@@ -7,6 +7,8 @@ struct ContentBlockingSettingsContent: View {
     @StateObject private var controller = ContentBlockingController.shared
     @State private var newSite = ""
     @State private var newPopupSite = ""
+    @State private var isClearingWebsiteData = false
+    @State private var showClearWebsiteDataConfirm = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 28) {
@@ -64,7 +66,15 @@ struct ContentBlockingSettingsContent: View {
 
             popupAllowlistSection
 
+            siteDataSection
+
             statusFooter
+        }
+        .alert("Clear website data?", isPresented: $showClearWebsiteDataConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear", role: .destructive, action: clearWebsiteData)
+        } message: {
+            Text("This deletes cookies, caches, local storage, and other WebKit website data. Browsing history is not affected.")
         }
     }
 
@@ -179,6 +189,40 @@ struct ContentBlockingSettingsContent: View {
         let candidate = newPopupSite
         newPopupSite = ""
         controller.allowPopups(candidate)
+    }
+
+    private var siteDataSection: some View {
+        CBSection("Site Data") {
+            CBRow(
+                label: "Cookies & cache",
+                help: "Clear WebKit website data without deleting browsing history."
+            ) {
+                if isClearingWebsiteData {
+                    ProgressView()
+                        .controlSize(.small)
+                } else {
+                    CBSmallButton(title: "Clear") {
+                        showClearWebsiteDataConfirm = true
+                    }
+                }
+            }
+        }
+    }
+
+    private func clearWebsiteData() {
+        guard !isClearingWebsiteData else { return }
+        isClearingWebsiteData = true
+
+        Task { @MainActor in
+            await WebsiteDataCleaner.clearAll()
+            isClearingWebsiteData = false
+            AppNotificationCenter.shared.post(
+                title: "Website data cleared",
+                message: "Cookies, caches, and local site storage were deleted.",
+                icon: "trash",
+                kind: .success
+            )
+        }
     }
 
     // MARK: - Status
