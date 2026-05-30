@@ -22,8 +22,6 @@ struct TabRailView: View {
                 .padding(.bottom, 4)
 
             tabList
-
-            footer
         }
         .frame(width: Metrics.railWidth)
         .frame(maxHeight: .infinity)
@@ -108,40 +106,6 @@ struct TabRailView: View {
                 )
                 .frame(height: 16)
             }
-        }
-    }
-
-    // MARK: - Footer
-
-    private var footer: some View {
-        HStack(spacing: 7) {
-            KeycapHint(text: "⌘B")
-            Text("tabs")
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(Palette.textFaint)
-
-            Circle()
-                .fill(Palette.textFaint.opacity(0.6))
-                .frame(width: 2, height: 2)
-                .padding(.horizontal, 1)
-
-            KeycapHint(text: "⌘J")
-            Text("chat")
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(Palette.textFaint)
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 40)
-        .overlay(alignment: .top) {
-            LinearGradient(
-                colors: [Palette.bg.opacity(0), Palette.bg],
-                startPoint: .top, endPoint: .bottom
-            )
-            .frame(height: 16)
-            .offset(y: -16)
-            .allowsHitTesting(false)
         }
     }
 }
