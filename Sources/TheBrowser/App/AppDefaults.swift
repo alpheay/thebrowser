@@ -71,6 +71,25 @@ enum PreferenceKey {
     /// ``ContentBlockingPreferences/load(from:key:)``, which supplies its own
     /// defaults, so this key needs no `register(defaults:)` entry.
     static let contentBlocking = "contentBlocking.preferences"
+
+    // MARK: Recall — private "answer from my history" index
+
+    /// Master switch for capturing page content into the local Recall index.
+    static let recallEnabled = "recall.enabled"
+    /// Whether to compute on-device embeddings for semantic search. When off,
+    /// Recall is full-text (BM25) only.
+    static let recallSemanticEnabled = "recall.semanticEnabled"
+    /// Zero-egress mode: answer history questions with the on-device
+    /// synthesizer instead of sending retrieved passages to a cloud model.
+    static let recallLocalAnswerMode = "recall.localAnswerMode"
+    /// Seconds a page must stay the foreground tab before it's captured —
+    /// filters out pages glanced at and bounced from.
+    static let recallDwellSeconds = "recall.dwellSeconds"
+    /// Comma/newline-separated hosts that are never indexed (banking, health,
+    /// webmail, …). Matched against the host and any subdomain.
+    static let recallDenylist = "recall.denylist"
+    /// Shortcut that opens the instant-recall panel.
+    static let openRecallShortcut = "shortcut.openRecall"
 }
 
 /// Modifier choices for Hover Preview. Raw values are stored in
@@ -183,9 +202,26 @@ enum AppDefaults {
             PreferenceKey.toolbarShowClipboard: false,
             PreferenceKey.toolbarShowTabRailToggle: true,
             PreferenceKey.toolbarShowChatToggle: true,
-            PreferenceKey.tabHibernationMinutes: 30
+            PreferenceKey.tabHibernationMinutes: 30,
+            PreferenceKey.recallEnabled: true,
+            PreferenceKey.recallSemanticEnabled: true,
+            PreferenceKey.recallLocalAnswerMode: false,
+            PreferenceKey.recallDwellSeconds: 8,
+            PreferenceKey.recallDenylist: defaultRecallDenylist,
+            PreferenceKey.openRecallShortcut: "shift+command+y"
         ])
     }
+
+    /// Seed list of sensitive hosts kept out of the Recall index. Necessarily
+    /// partial — the password-field guard catches login/checkout screens
+    /// anywhere, and users can edit this list in Settings.
+    static let defaultRecallDenylist = [
+        "mail.google.com", "accounts.google.com", "mail.proton.me",
+        "outlook.live.com", "outlook.office.com", "outlook.office365.com",
+        "mail.yahoo.com", "chase.com", "bankofamerica.com", "wellsfargo.com",
+        "citi.com", "capitalone.com", "paypal.com", "venmo.com", "coinbase.com",
+        "1password.com", "bitwarden.com", "lastpass.com"
+    ].joined(separator: ", ")
 
     static func defaultCodexCLIPath() -> String {
         let candidatePaths = [

@@ -21,6 +21,13 @@ final class HistoryStore {
     /// (insert, delete, or clear). The History modal observes this to refresh.
     static let didChangeNotification = Notification.Name("HistoryStore.didChange")
 
+    /// Set once at launch (by ``RecallController/activate``) to mirror every
+    /// history deletion into the local Recall index, so "forget this site" and
+    /// "clear history" stay honest — captured page content and its embeddings
+    /// are purged alongside the visit rows. MainActor-isolated and invoked only
+    /// on the main actor, matching this store's threading model.
+    static var deletionObserver: (@MainActor (HistoryDeletion) -> Void)?
+
     /// Two visits to the same URL within this window collapse into a single
     /// row with an incremented ``HistoryEntry/visitCount``. Mirrors Chromium's
     /// per-URL "visit segment" heuristic — long enough to absorb redirect
@@ -322,6 +329,9 @@ final class HistoryStore {
     @discardableResult
     func deleteEntry(id: Int64) -> Bool {
         guard let db else { return false }
+        // Resolve the URL before deleting so the Recall index can purge the
+        // matching captured page.
+        let deletedURL = urlString(forID: id)
         let sql = "DELETE FROM history WHERE id = ?;"
         var statement: OpaquePointer?
         defer { sqlite3_finalize(statement) }
@@ -335,7 +345,20 @@ final class HistoryStore {
             return false
         }
         broadcastChange()
+        if let deletedURL { Self.deletionObserver?(.urls([deletedURL])) }
         return true
+    }
+
+    private func urlString(forID id: Int64) -> String? {
+        guard let db else { return nil }
+        var statement: OpaquePointer?
+        defer { sqlite3_finalize(statement) }
+        guard sqlite3_prepare_v2(db, "SELECT url FROM history WHERE id = ?;", -1, &statement, nil) == SQLITE_OK else {
+            return nil
+        }
+        sqlite3_bind_int64(statement, 1, id)
+        guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+        return readOptionalString(statement, 0)
     }
 
     /// Removes every visit to `host`, matched against the URL's host
@@ -375,6 +398,7 @@ final class HistoryStore {
             return false
         }
         broadcastChange()
+        Self.deletionObserver?(.host(normalizedHost))
         return true
     }
 
@@ -397,6 +421,7 @@ final class HistoryStore {
             return false
         }
         broadcastChange()
+        Self.deletionObserver?(.range(range))
         return true
     }
 
@@ -404,6 +429,7 @@ final class HistoryStore {
         guard let db else { return }
         sqlite3_exec(db, "DELETE FROM history;", nil, nil, nil)
         broadcastChange()
+        Self.deletionObserver?(.all)
     }
 
     /// Total visit-row count. Used by Settings and as an empty-state hint.
@@ -595,6 +621,16 @@ final class HistoryStore {
 enum HistoryEntryKind: String, CaseIterable, Hashable, Sendable {
     case visit
     case search
+}
+
+/// What a history deletion removed, forwarded to ``HistoryStore/deletionObserver``
+/// so the Recall index can mirror the purge. `Sendable` so the observer can
+/// hop it into the `RecallStore` actor.
+enum HistoryDeletion: Sendable {
+    case urls([String])
+    case host(String)
+    case range(ClosedRange<Date>)
+    case all
 }
 
 struct HistoryEntry: Identifiable, Hashable, Sendable {
