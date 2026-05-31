@@ -1,7 +1,7 @@
 ---
 name: onboarding
 description: Use this skill when the user asks to "onboard", get "oriented", "introduce me to the codebase", "show me around", "what is this project", or otherwise wants a fast tour of TheBrowser before starting work. Also use on a fresh checkout or first session in this repo when the user hasn't given a specific task yet.
-version: 2.0.0
+version: 2.1.0
 ---
 
 # TheBrowser — Onboarding
@@ -58,8 +58,34 @@ Files are grouped by area under `Sources/TheBrowser/<Area>/`. You rarely need to
 - [ModelPickerPopover.swift](Sources/TheBrowser/Chat/ModelPickerPopover.swift) — provider/model picker next to the send button.
 - [SessionHistoryPopover.swift](Sources/TheBrowser/Chat/SessionHistoryPopover.swift) — prior-session browser.
 - [ChatAttachmentChip.swift](Sources/TheBrowser/Chat/ChatAttachmentChip.swift) — page-context attachment UI.
-- [NativeBrowserTools.swift](Sources/TheBrowser/Chat/NativeBrowserTools.swift) — tool definitions, parsing, executor. Tool names: `open`, `search`, `fetch`, `read_tabs`, `read_highlights`, `read_smart_read`, `create_artifact`, `web_control`. Each tool's implementation lives in [NativeBrowserTools/](Sources/TheBrowser/Chat/NativeBrowserTools/).
-- [ArtifactStore.swift](Sources/TheBrowser/Chat/ArtifactStore.swift) / [ArtifactMark.swift](Sources/TheBrowser/Chat/ArtifactMark.swift) — AI-generated HTML written to `~/.thebrowser/web_artifacts/<timestamp>_<slug>.html`; each file is self-contained and openable in any browser.
+- [NativeBrowserTools.swift](Sources/TheBrowser/Chat/NativeBrowserTools.swift) — tool definitions, parsing, executor. Tool names: `open`, `search`, `fetch`, `read_tabs`, `read_highlights`, `read_smart_read`, `mail_search`, `mail_read_thread`, `mail_draft_reply`, `create_artifact`, `web_control`. The `mail_*` tools bridge to the Gmail integration (see `Integrations/`). Each tool's implementation lives in [NativeBrowserTools/](Sources/TheBrowser/Chat/NativeBrowserTools/).
+- [ArtifactStore.swift](Sources/TheBrowser/Chat/ArtifactStore.swift) / [ArtifactMark.swift](Sources/TheBrowser/Chat/ArtifactMark.swift) — `ArtifactStore` is the `@MainActor` disk manager (save/enumerate/delete + `didChangeNotification`) for AI-generated HTML written to `~/.thebrowser/web_artifacts/<timestamp>_<slug>.html`; each file is self-contained and openable in any browser. `ArtifactMark` is the inline spark icon shown in a chat message that created an artifact. The browseable gallery on top of these lives in `Artifacts/` (below).
+
+### `Artifacts/` — gallery of AI-generated HTML artifacts
+Browseable gallery on top of `Chat/ArtifactStore`. Opened as a full-window sheet (default `⇧⌘A`) and also surfaced as a thumbnail strip on the home page.
+- [ArtifactGalleryModel.swift](Sources/TheBrowser/Artifacts/ArtifactGalleryModel.swift) — `@MainActor ObservableObject`; filtered list, search query, date-group filter, thumbnail renderer. Reloads from disk on `ArtifactStore.didChangeNotification`; joins each artifact back to the chat session that produced it.
+- [ArtifactGalleryView.swift](Sources/TheBrowser/Artifacts/ArtifactGalleryView.swift) — the gallery UI (open in tab / background tab / reveal in Finder / delete).
+- [ArtifactMetadata.swift](Sources/TheBrowser/Artifacts/ArtifactMetadata.swift) — parsed file metadata + optional back-ref to the source session.
+- [ArtifactThumbnailRenderer.swift](Sources/TheBrowser/Artifacts/ArtifactThumbnailRenderer.swift) / [ArtifactThumbnailView.swift](Sources/TheBrowser/Artifacts/ArtifactThumbnailView.swift) — renders/caches a PNG screenshot of each artifact under `~/.thebrowser/web_artifacts/.thumbnails/`.
+
+### `ContentBlocking/` — native ad/tracker blocking + privacy controls
+Compiles curated block lists into `WKContentRuleList`s applied to every tab's `WKUserContentController`. Has its own Settings pane (the `contentBlocking` tab).
+- [ContentBlockingController.swift](Sources/TheBrowser/ContentBlocking/ContentBlockingController.swift) — `@MainActor ObservableObject` singleton (`.shared`). Owns preferences, drives compilation, publishes compiled rule lists, broadcasts `didChangeNotification`. `BrowserModel` applies rules to new tabs and listens for the notification to refresh existing ones.
+- [ContentBlockingPreferences.swift](Sources/TheBrowser/ContentBlocking/ContentBlockingPreferences.swift) — preferences value type (master switch, enabled categories, content + popup allowlists, tracking-param stripping). Persisted as one JSON blob under `PreferenceKey.contentBlocking`.
+- [ContentBlockingSettingsView.swift](Sources/TheBrowser/ContentBlocking/ContentBlockingSettingsView.swift) — the Settings pane.
+- [ContentRuleCompiler.swift](Sources/TheBrowser/ContentBlocking/ContentRuleCompiler.swift) / [BlockListCatalog.swift](Sources/TheBrowser/ContentBlocking/BlockListCatalog.swift) / [BlockList.swift](Sources/TheBrowser/ContentBlocking/BlockList.swift) / [BlockRule.swift](Sources/TheBrowser/ContentBlocking/BlockRule.swift) / [BlockListCategory.swift](Sources/TheBrowser/ContentBlocking/BlockListCategory.swift) — the curated lists and their compilation to WebKit rules.
+- [PopupBlockingPolicy.swift](Sources/TheBrowser/ContentBlocking/PopupBlockingPolicy.swift) — scripted-popup vs. user-activation logic. [URLTrackingSanitizer.swift](Sources/TheBrowser/ContentBlocking/URLTrackingSanitizer.swift) — strips UTM/tracking query params. [SiteAllowList.swift](Sources/TheBrowser/ContentBlocking/SiteAllowList.swift) — per-site allowlist codec. [WebsiteDataCleaner.swift](Sources/TheBrowser/ContentBlocking/WebsiteDataCleaner.swift) — clears cookies/cache. [WKUserContentController+ContentBlocking.swift](Sources/TheBrowser/ContentBlocking/WKUserContentController+ContentBlocking.swift) — apply/remove extension.
+
+### `History/` — local visit + search log
+- [HistoryStore.swift](Sources/TheBrowser/History/HistoryStore.swift) — `@MainActor` singleton (not an `ObservableObject`) wrapping a single `sqlite3` connection at `~/.thebrowser/history.sqlite`. Records page visits (`recordVisit`) and URL-bar searches (`recordSearch`), deduping revisits within ~60s via `INSERT … ON CONFLICT`. Posts `didChangeNotification`. Schema carries reserved `summary`/`embedding` columns for future use. `BrowserTab` records each load.
+- [HistoryModalView.swift](Sources/TheBrowser/History/HistoryModalView.swift) — full-window history sheet (default `⌘Y`), reloads on the change notification.
+
+### `Integrations/` — pluggable third-party integrations (currently Gmail)
+A floating overlay framework for self-contained integrations. Today the only integration is Gmail: inbox browsing, search, reading, and reply composition, exposed to the AI via the `mail_*` native tools. **Independent of `GoogleAuth/`** — Gmail has its own OAuth flow and credentials pipeline (different scopes).
+- [IntegrationsModel.swift](Sources/TheBrowser/Integrations/IntegrationsModel.swift) — `@MainActor ObservableObject` singleton owning overlay visibility + active integration. Toggled from a chat-toolbar button and a shortcut (default `⇧⌘E`).
+- [IntegrationsOverlay.swift](Sources/TheBrowser/Integrations/IntegrationsOverlay.swift) — the centered floating card (click-outside / Esc to close) hosting the active integration view.
+- [Gmail/](Sources/TheBrowser/Integrations/Gmail/) — `GmailIntegrationView` (list/read/compose panes), `GmailStore` (`@MainActor` pane + API orchestration state), `GmailAccountStore` (`@MainActor` OAuth identity; tokens in Keychain service `com.thebrowser.gmailIntegration`), `GmailOAuthService` / `GmailAuthWebSheet` (auth), `GmailAPIService` (Gmail REST calls), `GmailModels`.
+- [Credentials/IntegrationCredentialsLoader.swift](Sources/TheBrowser/Integrations/Credentials/IntegrationCredentialsLoader.swift) — loads OAuth client config from `~/Library/Application Support/TheBrowser/Integrations/<name>/credentials.json` (Google Desktop-client `{ "installed": { … } }` format; see [credentials.example.json](Sources/TheBrowser/Integrations/Gmail/credentials.example.json)).
 
 ### `Search/` — in-app SERP + inline AI answer card
 - [SearchEngine.swift](Sources/TheBrowser/Search/SearchEngine.swift) — enum of supported engines (DuckDuckGo, Brave, Bing, Google) + URL builder.
@@ -82,7 +108,7 @@ Files are grouped by area under `Sources/TheBrowser/<Area>/`. You rarely need to
 - [BrandMarks.swift](Sources/TheBrowser/DesignSystem/BrandMarks.swift) — `OpenAIMark`, `ClaudeMark`, `DiscordMark`, `ProviderMark` shape views.
 
 ### `Settings/`
-- [SettingsView.swift](Sources/TheBrowser/Settings/SettingsView.swift) — preferences window: General (search engine), Account (Google + Discord), AI (provider/model/system prompt/tools/MCP config/CLI paths), Keybindings, Migration.
+- [SettingsView.swift](Sources/TheBrowser/Settings/SettingsView.swift) — preferences window. Tabs: General (search engine), Account (Google + Discord), Toolbar, AI (provider/model/system prompt/tools/MCP config/CLI paths), Clipboard, Content Blocking (renders [ContentBlockingSettingsView](Sources/TheBrowser/ContentBlocking/ContentBlockingSettingsView.swift)), Keybindings, Migration.
 
 ### `Notifications/` — in-app toast center
 - [AppNotification.swift](Sources/TheBrowser/Notifications/AppNotification.swift) — `AppNotificationKind` + `AppNotification` value type + `NotificationCorner` enum.
@@ -116,10 +142,12 @@ Files are grouped by area under `Sources/TheBrowser/<Area>/`. You rarely need to
 ## Where state lives
 
 - **`UserDefaults`** — provider, model, CLI paths, sandbox mode, shortcuts, migration flags, hover-preview tuning, notification corner, cited-clipboard rules. Always via `PreferenceKey`.
-- **Keychain** — Google and Discord OAuth tokens (`KeychainStore`, data-protection class, per-call service ID).
+- **Keychain** — Google, Discord, and Gmail-integration OAuth tokens (`KeychainStore`, data-protection class, per-call service ID; Gmail uses service `com.thebrowser.gmailIntegration`).
 - **`~/.thebrowser/sessions/<id>/messages.json`** — chat history per session. Also the CLI process's `cwd`.
-- **`~/.thebrowser/web_artifacts/<stamp>_<slug>.html`** — AI-generated artifacts (`ArtifactStore`).
-- **In-memory only** — open tabs, scroll position, hover-preview cache (LRU 50), webview cookies (`WKWebsiteDataStore.default()`).
+- **`~/.thebrowser/web_artifacts/<stamp>_<slug>.html`** — AI-generated artifacts (`ArtifactStore`); thumbnails cached under `.thumbnails/`.
+- **`~/.thebrowser/history.sqlite`** — SQLite visit/search log (`HistoryStore`).
+- **`~/Library/Application Support/TheBrowser/Integrations/<name>/credentials.json`** — OAuth client config for integrations (e.g. Gmail).
+- **In-memory only** — open tabs, scroll position, hover-preview cache (LRU 50), compiled content-blocking rule lists, webview cookies (`WKWebsiteDataStore.default()`).
 
 ## Common tasks — where to start
 
@@ -138,6 +166,11 @@ Files are grouped by area under `Sources/TheBrowser/<Area>/`. You rarely need to
 | Hover-preview behavior | `Browser/HoverPreview/` (see [docs/HoverPreview.md](docs/HoverPreview.md)) |
 | Smart Read card / shortcut | `Browser/SmartReadView.swift` + `BrowserShellView.triggerSmartRead` |
 | Cited-clipboard rules | `Clipboard/CitedClipboardController.swift` (see [docs/cited-clipboard.md](docs/cited-clipboard.md)) |
+| Ad/tracker blocking, privacy rules | `ContentBlocking/ContentBlockingController.swift` (+ `ContentBlockingSettingsView`) |
+| Browsing history | `History/HistoryStore.swift` (data) / `History/HistoryModalView.swift` (UI) |
+| Artifact gallery | `Artifacts/ArtifactGalleryModel.swift` (+ `Chat/ArtifactStore.swift` for disk I/O) |
+| Gmail / email integration | `Integrations/Gmail/` (+ `mail_*` tools in `Chat/NativeBrowserTools.swift`) |
+| New integration (overlay) | `Integrations/IntegrationsModel.swift` + `IntegrationsOverlay.swift` |
 | In-app notifications | `Notifications/` |
 | Google / Discord OAuth | `GoogleAuth/` or `Discord/` |
 
@@ -145,13 +178,17 @@ Files are grouped by area under `Sources/TheBrowser/<Area>/`. You rarely need to
 
 [Tests/TheBrowserTests/](Tests/TheBrowserTests/) — Swift Testing. Coverage is concentrated on pure logic:
 
-- **AI harness:** `CodexArgumentsTests`, `ClaudeArgumentsTests`, `ClaudeResponseParsingTests`, `PromptFormattingTests`, `ConfigurationLoadingTests`, `EffectiveSystemPromptTests`.
+- **AI harness:** `CodexArgumentsTests`, `ClaudeArgumentsTests`, `ClaudeResponseParsingTests`, `ClaudeStreamParserTests`, `StreamingToolCallMaskTests`, `PromptFormattingTests`, `ConfigurationLoadingTests`, `EffectiveSystemPromptTests`, `AgentStatusLabelTests`.
 - **Sessions & shortcuts:** `ChatSessionStoreTests`, `AppShortcutTests`.
 - **Browser model:** `BrowserModelTests`.
-- **Native tools:** `NativeBrowserToolsTests`.
+- **Native tools:** `NativeBrowserToolsTests`, `ConversationalFindClientTests`.
 - **Search:** `QuestionDetectorTests`.
 - **Hover preview:** `HoverPreviewExtractorTests`.
 - **Cited clipboard:** `CitedClipFormatterTests`, `CitedClipboardPolicyTests`, `CitedClipboardStoreTests`.
+- **Content blocking:** `ContentBlockingTests`.
+- **History:** `HistoryStoreTests`.
+- **Artifacts:** `ArtifactMetadataTests`, `ArtifactSessionIndexTests`.
+- **Compose:** `ComposeLiveTextTests`.
 - **Auth:** `GoogleAuthTests`.
 
 UI / webview code is not unit-tested. `TestSupport.swift` has a `makeConfiguration` helper — use it instead of hand-constructing `AIHarnessConfiguration` in new tests.
@@ -168,7 +205,7 @@ UI / webview code is not unit-tested. `TestSupport.swift` has a `makeConfigurati
 ## Release process
 
 Two-branch model:
-- **`main`** — active development. `Tests` workflow runs on every push ([.github/workflows/tests.yml](.github/workflows/tests.yml)).
+- **`main`** — active development. (There is no CI test workflow; run `swift test` locally.)
 - **`production`** — push to ship. [.github/workflows/release.yml](.github/workflows/release.yml) builds a universal DMG, ad-hoc signs it, generates release notes from `git log`, and publishes a GitHub Release tagged `v<date>-<shortsha>`.
 
 To cut a release, fast-forward `production` to the commit on `main` and push.
