@@ -12,6 +12,7 @@ struct BrowserShellView: View {
     @StateObject private var gmailAccount = GmailAccountStore.shared
     @StateObject private var gmailStore = GmailStore(account: GmailAccountStore.shared)
     @StateObject private var artifactGallery = ArtifactGalleryModel()
+    @StateObject private var recallModel = RecallPanelModel()
 
     @AppStorage(PreferenceKey.toggleChatShortcut) private var toggleChatShortcut = "command+j"
     @AppStorage(PreferenceKey.toggleTabsShortcut) private var toggleTabsShortcut = "command+b"
@@ -25,6 +26,7 @@ struct BrowserShellView: View {
     @AppStorage(PreferenceKey.openHistoryShortcut) private var openHistoryShortcut = "command+y"
     @AppStorage(PreferenceKey.openArtifactsShortcut) private var openArtifactsShortcut = "shift+command+a"
     @AppStorage(PreferenceKey.openIntegrationsShortcut) private var openIntegrationsShortcut = "shift+command+e"
+    @AppStorage(PreferenceKey.openRecallShortcut) private var openRecallShortcut = "shift+command+y"
     @AppStorage(PreferenceKey.aiFavoriteModels) private var aiFavoriteModelsRaw = ""
     @AppStorage(PreferenceKey.migrationPromptCompleted) private var migrationPromptCompleted = false
     @AppStorage(PreferenceKey.historyImportBackfillCompleted) private var historyImportBackfillCompleted = false
@@ -37,6 +39,7 @@ struct BrowserShellView: View {
     @State private var isClipboardPopoverPresented = false
     @State private var isShowingHistoryModal = false
     @State private var isShowingArtifactGallery = false
+    @State private var isShowingRecall = false
 
     private var railOverlayVisible: Bool {
         model.isTabRailVisible || isPeekingRail
@@ -104,6 +107,11 @@ struct BrowserShellView: View {
                             },
                             runWebControl: { task in
                                 await model.runWebControl(task: task, sessionDirectory: chatModel.sessionDirectory)
+                            },
+                            searchHistory: { query, sinceDays, maxResults in
+                                await RecallController.shared.search(
+                                    query, sinceDays: sinceDays, limit: maxResults
+                                )
                             }
                         ),
                         onOpenArtifact: { url in
@@ -209,11 +217,30 @@ struct BrowserShellView: View {
                     .zIndex(1)
             }
 
+            // Instant-recall command bar — local "answer from my history".
+            if isShowingRecall {
+                RecallPanelView(
+                    model: recallModel,
+                    currentURL: model.selectedTab.url,
+                    onOpen: { url in
+                        model.addressDraft = url.absoluteString
+                        model.navigateSelected(to: url.absoluteString)
+                    },
+                    onOpenInBackground: { url in
+                        model.openInNewTab(url: url, background: true)
+                    },
+                    onClose: { closeRecall() }
+                )
+                .ignoresSafeArea()
+                .transition(.opacity)
+                .zIndex(2)
+            }
+
             // Top layer: app-wide notification toasts
             NotificationOverlay()
                 .ignoresSafeArea()
                 .allowsHitTesting(true)
-                .zIndex(2)
+                .zIndex(3)
         }
         .background(Palette.bg)
         .onChange(of: model.selectedTabID) { _, _ in
@@ -450,6 +477,22 @@ struct BrowserShellView: View {
         }
     }
 
+    // MARK: - Recall command bar
+
+    private func toggleRecall() {
+        if isShowingRecall {
+            closeRecall()
+        } else {
+            recallModel.reset()
+            withAnimation(Motion.springSnap) { isShowingRecall = true }
+        }
+    }
+
+    private func closeRecall() {
+        withAnimation(Motion.springSnap) { isShowingRecall = false }
+        recallModel.reset()
+    }
+
     // MARK: - Welcome notification
 
     /// Static guard so the welcome toast only fires once per app launch,
@@ -584,6 +627,7 @@ struct BrowserShellView: View {
             (openHistoryShortcut, { isShowingHistoryModal.toggle() }),
             (openArtifactsShortcut, { isShowingArtifactGallery.toggle() }),
             (openIntegrationsShortcut, { integrations.toggle() }),
+            (openRecallShortcut, { toggleRecall() }),
             // Find in Page — fixed shortcuts, no Settings UI on purpose
             // since every browser ships these unchanged.
             ("command+f", { model.selectedTab.findController.show() }),

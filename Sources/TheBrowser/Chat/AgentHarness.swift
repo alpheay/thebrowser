@@ -117,6 +117,8 @@ enum AgentStatusLabel {
             return "Saving artifact…"
         case .webControl:
             return "Controlling page…"
+        case .recall:
+            return "Searching your history…"
         }
     }
 

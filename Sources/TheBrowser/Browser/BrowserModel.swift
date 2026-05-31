@@ -24,6 +24,14 @@ final class BrowserModel: ObservableObject {
     /// file stays free of any `WebKit` import.
     private var contentBlockingCancellable: AnyCancellable?
 
+    /// Recall dwell-capture timer. Fires once the foreground page has been the
+    /// active tab for the configured dwell threshold, then captures its
+    /// readable content for the local knowledge index. Re-armed on every tab
+    /// switch and on each fresh page settle; the new arm cancels the old, so a
+    /// page glanced at for two seconds is never indexed.
+    private var dwellCaptureTask: Task<Void, Never>?
+    private var dwellCaptureURL: URL?
+
     init() {
         let firstTab = BrowserTab()
         tabs = [firstTab]
@@ -35,6 +43,7 @@ final class BrowserModel: ObservableObject {
 
     deinit {
         hibernationSweepTask?.cancel()
+        dwellCaptureTask?.cancel()
     }
 
     var selectedTab: BrowserTab {
@@ -65,6 +74,9 @@ final class BrowserModel: ObservableObject {
             _ = tab.webView
         }
         addressDraft = tab.displayAddress
+        // Switching *into* an already-loaded article should still capture it
+        // once the user dwells — onPageSettled only fires on fresh navigations.
+        armDwellCapture(for: tab)
     }
 
     func addTab() {
@@ -303,6 +315,12 @@ final class BrowserModel: ObservableObject {
             self.openInNewTab(url: url, background: sourceTab.id != self.selectedTabID)
         }
 
+        // Arm Recall's dwell-capture timer whenever a fresh page settles into
+        // history on the foreground tab.
+        tab.onPageSettled = { [weak self] settledTab in
+            self?.armDwellCapture(for: settledTab)
+        }
+
         let tabSink = tab.objectWillChange.sink { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.objectWillChange.send()
@@ -319,6 +337,37 @@ final class BrowserModel: ObservableObject {
         tabChangeCancellables[tab.id] = AnyCancellable {
             tabSink.cancel()
             findSink.cancel()
+        }
+    }
+
+    // MARK: - Recall dwell capture
+
+    /// (Re)starts the dwell timer for `tab`. After the configured threshold of
+    /// the page staying the foreground tab on the same URL, its readable
+    /// content is captured into the local Recall index. Guards keep brief
+    /// glances, background tabs, and ineligible pages out of the index. The
+    /// capture and indexing themselves run off the main thread — see
+    /// ``RecallController/noteCapture``.
+    private func armDwellCapture(for tab: BrowserTab) {
+        guard tab.id == selectedTabID,
+              tab.isSmartReadEligible,
+              tab.allowsContentCapture,
+              RecallController.shared.isEnabled else {
+            return
+        }
+        let url = tab.url
+        dwellCaptureURL = url
+        dwellCaptureTask?.cancel()
+
+        let dwell = RecallController.shared.dwellSeconds
+        dwellCaptureTask = Task { @MainActor [weak self, weak tab] in
+            let nanos = UInt64(max(1, dwell) * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: nanos)
+            guard !Task.isCancelled, let self, let tab else { return }
+            // Only capture if it's still the same foreground page.
+            guard self.selectedTabID == tab.id, tab.url == url else { return }
+            guard let capture = await tab.captureForRecall(dwellSeconds: dwell) else { return }
+            RecallController.shared.noteCapture(capture)
         }
     }
 

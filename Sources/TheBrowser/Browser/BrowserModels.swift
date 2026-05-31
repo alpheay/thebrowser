@@ -65,6 +65,17 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
     /// incognito flag. When incognito ships, flip this off for those tabs.
     var allowsClipboardCapture: Bool { true }
 
+    /// Recall content-capture gate — the same future-incognito placeholder as
+    /// ``allowsClipboardCapture``. When incognito ships, flipping it off keeps
+    /// anything read in a private window out of the local knowledge index.
+    var allowsContentCapture: Bool { allowsClipboardCapture }
+
+    /// Fired when a *fresh* page settles into history (one that passed the
+    /// dedupe window, i.e. a genuine new visit). ``BrowserModel`` wires this in
+    /// ``BrowserModel/configure(_:)`` to arm the Recall dwell-capture timer for
+    /// the foreground tab.
+    var onPageSettled: (@MainActor (BrowserTab) -> Void)?
+
     /// URL + timestamp of this tab's last history insert. The check on this
     /// pair enforces the ~1 minute dedupe window the spec calls for: a page
     /// that fires multiple `didFinish` notifications during a single load
@@ -795,6 +806,52 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable {
             tabID: id.uuidString,
             now: now
         )
+        onPageSettled?(self)
+    }
+
+    /// Extracts the readable body of the current page for the Recall index.
+    /// Reuses the Reader/Smart Read extractor, so what gets captured matches
+    /// what the user actually read. Returns nil for ineligible pages (home,
+    /// search, PDFs, hibernated, non-http) and for bodies too thin to index.
+    /// `dwellSeconds` is attributed to this capture as an engagement signal.
+    /// Reads `_webView` via the eligibility-guarded extractor, so it never
+    /// resurrects a hibernated tab.
+    func captureForRecall(dwellSeconds: Double) async -> CapturedPage? {
+        guard allowsContentCapture else { return nil }
+        guard isSmartReadEligible, !isHibernated, pdfDocument == nil else { return nil }
+        guard let target = url, HistoryStore.shouldRecord(url: target) else { return nil }
+        // Never index a page that's showing a password field — login and
+        // checkout screens stay out of the knowledge index regardless of the
+        // host denylist.
+        if await hasVisiblePasswordField() { return nil }
+        guard let extraction = await extractReadablePage(maxBytes: 60_000),
+              extraction.wordCount >= 50 else { return nil }
+        return CapturedPage(
+            url: target,
+            title: displayTitle,
+            host: target.host(percentEncoded: false) ?? "",
+            text: extraction.text,
+            wordCount: extraction.wordCount,
+            lang: nil,
+            dwellSeconds: dwellSeconds,
+            capturedAt: Date()
+        )
+    }
+
+    /// True when the page currently shows a non-empty, visible password input.
+    /// Used to keep login/checkout screens out of the Recall index.
+    private func hasVisiblePasswordField() async -> Bool {
+        guard let view = _webView else { return false }
+        let script = """
+        (() => {
+            const field = document.querySelector("input[type='password']");
+            if (!field) return false;
+            const rect = field.getBoundingClientRect();
+            return rect.width > 0 && rect.height > 0;
+        })();
+        """
+        let raw = try? await view.evaluateJavaScript(script)
+        return (raw as? Bool) ?? false
     }
 
     /// Pushes the latest title into the most recent history row for this URL
