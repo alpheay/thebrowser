@@ -1218,7 +1218,11 @@ struct AIChatPanel: View {
     /// prompt builder knows whether to hint the model about the available
     /// summary and the `read_smart_read` tool.
     private func sendCurrent() {
-        let mailContext = mailSurfaceActive ? MailContext.promptBlock(gmail: gmailStore, mail: mailModel) : nil
+        // Attach the live inbox context when the mail surface is up, or whenever
+        // an email/draft is open (so "this email" / "what I'm writing" resolves
+        // even if the surface flag lags).
+        let mailRelevant = mailSurfaceActive || gmailStore.openMessage != nil || gmailStore.currentDraft != nil
+        let mailContext = mailRelevant ? MailContext.promptBlock(gmail: gmailStore, mail: mailModel) : nil
         viewModel.send(
             context: context,
             tabs: tabs,

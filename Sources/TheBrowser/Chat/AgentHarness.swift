@@ -115,6 +115,8 @@ enum AgentStatusLabel {
             return "Opening mail…"
         case .mailDraft:
             return "Drafting reply…"
+        case .mailCompose:
+            return "Writing in composer…"
         case .mailSend:
             return "Sending mail…"
         case .mailModify:

@@ -11,6 +11,7 @@ enum NativeBrowserToolName: String, Equatable, Sendable {
     case mailReadThread = "mail_read_thread"
     case mailShow = "mail_show"
     case mailDraft = "mail_draft"
+    case mailCompose = "mail_compose"
     case mailSend = "mail_send"
     case mailModify = "mail_modify"
     case mailTriage = "mail_triage"
@@ -23,7 +24,7 @@ enum NativeBrowserToolName: String, Equatable, Sendable {
     /// closure and carry their rich parameters in `rawArguments`.
     var isMail: Bool {
         switch self {
-        case .mailSearch, .mailReadThread, .mailShow, .mailDraft, .mailSend,
+        case .mailSearch, .mailReadThread, .mailShow, .mailDraft, .mailCompose, .mailSend,
              .mailModify, .mailTriage, .mailMemory, .mailRemind:
             return true
         default:
@@ -104,6 +105,8 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             return mailIdentifier?.displayValue ?? (query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? mailbox ?? "")
         case .mailDraft:
             return mailIdentifier?.displayValue ?? "new message"
+        case .mailCompose:
+            return "composer"
         case .mailSend:
             return mailIdentifier?.displayValue ?? "draft"
         case .mailModify:
@@ -200,7 +203,7 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             return call.rawInput.isEmpty ? nil : call
         case .readTabs, .readHighlights, .readSmartRead:
             return call
-        case .mailSearch, .mailReadThread, .mailShow, .mailDraft, .mailSend,
+        case .mailSearch, .mailReadThread, .mailShow, .mailDraft, .mailCompose, .mailSend,
              .mailModify, .mailTriage, .mailMemory, .mailRemind:
             // Mail tools validate their own arguments in MailToolService and
             // return a helpful error rather than failing the parse silently.
@@ -667,7 +670,7 @@ struct NativeBrowserToolExecutor {
             return await readHighlights(call)
         case .readSmartRead:
             return await readSmartRead(call)
-        case .mailSearch, .mailReadThread, .mailShow, .mailDraft, .mailSend,
+        case .mailSearch, .mailReadThread, .mailShow, .mailDraft, .mailCompose, .mailSend,
              .mailModify, .mailTriage, .mailMemory, .mailRemind:
             return await runMailTool(call)
         case .createArtifact:
@@ -691,6 +694,7 @@ enum NativeBrowserToolPrompt {
     - mail_read_thread: reads a full Gmail thread, all messages (silent). Pass `message_id` or `thread_id`. Set `summarize:true` to prepend a short AI summary.
     - mail_show: the ONLY tool that changes the user's screen — it opens the inbox UI. Pass `message_id`/`thread_id` to open a thread, or `mailbox`/`query` to open a filtered list. Use it when the user says "show me", "open it", "pull it up".
     - mail_draft: writes a reply (or new email) in the user's voice and stages it as a reviewable draft card. For a reply pass `message_id` or `thread_id` (+ optional `instructions`, optional `style`). For a new email pass `to` (+ `subject`, `instructions`). Pass `body` to use exact text verbatim. This NEVER sends — it only stages a draft.
+    - mail_compose: writes or revises the email the user is composing in their NATIVE composer (in place, not a card). Use this whenever the user wants to write or change the email they're currently typing. Pass `instruction` to draft from scratch or edit the current body ("make it more formal", "shorten this", "add a line about the timeline", "finish it", "reword the opening"), or `body` to replace it verbatim; optional `to` / `subject`. If no composer is open and an email is open, it starts a reply to that email first.
     - mail_send: routes a staged draft through the user's send policy. Pass `draft_id` from a mail_draft result, or `to`+`body` (+`subject`,`thread_id`). It may send immediately or stage for the user to confirm depending on the user's send mode — READ the result and do NOT claim it was sent unless the result text says "Sent".
     - mail_modify: organizes mail in bulk (silent). Pass `message_ids` (array) plus any of `archive:true`, `read:true|false`, `star:true|false`, `add_labels`/`remove_labels` (Gmail label ids).
     - mail_triage: classifies inbox messages into AI labels and applies them. Optional `scope` ("inbox" default, "all" to re-classify everything).
@@ -712,6 +716,7 @@ enum NativeBrowserToolPrompt {
     {"tool":"mail_read_thread","thread_id":"thread-id-from-search","summarize":true}
     {"tool":"mail_show","mailbox":"inbox"}
     {"tool":"mail_draft","message_id":"message-id-from-search","instructions":"Politely decline and propose next week."}
+    {"tool":"mail_compose","instruction":"Make it warmer and confirm Tuesday at 2pm works."}
     {"tool":"mail_send","draft_id":"the-draft-id-from-mail_draft"}
     {"tool":"mail_modify","message_ids":["id1","id2"],"archive":true}
     {"tool":"mail_triage","scope":"inbox"}

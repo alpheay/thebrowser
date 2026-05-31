@@ -26,6 +26,7 @@ struct MailToolService {
         case .mailReadThread: return await readThread(call)
         case .mailShow:       return await show(call)
         case .mailDraft:      return await makeDraft(call)
+        case .mailCompose:    return await compose(call)
         case .mailSend:       return await send(call)
         case .mailModify:     return await modify(call)
         case .mailTriage:     return await triage(call)
@@ -207,6 +208,73 @@ struct MailToolService {
         } catch {
             return result(call, false, "Drafting failed: \(message(error))")
         }
+    }
+
+    // MARK: - Compose (write/edit the native composer)
+
+    private func compose(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
+        let args = MailArgs(call.rawArguments)
+        let instruction = args.string("instruction", "instructions", "prompt", "goal")
+        let verbatim = args.string("body") ?? call.body
+
+        // Make sure a composer is open — reply to the open email if there is one.
+        if gmail.currentDraft == nil {
+            if let open = gmail.openMessage, args.bool("reply") ?? true {
+                gmail.startCompose(replyingTo: open)
+            } else {
+                gmail.startCompose()
+            }
+        }
+        openInbox()
+        guard var draft = gmail.currentDraft else {
+            return result(call, false, "Couldn't open a composer.")
+        }
+
+        if let to = args.string("to") { gmail.updateDraft { $0.to = to }; draft.to = to }
+        if let subject = args.string("subject") { gmail.updateDraft { $0.subject = subject }; draft.subject = subject }
+
+        if let verbatim, !verbatim.isEmpty {
+            gmail.updateDraft { $0.body = verbatim }
+            return result(call, true, composeResult(to: draft.to, subject: draft.subject, body: verbatim))
+        }
+
+        guard let instruction else {
+            return result(call, true, "Opened the composer. Pass `instruction` (what to write or change) or `body` to fill it.\nTo: \(draft.to)\nSubject: \(draft.subject)")
+        }
+
+        await mail.ensureVoiceProfile(gmail: gmail)
+        let recipient = draft.to
+        let memories = mail.relevantMemories(forRecipient: recipient)
+        let threadText = draft.inReplyTo.map { MailText.stripQuotedReply($0.plainBody) } ?? "(new message)"
+        let current = draft.body.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let newBody: String?
+        if current.isEmpty {
+            newBody = await mail.agent.draft(
+                threadText: threadText, instructions: instruction, suggestedSubject: draft.subject,
+                recipient: recipient, voice: mail.voice, memories: memories, style: nil
+            )?.body
+        } else {
+            newBody = await mail.agent.editDraft(
+                draft.body, action: .custom, customInstruction: instruction,
+                threadText: draft.inReplyTo?.plainBody, voice: mail.voice
+            )
+        }
+        guard let newBody, !newBody.isEmpty else {
+            return result(call, false, "Couldn't update the composer — the fast model didn't return usable text. Try rephrasing.")
+        }
+        gmail.updateDraft { $0.body = newBody }
+        return result(call, true, composeResult(to: draft.to, subject: draft.subject, body: newBody))
+    }
+
+    private func composeResult(to: String, subject: String, body: String) -> String {
+        """
+        Updated the email in the user's composer — they can edit it inline (ghost-text autocomplete works) and send when ready. Don't claim it was sent.
+        To: \(to)
+        Subject: \(subject)
+        Body:
+        \(body)
+        """
     }
 
     // MARK: - Send (single gate)

@@ -280,6 +280,12 @@ extension GmailStore {
     var accountEmail: String? { account.identity?.email }
     var isSignedInForTools: Bool { account.isSignedIn }
 
+    /// The draft currently open in the native composer, if any.
+    var currentDraft: GmailPaneMode.Draft? {
+        if case .composing(let draft) = paneMode { return draft }
+        return nil
+    }
+
     // MARK: Silent reads / writes
 
     func toolSearch(

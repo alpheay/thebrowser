@@ -30,6 +30,7 @@ struct AgentStatusLabelTests {
             (.mailReadThread, "Reading mail thread…"),
             (.mailShow, "Opening mail…"),
             (.mailDraft, "Drafting reply…"),
+            (.mailCompose, "Writing in composer…"),
             (.mailSend, "Sending mail…"),
             (.mailModify, "Organizing mail…"),
             (.mailTriage, "Triaging inbox…"),
