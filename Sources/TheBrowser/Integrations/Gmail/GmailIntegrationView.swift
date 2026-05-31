@@ -19,10 +19,15 @@ struct GmailIntegrationView: View {
     @FocusState private var searchFocused: Bool
     @State private var readerSummary: String?
     @State private var isSummarizing = false
+    @State private var selectedAILabel: String?
+    @State private var listFilter: ListFilter = .all
+    @State private var showingMemories = false
+
+    enum ListFilter: Equatable { case all, unread, starred, needsReply }
 
     var body: some View {
         VStack(spacing: 0) {
-            header
+            titleBar
             Divider().background(Palette.stroke)
             Group {
                 switch account.credentialsState {
@@ -64,9 +69,11 @@ struct GmailIntegrationView: View {
                 _ = mailModel.scanDroppedBalls(in: summaries, accountEmail: store.accountEmail)
             }
         }
-        .onChange(of: store.paneMode) { _, _ in
-            // Reset the per-message AI summary when the reader changes.
+        .onChange(of: store.paneMode) { _, newValue in
+            // Reset the per-message AI summary when the reader changes, and
+            // leave the memories view once the user opens a message/compose.
             readerSummary = nil
+            if newValue != .list { showingMemories = false }
         }
     }
 
@@ -79,60 +86,33 @@ struct GmailIntegrationView: View {
 
     // MARK: - Header
 
-    private var header: some View {
-        HStack(spacing: 12) {
+    private var titleBar: some View {
+        HStack(spacing: 10) {
             GmailGlyph()
-                .frame(width: 22, height: 22)
-
-            VStack(alignment: .leading, spacing: 0) {
-                Text("Gmail")
-                    .font(.system(size: 13.5, weight: .semibold))
-                    .foregroundStyle(Palette.textPrimary)
-                if let identity = account.identity {
-                    Text(identity.email)
-                        .font(.system(size: 10.5, weight: .medium))
-                        .foregroundStyle(Palette.textMuted)
-                } else {
-                    Text("Not signed in")
+                .frame(width: 20, height: 20)
+            Text("Mail")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(Palette.textPrimary)
+            if mailModel.isTriaging {
+                HStack(spacing: 5) {
+                    ProgressView().controlSize(.small)
+                    Text("Triaging…")
                         .font(.system(size: 10.5, weight: .medium))
                         .foregroundStyle(Palette.textFaint)
                 }
+                .padding(.leading, 4)
+                .transition(.opacity)
             }
-
-            searchField
-                .frame(maxWidth: 520)
-
             Spacer(minLength: 0)
-
-            if account.isSignedIn {
-                Button {
-                    store.startCompose()
-                } label: {
-                    HStack(spacing: 6) {
-                        Image(systemName: "square.and.pencil")
-                            .font(.system(size: 11, weight: .semibold))
-                        Text("Compose")
-                            .font(.system(size: 12, weight: .semibold))
-                    }
-                    .padding(.horizontal, 12)
-                    .frame(height: 28)
-                    .background {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .fill(Color.white.opacity(0.92))
-                    }
-                    .foregroundStyle(.black)
-                }
-                .buttonStyle(.plain)
-            }
-
             Button(action: onClose) {
                 Image(systemName: "xmark")
             }
             .buttonStyle(IconButtonStyle(size: 28))
             .help("Close (Esc)")
         }
-        .padding(.horizontal, 18)
-        .padding(.vertical, 14)
+        .padding(.horizontal, 16)
+        .frame(height: 46)
+        .animation(Motion.hoverFade, value: mailModel.isTriaging)
     }
 
     private var searchField: some View {
@@ -177,58 +157,327 @@ struct GmailIntegrationView: View {
 
     private var signedInBody: some View {
         HStack(spacing: 0) {
-            sidebar
-                .frame(width: 220)
+            navRail
+                .frame(width: 236)
             Rectangle().fill(Palette.stroke).frame(width: 1)
-            pane
+            listColumn
+            Rectangle().fill(Palette.stroke).frame(width: 1)
+            detailColumn
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
-    private var sidebar: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            ForEach(GmailMailbox.allCases) { mailbox in
-                MailboxRow(
-                    mailbox: mailbox,
-                    selected: store.selectedMailbox == mailbox,
-                    action: { store.selectMailbox(mailbox) }
-                )
+    private var navRail: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            accountChip
+            composeButton
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    navSectionHeader("Mailboxes")
+                    ForEach(GmailMailbox.allCases) { mailbox in
+                        MailNavRow(
+                            icon: mailbox.symbolName,
+                            title: mailbox.title,
+                            count: mailbox == .inbox ? unreadCount : nil,
+                            selected: store.selectedMailbox == mailbox && !showingMemories,
+                            action: { selectMailbox(mailbox) }
+                        )
+                    }
+
+                    let counts = labelCounts
+                    if !counts.isEmpty || selectedAILabel != nil {
+                        navSectionHeader("AI Labels")
+                        ForEach(mailModel.enabledLabels) { label in
+                            let count = counts[label.name] ?? 0
+                            if count > 0 || selectedAILabel == label.name {
+                                MailNavRow(
+                                    dotColor: Color(mailHex: label.colorHex),
+                                    title: label.name,
+                                    count: count,
+                                    selected: selectedAILabel == label.name,
+                                    action: { toggleLabel(label.name) }
+                                )
+                            }
+                        }
+                    }
+
+                    navSectionHeader("Follow-ups")
+                    MailNavRow(icon: "bell", title: "Reminders", count: activeReminderCount,
+                               selected: listFilter == .needsReply, action: { toggleNeedsReply() })
+                    MailNavRow(icon: "brain", title: "Memories", count: mailModel.memories.count,
+                               selected: showingMemories, action: { openMemories() })
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 6)
             }
-            Spacer(minLength: 0)
+            .scrollIndicators(.hidden)
+            .frame(maxHeight: .infinity)
+
             if let error = store.lastError {
                 Text(error)
-                    .font(.system(size: 10.5, weight: .medium))
+                    .font(.system(size: 10, weight: .medium))
                     .foregroundStyle(Color(red: 1.0, green: 0.55, blue: 0.55))
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 12)
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            HStack(spacing: 6) {
-                Spacer()
-                Button {
-                    Task { await account.signOut() }
-                } label: {
-                    Text("Sign out")
+            Button { Task { await account.signOut() } } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "rectangle.portrait.and.arrow.right")
                         .font(.system(size: 10.5, weight: .semibold))
-                        .foregroundStyle(Palette.textMuted)
+                    Text("Sign out").font(.system(size: 10.5, weight: .semibold))
                 }
-                .buttonStyle(.plain)
+                .foregroundStyle(Palette.textMuted)
             }
-            .padding(.horizontal, 12)
-            .padding(.bottom, 12)
+            .buttonStyle(.plain)
+            .padding(.horizontal, 16)
+            .padding(.bottom, 14)
         }
-        .padding(.top, 10)
         .frame(maxHeight: .infinity, alignment: .topLeading)
+        .background(Palette.bgSunken)
     }
 
+    private var accountChip: some View {
+        HStack(spacing: 9) {
+            MailAvatar(name: account.identity?.name ?? "", email: account.identity?.email ?? "", size: 30)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(account.identity?.name ?? "Gmail")
+                    .font(.system(size: 12.5, weight: .semibold))
+                    .foregroundStyle(Palette.textPrimary)
+                    .lineLimit(1)
+                if let email = account.identity?.email {
+                    Text(email)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(Palette.textFaint)
+                        .lineLimit(1)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 14)
+        .padding(.bottom, 10)
+    }
+
+    private var composeButton: some View {
+        Button { startCompose() } label: {
+            HStack(spacing: 7) {
+                Image(systemName: "square.and.pencil").font(.system(size: 12, weight: .semibold))
+                Text("Compose").font(.system(size: 12.5, weight: .semibold))
+                Spacer()
+            }
+            .padding(.horizontal, 12)
+            .frame(height: 34)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.white.opacity(0.92)))
+            .foregroundStyle(.black)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 12)
+        .padding(.bottom, 10)
+    }
+
+    private func navSectionHeader(_ title: String) -> some View {
+        Text(title.uppercased())
+            .font(.system(size: 9, weight: .bold))
+            .tracking(1.4)
+            .foregroundStyle(Palette.textFaint)
+            .padding(.horizontal, 10)
+            .padding(.top, 12)
+            .padding(.bottom, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Nav actions + derived state
+
+    private func startCompose() {
+        showingMemories = false
+        store.startCompose()
+    }
+
+    private func selectMailbox(_ mailbox: GmailMailbox) {
+        selectedAILabel = nil
+        listFilter = .all
+        showingMemories = false
+        store.selectMailbox(mailbox)
+        if store.selectedMailbox == mailbox && store.messages.isEmpty { store.refreshList() }
+    }
+
+    private func toggleLabel(_ name: String) {
+        showingMemories = false
+        if store.paneMode != .list { store.backToList() }
+        selectedAILabel = (selectedAILabel == name) ? nil : name
+    }
+
+    private func toggleNeedsReply() {
+        showingMemories = false
+        selectedAILabel = nil
+        listFilter = (listFilter == .needsReply) ? .all : .needsReply
+    }
+
+    private func openMemories() {
+        store.backToList()
+        showingMemories = true
+    }
+
+    private var unreadCount: Int { store.messages.filter(\.unread).count }
+
+    private var labelCounts: [String: Int] {
+        var counts: [String: Int] = [:]
+        for message in store.messages {
+            for name in mailModel.labelNames(forMessageID: message.id) {
+                counts[name, default: 0] += 1
+            }
+        }
+        return counts
+    }
+
+    private var activeReminderCount: Int { mailModel.reminders.filter { !$0.dismissed }.count }
+    private var reminderThreadIds: Set<String> { Set(mailModel.reminders.filter { !$0.dismissed }.map(\.threadId)) }
+
+    private var filteredMessages: [GmailMessageSummary] {
+        var result = store.messages
+        if let label = selectedAILabel {
+            result = result.filter { mailModel.labelNames(forMessageID: $0.id).contains(label) }
+        }
+        switch listFilter {
+        case .all: break
+        case .unread: result = result.filter(\.unread)
+        case .starred: result = result.filter(\.starred)
+        case .needsReply:
+            let ids = reminderThreadIds
+            result = result.filter { ids.contains($0.threadId) }
+        }
+        return result
+    }
+
+    private var listTitle: String {
+        if let label = selectedAILabel { return label }
+        if listFilter == .needsReply { return "Needs reply" }
+        return store.selectedMailbox.title
+    }
+
+    // MARK: - List column
+
+    private var listColumn: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 8) {
+                Text(listTitle)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Palette.textPrimary)
+                    .lineLimit(1)
+                Text("\(filteredMessages.count)")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Palette.textFaint)
+                Spacer()
+                Button { store.refreshList(force: true) } label: {
+                    Image(systemName: "arrow.clockwise")
+                }
+                .buttonStyle(IconButtonStyle(size: 26))
+                .help("Refresh")
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 12)
+            .padding(.bottom, 10)
+
+            searchField
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+
+            HStack(spacing: 6) {
+                MailFilterChip(title: "All", selected: listFilter == .all && selectedAILabel == nil) {
+                    listFilter = .all; selectedAILabel = nil; showingMemories = false
+                }
+                MailFilterChip(title: "Unread", selected: listFilter == .unread) {
+                    listFilter = listFilter == .unread ? .all : .unread
+                }
+                MailFilterChip(title: "Starred", selected: listFilter == .starred) {
+                    listFilter = listFilter == .starred ? .all : .starred
+                }
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 10)
+
+            Divider().background(Palette.stroke)
+            listBody
+        }
+        .frame(width: 384)
+        .background(Palette.bg)
+    }
+
+    private var listBody: some View {
+        Group {
+            if filteredMessages.isEmpty {
+                placeholder(icon: "tray", title: emptyTitle, message: emptyMessage)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0, pinnedViews: []) {
+                        let due = mailModel.dueReminders()
+                        if !due.isEmpty && listFilter != .needsReply {
+                            MailRemindersBanner(
+                                reminders: due,
+                                onOpen: { reminder in openThread(reminder.threadId) },
+                                onDismiss: { reminder in mailModel.dismissReminder(id: reminder.id) }
+                            )
+                            .padding(.horizontal, 10)
+                            .padding(.top, 8)
+                            .padding(.bottom, 2)
+                        }
+                        ForEach(grouped(filteredMessages), id: \.bucket) { group in
+                            sectionHeader(group.bucket.title)
+                            ForEach(group.items) { summary in
+                                MessageRow(
+                                    summary: summary,
+                                    aiLabels: aiLabels(for: summary),
+                                    allLabels: mailModel.enabledLabels,
+                                    hasDraft: hasDraft(summary),
+                                    selected: isSelected(summary),
+                                    onOpen: { store.openMessage(id: summary.id) },
+                                    onToggleStar: { store.toggleStar(summary) },
+                                    onReclassify: { name in reclassify(summary, to: name) }
+                                )
+                                .padding(.horizontal, 6)
+                            }
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+                .scrollIndicators(.hidden)
+            }
+        }
+        .frame(maxHeight: .infinity)
+    }
+
+    private func isSelected(_ summary: GmailMessageSummary) -> Bool {
+        if case .reading(let id) = store.paneMode { return id == summary.id }
+        return store.openMessage?.id == summary.id
+    }
+
+    private func hasDraft(_ summary: GmailMessageSummary) -> Bool {
+        mailModel.pendingDrafts.contains { $0.threadId == summary.threadId }
+    }
+
+    private var emptyTitle: String {
+        if store.phase == .loadingList { return "Loading…" }
+        if selectedAILabel != nil || listFilter != .all || !store.query.isEmpty { return "Nothing matches" }
+        return "Inbox zero"
+    }
+
+    private var emptyMessage: String {
+        if store.phase == .loadingList { return "" }
+        if !store.query.isEmpty { return "No messages match \u{201C}\(store.query)\u{201D}." }
+        if listFilter == .needsReply { return "No threads are waiting on a reply." }
+        if let label = selectedAILabel { return "No messages labeled \(label) here yet." }
+        return "You're all caught up."
+    }
+
+    // MARK: - Detail column
+
     @ViewBuilder
-    private var pane: some View {
+    private var detailColumn: some View {
         switch store.paneMode {
-        case .list:
-            messageList
-        case .reading:
-            messageReader
         case .composing(let draft):
             ComposeView(
                 draft: draft,
@@ -238,63 +487,103 @@ struct GmailIntegrationView: View {
                 onCancel: { store.cancelCompose() },
                 onSend: { store.sendCurrentDraft() }
             )
+        case .reading:
+            messageReader
+        case .list:
+            if showingMemories { memoriesDetail } else { detailEmptyState }
         }
     }
 
-    private var messageList: some View {
-        ZStack(alignment: .top) {
-            if store.messages.isEmpty {
-                if store.phase == .loadingList {
-                    placeholder(icon: "tray", title: "Loading…", message: "")
-                } else {
-                    placeholder(
-                        icon: "tray",
-                        title: "Nothing here",
-                        message: store.query.isEmpty
-                            ? "This mailbox is empty."
-                            : "No messages match \u{201C}\(store.query)\u{201D}."
-                    )
-                }
+    private var detailEmptyState: some View {
+        VStack(spacing: 14) {
+            ZStack {
+                Circle().fill(Palette.surface).frame(width: 64, height: 64)
+                Image(systemName: "tray.full")
+                    .font(.system(size: 24, weight: .light))
+                    .foregroundStyle(Palette.textMuted)
+            }
+            VStack(spacing: 5) {
+                Text("Select a message")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Palette.textSecondary)
+                Text("Pick a conversation to read it here — or ask the AI in chat to triage, summarize, or draft a reply.")
+                    .font(.system(size: 12, weight: .medium))
+                    .foregroundStyle(Palette.textMuted)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: 320)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    private var memoriesDetail: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 8) {
+                Image(systemName: "brain").font(.system(size: 13, weight: .semibold)).foregroundStyle(Palette.textMuted)
+                Text("Memories").font(.system(size: 15, weight: .semibold)).foregroundStyle(Palette.textPrimary)
+                Text("\(mailModel.memories.count)").font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.textFaint)
+                Spacer()
+                Button { showingMemories = false } label: { Image(systemName: "xmark") }
+                    .buttonStyle(IconButtonStyle(size: 26))
+            }
+            .padding(.horizontal, 18)
+            .padding(.vertical, 14)
+
+            Divider().background(Palette.stroke)
+
+            if mailModel.memories.isEmpty {
+                placeholder(
+                    icon: "brain",
+                    title: "No memories yet",
+                    message: "Memories are durable facts the AI learns — about contacts, your writing voice, and todos. Turn on auto-extract in Settings → Mail, or ask the AI to remember something."
+                )
             } else {
                 ScrollView {
-                    LazyVStack(spacing: 0, pinnedViews: []) {
-                        let due = mailModel.dueReminders()
-                        if !due.isEmpty {
-                            MailRemindersBanner(
-                                reminders: due,
-                                onOpen: { reminder in openThread(reminder.threadId) },
-                                onDismiss: { reminder in mailModel.dismissReminder(id: reminder.id) }
-                            )
-                            .padding(.horizontal, 10)
-                            .padding(.bottom, 4)
-                        }
-                        ForEach(groupedMessages, id: \.bucket) { group in
-                            sectionHeader(group.bucket.title)
-                            ForEach(group.items) { summary in
-                                MessageRow(
-                                    summary: summary,
-                                    aiLabels: aiLabels(for: summary),
-                                    allLabels: mailModel.enabledLabels,
-                                    onOpen: { store.openMessage(id: summary.id) },
-                                    onToggleStar: { store.toggleStar(summary) },
-                                    onReclassify: { name in reclassify(summary, to: name) }
-                                )
-                                .padding(.horizontal, 6)
-                                Divider().opacity(0.18).padding(.leading, 18)
-                            }
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(mailModel.memories) { memory in
+                            memoryCard(memory)
                         }
                     }
-                    .padding(.vertical, 6)
+                    .padding(18)
                 }
                 .scrollIndicators(.hidden)
             }
-
-            if store.phase == .loadingList && !store.messages.isEmpty {
-                ProgressView()
-                    .controlSize(.small)
-                    .padding(.top, 8)
-            }
         }
+    }
+
+    private func memoryCard(_ memory: MailMemory) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(memory.text)
+                    .font(.system(size: 12.5, weight: .medium))
+                    .foregroundStyle(Palette.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    memoryTag(memory.kind.label)
+                    memoryTag(memory.anchor.label)
+                }
+            }
+            Spacer(minLength: 0)
+            Button { mailModel.deleteMemory(id: memory.id) } label: {
+                Image(systemName: "trash").font(.system(size: 11, weight: .semibold)).foregroundStyle(Palette.textFaint)
+            }
+            .buttonStyle(.plain)
+            .help("Forget this memory")
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .surfaceCard()
+    }
+
+    private func memoryTag(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 9.5, weight: .semibold))
+            .foregroundStyle(Palette.textMuted)
+            .padding(.horizontal, 6)
+            .padding(.vertical, 2)
+            .background(Capsule().fill(Palette.bgRaised))
+            .overlay(Capsule().stroke(Palette.stroke, lineWidth: 0.5))
     }
 
     private var messageReader: some View {
@@ -512,10 +801,10 @@ struct GmailIntegrationView: View {
         let items: [GmailMessageSummary]
     }
 
-    private var groupedMessages: [MessageGroup] {
+    private func grouped(_ messages: [GmailMessageSummary]) -> [MessageGroup] {
         let now = Date()
         var buckets: [GmailDateBucket: [GmailMessageSummary]] = [:]
-        for message in store.messages {
+        for message in messages {
             buckets[GmailDateBucket.bucket(for: message.date, now: now), default: []].append(message)
         }
         return GmailDateBucket.allCases.compactMap { bucket in
@@ -527,50 +816,12 @@ struct GmailIntegrationView: View {
 
 // MARK: - Subviews
 
-private struct MailboxRow: View {
-    let mailbox: GmailMailbox
-    let selected: Bool
-    let action: () -> Void
-
-    @State private var isHovering = false
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 10) {
-                Image(systemName: mailbox.symbolName)
-                    .font(.system(size: 11, weight: .semibold))
-                    .frame(width: 14, alignment: .center)
-                    .foregroundStyle(selected ? Palette.textPrimary : Palette.textSecondary)
-                Text(mailbox.title)
-                    .font(.system(size: 12.5, weight: selected ? .semibold : .medium))
-                    .foregroundStyle(selected ? Palette.textPrimary : Palette.textSecondary)
-                Spacer()
-            }
-            .padding(.horizontal, 10)
-            .frame(height: 30)
-            .background {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(backgroundFill)
-            }
-        }
-        .buttonStyle(.plain)
-        .padding(.horizontal, 10)
-        .onHover { isHovering = $0 }
-        .animation(Motion.hoverFade, value: isHovering)
-        .animation(Motion.hoverFade, value: selected)
-    }
-
-    private var backgroundFill: Color {
-        if selected { return Color.white.opacity(0.08) }
-        if isHovering { return Color.white.opacity(0.04) }
-        return Color.clear
-    }
-}
-
 private struct MessageRow: View {
     let summary: GmailMessageSummary
     var aiLabels: [AILabel] = []
     var allLabels: [AILabel] = []
+    var hasDraft: Bool = false
+    var selected: Bool = false
     let onOpen: () -> Void
     let onToggleStar: () -> Void
     var onReclassify: (String) -> Void = { _ in }
@@ -580,13 +831,13 @@ private struct MessageRow: View {
     var body: some View {
         Button(action: onOpen) {
             HStack(alignment: .top, spacing: 10) {
-                ZStack {
-                    Circle()
-                        .fill(summary.unread ? Color.white : Color.clear)
-                        .frame(width: 6, height: 6)
-                }
-                .frame(width: 12)
-                .padding(.top, 6)
+                Circle()
+                    .fill(summary.unread ? Palette.accent : Color.clear)
+                    .frame(width: 6, height: 6)
+                    .padding(.top, 13)
+
+                MailAvatar(name: summary.fromName, email: summary.fromAddress, size: 30, unread: summary.unread)
+                    .padding(.top, 1)
 
                 VStack(alignment: .leading, spacing: 3) {
                     HStack(spacing: 8) {
@@ -607,7 +858,12 @@ private struct MessageRow: View {
                         .font(.system(size: 11.5, weight: .medium))
                         .foregroundStyle(Palette.textMuted)
                         .lineLimit(2)
-                    AILabelRow(labels: aiLabels)
+                    if !aiLabels.isEmpty || hasDraft {
+                        HStack(spacing: 4) {
+                            AILabelRow(labels: aiLabels)
+                            if hasDraft { draftChip }
+                        }
+                    }
                 }
 
                 Button(action: onToggleStar) {
@@ -621,12 +877,20 @@ private struct MessageRow: View {
                 .opacity(summary.starred || isHovering ? 1 : 0)
                 .padding(.top, 4)
             }
-            .padding(.vertical, 10)
+            .padding(.vertical, 9)
             .padding(.horizontal, 12)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(isHovering ? Palette.surfaceHover : Color.clear)
+                    .fill(selected ? Palette.surfaceActive : (isHovering ? Palette.surfaceHover : Color.clear))
+            }
+            .overlay(alignment: .leading) {
+                if selected {
+                    RoundedRectangle(cornerRadius: 1.5)
+                        .fill(Palette.accent)
+                        .frame(width: 2.5, height: 22)
+                        .padding(.leading, 2)
+                }
             }
         }
         .buttonStyle(.plain)
@@ -640,6 +904,18 @@ private struct MessageRow: View {
         }
         .onHover { isHovering = $0 }
         .animation(Motion.hoverFade, value: isHovering)
+        .animation(Motion.hoverFade, value: selected)
+    }
+
+    private var draftChip: some View {
+        HStack(spacing: 3) {
+            Image(systemName: "pencil").font(.system(size: 8, weight: .bold))
+            Text("Draft").font(.system(size: 9, weight: .semibold))
+        }
+        .foregroundStyle(Palette.textSecondary)
+        .padding(.horizontal, 5)
+        .padding(.vertical, 2)
+        .background(Capsule().fill(Palette.surfaceActive))
     }
 
     private var relativeDate: String {
@@ -681,10 +957,10 @@ private struct MessageReader: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 8) {
                 Button(action: onBack) {
-                    Image(systemName: "chevron.left")
+                    Image(systemName: "xmark")
                 }
                 .buttonStyle(IconButtonStyle(size: 26))
-                .help("Back to inbox")
+                .help("Close")
 
                 Spacer()
 
@@ -751,6 +1027,7 @@ private struct MessageReader: View {
                         .font(.system(size: 19, weight: .semibold, design: .rounded))
                         .foregroundStyle(Palette.textPrimary)
                     HStack(alignment: .center, spacing: 10) {
+                        MailAvatar(name: message.fromName, email: message.fromAddress, size: 36)
                         VStack(alignment: .leading, spacing: 1) {
                             Text(message.fromName.isEmpty ? message.fromAddress : message.fromName)
                                 .font(.system(size: 12.5, weight: .semibold))
@@ -758,6 +1035,7 @@ private struct MessageReader: View {
                             Text("to \(message.to)")
                                 .font(.system(size: 11, weight: .medium))
                                 .foregroundStyle(Palette.textMuted)
+                                .lineLimit(1)
                         }
                         Spacer()
                         Text(absoluteDate)
