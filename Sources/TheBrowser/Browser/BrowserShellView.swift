@@ -66,6 +66,7 @@ struct BrowserShellView: View {
                         smartReadModel: smartReadModel,
                         mailModel: mailModel,
                         gmailStore: gmailStore,
+                        mailSurfaceActive: integrations.isPresented && integrations.activeIntegration == .gmail,
                         context: model.selectedContext,
                         tabs: model.tabsManifest(),
                         nativeTools: NativeBrowserToolExecutor(
@@ -199,7 +200,8 @@ struct BrowserShellView: View {
                     model: integrations,
                     gmailAccount: gmailAccount,
                     gmailStore: gmailStore,
-                    mailModel: mailModel
+                    mailModel: mailModel,
+                    rightInset: model.isChatVisible ? Metrics.chatWidth : 0
                 )
                     .ignoresSafeArea()
                     .transition(.opacity)

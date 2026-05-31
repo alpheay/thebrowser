@@ -291,7 +291,8 @@ final class ChatViewModel: ObservableObject {
         context: BrowserPageContext,
         tabs: [TabManifestEntry],
         nativeTools: NativeBrowserToolExecutor,
-        smartReadActive: Bool = false
+        smartReadActive: Bool = false,
+        mailContext: String? = nil
     ) {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let activePreset = draftPreset
@@ -380,6 +381,7 @@ final class ChatViewModel: ObservableObject {
             tabs: tabs,
             attachments: attachmentsForTurn,
             smartReadActive: smartReadActive,
+            mailContext: mailContext,
             nativeTools: nativeTools
         )
     }
@@ -451,6 +453,7 @@ final class ChatViewModel: ObservableObject {
         tabs: [TabManifestEntry],
         attachments: [ChatAttachment],
         smartReadActive: Bool,
+        mailContext: String?,
         nativeTools: NativeBrowserToolExecutor
     ) {
         let directory = sessionDirectory
@@ -462,7 +465,8 @@ final class ChatViewModel: ObservableObject {
             configuration: configuration,
             tabs: tabs,
             attachments: attachments,
-            smartReadActive: smartReadActive
+            smartReadActive: smartReadActive,
+            mailContext: mailContext
         )
 
         let handle = AgentRunHandle()
@@ -839,6 +843,9 @@ struct AIChatPanel: View {
     @ObservedObject var smartReadModel: SmartReadModel
     @ObservedObject var mailModel: MailModel
     var gmailStore: GmailStore
+    /// True when the inbox surface is on screen — gates whether the live mail
+    /// context (open thread, ids, excerpt) is fed to the agent.
+    var mailSurfaceActive: Bool = false
     var context: BrowserPageContext
     var tabs: [TabManifestEntry]
     var nativeTools: NativeBrowserToolExecutor
@@ -1211,11 +1218,13 @@ struct AIChatPanel: View {
     /// prompt builder knows whether to hint the model about the available
     /// summary and the `read_smart_read` tool.
     private func sendCurrent() {
+        let mailContext = mailSurfaceActive ? MailContext.promptBlock(gmail: gmailStore, mail: mailModel) : nil
         viewModel.send(
             context: context,
             tabs: tabs,
             nativeTools: nativeTools,
-            smartReadActive: smartReadModel.isPresented
+            smartReadActive: smartReadModel.isPresented,
+            mailContext: mailContext
         )
     }
 
