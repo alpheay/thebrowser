@@ -47,18 +47,26 @@ struct SettingsView: View {
     @AppStorage(PreferenceKey.mailAutocompleteThrottleSeconds) private var mailAutocompleteThrottleSeconds = 5
     @AppStorage(PreferenceKey.mailReadMode) private var mailReadMode = false
     @AppStorage(PreferenceKey.mailMemoryAutoExtract) private var mailMemoryAutoExtract = false
+    @AppStorage(PreferenceKey.recallEnabled) private var recallEnabled = true
+    @AppStorage(PreferenceKey.recallSemanticEnabled) private var recallSemanticEnabled = true
+    @AppStorage(PreferenceKey.recallLocalAnswerMode) private var recallLocalAnswerMode = false
+    @AppStorage(PreferenceKey.recallDwellSeconds) private var recallDwellSeconds = 8
+    @AppStorage(PreferenceKey.recallDenylist) private var recallDenylist = AppDefaults.defaultRecallDenylist
 
     @State private var selectedTab: SettingsTab = .general
     @State private var showClearAllConfirm = false
     @State private var showClearHistoryConfirm = false
+    @State private var showClearIndexConfirm = false
     @State private var pendingHistoryClearRange: HistoryClearRange?
     @State private var historyEntryCount = 0
     @StateObject private var googleAccountStore = GoogleAccountStore.shared
     @StateObject private var gmailAccountStore = GmailAccountStore.shared
     @StateObject private var discordAccountStore = DiscordAccountStore.shared
+    @StateObject private var recallController = RecallController.shared
     @AppStorage(PreferenceKey.openDiscordShortcut) private var openDiscordShortcut = "command+d"
     @AppStorage(PreferenceKey.openHistoryShortcut) private var openHistoryShortcut = "command+y"
     @AppStorage(PreferenceKey.openArtifactsShortcut) private var openArtifactsShortcut = "shift+command+a"
+    @AppStorage(PreferenceKey.openRecallShortcut) private var openRecallShortcut = "shift+command+y"
 
     var body: some View {
         HStack(spacing: 0) {
@@ -365,6 +373,39 @@ struct SettingsView: View {
                 }
             }
 
+            section("Recall") {
+                row(
+                    label: "Answer from history",
+                    help: "Capture the readable content of pages you spend time on into a private, on-device index so the AI and the recall panel (\(AppShortcut.displayString(for: openRecallShortcut))) can answer \u{201C}that article I read last week\u{201D}. Indexing and search happen entirely on your Mac."
+                ) {
+                    HStack { Spacer(); ToggleSwitch(isOn: $recallEnabled) }
+                }
+
+                if recallEnabled {
+                    row(label: "Semantic search", help: "Find pages by meaning, not just keywords, using an on-device embedding model. \(recallController.semanticReady ? "Ready." : "Builds in the background as you read.")") {
+                        HStack { Spacer(); ToggleSwitch(isOn: $recallSemanticEnabled) }
+                    }
+                    row(label: "Answer on-device", help: "Synthesize answers inside the recall panel locally instead of sending the retrieved passages to the cloud AI model. Fully private; extractive rather than generative.") {
+                        HStack { Spacer(); ToggleSwitch(isOn: $recallLocalAnswerMode) }
+                    }
+                    row(label: "Capture after", help: "How long a page must stay in the foreground before it's indexed. Filters out pages you glance at and leave.") {
+                        NumericStepperField(value: $recallDwellSeconds, range: 3...120, step: 1, suffix: "sec")
+                    }
+                    row(label: "Never index", help: "One host per line. These sites and their subdomains are never captured. Any page showing a password field is also skipped automatically.") {
+                        MultilineField(text: $recallDenylist, height: 96)
+                    }
+                    row(label: "Index", help: "Stored in ~/.thebrowser/recall.sqlite. Clearing removes all captured page content and embeddings; your visit history is left untouched.") {
+                        HStack(spacing: 8) {
+                            Spacer()
+                            Text(recallIndexLabel)
+                                .font(.system(size: 11.5, weight: .medium, design: .monospaced))
+                                .foregroundStyle(Palette.textMuted)
+                            DestructiveButton(title: "Clear index") { showClearIndexConfirm = true }
+                        }
+                    }
+                }
+            }
+
             section("History") {
                 row(
                     label: "Browsing history",
@@ -408,7 +449,10 @@ struct SettingsView: View {
                 }
             }
         }
-        .onAppear { refreshHistoryCount() }
+        .onAppear {
+            refreshHistoryCount()
+            Task { await recallController.refreshStats() }
+        }
         .onReceive(NotificationCenter.default.publisher(for: HistoryStore.didChangeNotification)) { _ in
             refreshHistoryCount()
         }
@@ -426,6 +470,12 @@ struct SettingsView: View {
         } message: {
             Text(historyAlertMessage)
         }
+        .alert("Clear the recall index?", isPresented: $showClearIndexConfirm) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear index", role: .destructive) { recallController.clearIndex() }
+        } message: {
+            Text("Removes all captured page content and embeddings from ~/.thebrowser/recall.sqlite. Your browsing history and bookmarks are not affected. Pages you read afterward are indexed again.")
+        }
     }
 
     private var historyCountLabel: String {
@@ -434,6 +484,14 @@ struct SettingsView: View {
         case 1: return "1 entry"
         default: return "\(historyEntryCount) entries"
         }
+    }
+
+    private var recallIndexLabel: String {
+        let stats = recallController.stats
+        guard stats.documentCount > 0 else { return "Empty" }
+        let pages = stats.documentCount == 1 ? "1 page" : "\(stats.documentCount) pages"
+        let bytes = ByteCountFormatter.string(fromByteCount: Int64(stats.byteSize), countStyle: .file)
+        return "\(pages) · \(bytes)"
     }
 
     private var historyAlertTitle: String {
@@ -561,6 +619,9 @@ struct SettingsView: View {
                 }
                 row(label: "Open history", help: "Browse and search every page you've visited.") {
                     ShortcutRecorder(value: $openHistoryShortcut)
+                }
+                row(label: "Recall", help: "Open the instant-recall command bar to answer from pages you've read.") {
+                    ShortcutRecorder(value: $openRecallShortcut)
                 }
                 row(label: "Open artifacts", help: "Browse every document the AI has generated for you.") {
                     ShortcutRecorder(value: $openArtifactsShortcut)

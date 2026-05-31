@@ -28,8 +28,6 @@ struct TabRailView: View {
                 .padding(.horizontal, 12)
                 .padding(.top, 2)
                 .padding(.bottom, 10)
-
-            footer
         }
         .frame(width: Metrics.railWidth)
         .frame(maxHeight: .infinity)
@@ -116,40 +114,6 @@ struct TabRailView: View {
             }
         }
     }
-
-    // MARK: - Footer
-
-    private var footer: some View {
-        HStack(spacing: 7) {
-            KeycapHint(text: "⌘B")
-            Text("tabs")
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(Palette.textFaint)
-
-            Circle()
-                .fill(Palette.textFaint.opacity(0.6))
-                .frame(width: 2, height: 2)
-                .padding(.horizontal, 1)
-
-            KeycapHint(text: "⌘J")
-            Text("chat")
-                .font(.system(size: 10.5, weight: .medium))
-                .foregroundStyle(Palette.textFaint)
-
-            Spacer(minLength: 0)
-        }
-        .padding(.horizontal, 14)
-        .frame(height: 40)
-        .overlay(alignment: .top) {
-            LinearGradient(
-                colors: [Palette.bg.opacity(0), Palette.bg],
-                startPoint: .top, endPoint: .bottom
-            )
-            .frame(height: 16)
-            .offset(y: -16)
-            .allowsHitTesting(false)
-        }
-    }
 }
 
 // MARK: - New tab button
@@ -227,8 +191,8 @@ private struct NewTabButtonLabel: View {
 
 // MARK: - Artifacts button
 
-/// Pinned to the bottom of the rail, above the keycap hints. Opens the
-/// artifact gallery — the single entry point to everything the AI has built.
+/// Pinned to the bottom of the rail. Opens the artifact gallery — the
+/// single entry point to everything the AI has built.
 private struct ArtifactsRailButton: View {
     let action: () -> Void
 

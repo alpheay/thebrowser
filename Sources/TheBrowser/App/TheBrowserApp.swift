@@ -14,6 +14,9 @@ struct TheBrowserApp: App {
             // Compile the content-blocking rule lists at launch so tabs have
             // them ready; live tabs refresh once the first compile lands.
             ContentBlockingController.shared.start()
+            // Wire Recall: mirror history deletions into the local knowledge
+            // index and warm its store.
+            RecallController.shared.activate()
         }
     }
 
