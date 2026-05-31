@@ -331,7 +331,7 @@ struct AIProviderClient {
         tabs: [TabManifestEntry] = [],
         attachments: [ChatAttachment] = [],
         smartReadActive: Bool = false,
-        mailContext: String? = nil
+        surfaceContext: String? = nil
     ) -> String {
         let pageURL = context.url.isEmpty ? "Home page" : context.url
 
@@ -451,10 +451,10 @@ struct AIProviderClient {
             ? "Smart Read: a summary of the current page is displayed in the chat sidebar. Call read_smart_read to retrieve its TL;DR, key points, and metadata when the user references it.\n\n"
             : ""
 
-        let mailContextBlock = mailContext.map { "\($0)\n\n" } ?? ""
+        let surfaceContextBlock = surfaceContext.map { "\($0)\n\n" } ?? ""
 
         return """
-        \(NativeBrowserToolPrompt.instructions)
+        \(surfaceContextBlock)\(NativeBrowserToolPrompt.instructions)
 
         \(configuration?.promptIdentity ?? "")
 
@@ -462,7 +462,7 @@ struct AIProviderClient {
         Title: \(context.title)
         URL: \(pageURL)
 
-        \(mailContextBlock)\(smartReadBlock)\(priorManifestBlock)\(currentAttachmentsBlock)\(transcript)User request:
+        \(smartReadBlock)\(priorManifestBlock)\(currentAttachmentsBlock)\(transcript)User request:
         \(message)
         """
     }

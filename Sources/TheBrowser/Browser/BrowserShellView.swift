@@ -43,6 +43,15 @@ struct BrowserShellView: View {
         model.isTabRailVisible || isPeekingRail
     }
 
+    /// Which surface the AI chat is sitting next to right now. Drives the
+    /// "CURRENT SURFACE" frame in the agent prompt so it acts on what the user
+    /// is actually looking at instead of reflexively re-opening or searching.
+    private var chatFocus: ChatFocus {
+        if integrations.isPresented && integrations.activeIntegration == .gmail { return .mail }
+        if isShowingArtifactGallery { return .artifacts }
+        return .browser
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             // Layer 0: window plate
@@ -66,7 +75,7 @@ struct BrowserShellView: View {
                         smartReadModel: smartReadModel,
                         mailModel: mailModel,
                         gmailStore: gmailStore,
-                        mailSurfaceActive: integrations.isPresented && integrations.activeIntegration == .gmail,
+                        chatFocus: chatFocus,
                         context: model.selectedContext,
                         tabs: model.tabsManifest(),
                         nativeTools: NativeBrowserToolExecutor(

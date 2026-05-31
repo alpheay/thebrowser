@@ -28,6 +28,7 @@ struct AgentStatusLabelTests {
             (.readSmartRead, "Reading Smart Read…"),
             (.mailSearch, "Searching mail…"),
             (.mailReadThread, "Reading mail thread…"),
+            (.mailReadCurrent, "Reading this email…"),
             (.mailShow, "Opening mail…"),
             (.mailDraft, "Drafting reply…"),
             (.mailCompose, "Writing in composer…"),

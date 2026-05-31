@@ -292,7 +292,7 @@ final class ChatViewModel: ObservableObject {
         tabs: [TabManifestEntry],
         nativeTools: NativeBrowserToolExecutor,
         smartReadActive: Bool = false,
-        mailContext: String? = nil
+        surfaceContext: String? = nil
     ) {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let activePreset = draftPreset
@@ -381,7 +381,7 @@ final class ChatViewModel: ObservableObject {
             tabs: tabs,
             attachments: attachmentsForTurn,
             smartReadActive: smartReadActive,
-            mailContext: mailContext,
+            surfaceContext: surfaceContext,
             nativeTools: nativeTools
         )
     }
@@ -453,7 +453,7 @@ final class ChatViewModel: ObservableObject {
         tabs: [TabManifestEntry],
         attachments: [ChatAttachment],
         smartReadActive: Bool,
-        mailContext: String?,
+        surfaceContext: String?,
         nativeTools: NativeBrowserToolExecutor
     ) {
         let directory = sessionDirectory
@@ -466,7 +466,7 @@ final class ChatViewModel: ObservableObject {
             tabs: tabs,
             attachments: attachments,
             smartReadActive: smartReadActive,
-            mailContext: mailContext
+            surfaceContext: surfaceContext
         )
 
         let handle = AgentRunHandle()
@@ -843,9 +843,9 @@ struct AIChatPanel: View {
     @ObservedObject var smartReadModel: SmartReadModel
     @ObservedObject var mailModel: MailModel
     var gmailStore: GmailStore
-    /// True when the inbox surface is on screen — gates whether the live mail
-    /// context (open thread, ids, excerpt) is fed to the agent.
-    var mailSurfaceActive: Bool = false
+    /// Which surface the user is currently on — frames every agent prompt so it
+    /// knows whether it's looking at mail, the web, artifacts, or Discord.
+    var chatFocus: ChatFocus = .browser
     var context: BrowserPageContext
     var tabs: [TabManifestEntry]
     var nativeTools: NativeBrowserToolExecutor
@@ -1218,17 +1218,15 @@ struct AIChatPanel: View {
     /// prompt builder knows whether to hint the model about the available
     /// summary and the `read_smart_read` tool.
     private func sendCurrent() {
-        // Attach the live inbox context when the mail surface is up, or whenever
-        // an email/draft is open (so "this email" / "what I'm writing" resolves
-        // even if the surface flag lags).
-        let mailRelevant = mailSurfaceActive || gmailStore.openMessage != nil || gmailStore.currentDraft != nil
-        let mailContext = mailRelevant ? MailContext.promptBlock(gmail: gmailStore, mail: mailModel) : nil
+        // Tell the agent which surface the user is on (and, for mail, the open
+        // email / compose draft) so it acts on what's in front of them.
+        let surfaceContext = chatFocus.promptBlock(gmail: gmailStore, mail: mailModel)
         viewModel.send(
             context: context,
             tabs: tabs,
             nativeTools: nativeTools,
             smartReadActive: smartReadModel.isPresented,
-            mailContext: mailContext
+            surfaceContext: surfaceContext
         )
     }
 

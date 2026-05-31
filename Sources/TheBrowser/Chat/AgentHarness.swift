@@ -111,6 +111,8 @@ enum AgentStatusLabel {
             return "Searching mail…"
         case .mailReadThread:
             return "Reading mail thread…"
+        case .mailReadCurrent:
+            return "Reading this email…"
         case .mailShow:
             return "Opening mail…"
         case .mailDraft:

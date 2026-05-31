@@ -9,6 +9,7 @@ enum NativeBrowserToolName: String, Equatable, Sendable {
     case readSmartRead = "read_smart_read"
     case mailSearch = "mail_search"
     case mailReadThread = "mail_read_thread"
+    case mailReadCurrent = "mail_read_current"
     case mailShow = "mail_show"
     case mailDraft = "mail_draft"
     case mailCompose = "mail_compose"
@@ -24,7 +25,7 @@ enum NativeBrowserToolName: String, Equatable, Sendable {
     /// closure and carry their rich parameters in `rawArguments`.
     var isMail: Bool {
         switch self {
-        case .mailSearch, .mailReadThread, .mailShow, .mailDraft, .mailCompose, .mailSend,
+        case .mailSearch, .mailReadThread, .mailReadCurrent, .mailShow, .mailDraft, .mailCompose, .mailSend,
              .mailModify, .mailTriage, .mailMemory, .mailRemind:
             return true
         default:
@@ -107,6 +108,8 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             return mailIdentifier?.displayValue ?? "new message"
         case .mailCompose:
             return "composer"
+        case .mailReadCurrent:
+            return "current email"
         case .mailSend:
             return mailIdentifier?.displayValue ?? "draft"
         case .mailModify:
@@ -203,7 +206,7 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             return call.rawInput.isEmpty ? nil : call
         case .readTabs, .readHighlights, .readSmartRead:
             return call
-        case .mailSearch, .mailReadThread, .mailShow, .mailDraft, .mailCompose, .mailSend,
+        case .mailSearch, .mailReadThread, .mailReadCurrent, .mailShow, .mailDraft, .mailCompose, .mailSend,
              .mailModify, .mailTriage, .mailMemory, .mailRemind:
             // Mail tools validate their own arguments in MailToolService and
             // return a helpful error rather than failing the parse silently.
@@ -670,7 +673,7 @@ struct NativeBrowserToolExecutor {
             return await readHighlights(call)
         case .readSmartRead:
             return await readSmartRead(call)
-        case .mailSearch, .mailReadThread, .mailShow, .mailDraft, .mailCompose, .mailSend,
+        case .mailSearch, .mailReadThread, .mailReadCurrent, .mailShow, .mailDraft, .mailCompose, .mailSend,
              .mailModify, .mailTriage, .mailMemory, .mailRemind:
             return await runMailTool(call)
         case .createArtifact:
@@ -690,9 +693,10 @@ enum NativeBrowserToolPrompt {
     - read_tabs: returns the visible text of the user's currently open tabs. Use this when the user asks about, summarizes across, or wants to act on the tabs they already have open. Pass `indices` (1-based) to read specific tabs, or omit it to read all of them.
     - read_highlights: returns the full text of highlights (page passages the user clipped via the Ask widget) attached earlier in the conversation. The prompt lists prior highlights by their 1-based global index with source + preview only; use this tool to fetch the full text of one or more of them when the user references "the highlight", "what I sent earlier", a specific quoted phrase, etc. Pass `indices` (1-based) to read specific highlights, or omit it to read all of them. The CURRENT turn's highlights are already inlined in the prompt — only call this tool for highlights from PRIOR turns.
     - read_smart_read: returns the Smart Read summary currently displayed in the chat sidebar (TL;DR sentence, numbered key points, read time, word count, page title, page URL). Use this whenever the user references "the smart read", "the summary", "what did smart read say", or asks for any details from the summary panel. The prompt notes when a Smart Read is active — only call this tool while one is shown. Takes no arguments.
-    - mail_search: searches/lists the connected Gmail account and returns STRUCTURED JSON results. SILENT — it does not change what's on the user's screen. Use it whenever you need to find or reason about mail. For "what's in my inbox" pass `mailbox:"inbox"`. Pass `query` for constraints (Gmail search syntax). Set `natural_language:true` to have a fast model translate a plain-English `query` into Gmail operators. Optional `mailbox` (inbox|starred|sent|drafts|all), `max_results` (default 12), `page_token` for the next page.
+    - mail_search: searches/lists the connected Gmail account for OTHER mail and returns STRUCTURED JSON results. SILENT — it does not change the screen. Use it to find mail the user is NOT already looking at. Pass `query` (Gmail search syntax); `natural_language:true` translates plain English; optional `mailbox` (inbox|starred|sent|drafts|all), `max_results` (default 12), `page_token`. DO NOT use mail_search to answer "what am I looking at" or to find the open email — if CURRENT SURFACE shows an open email, answer from it or call mail_read_current.
     - mail_read_thread: reads a full Gmail thread, all messages (silent). Pass `message_id` or `thread_id`. Set `summarize:true` to prepend a short AI summary.
-    - mail_show: the ONLY tool that changes the user's screen — it opens the inbox UI. Pass `message_id`/`thread_id` to open a thread, or `mailbox`/`query` to open a filtered list. Use it when the user says "show me", "open it", "pull it up".
+    - mail_read_current: reads the FULL email/thread the user currently has open (the one in CURRENT SURFACE) — no arguments. Use this for "what does this say", "read this", "summarize this" when an email is open, instead of searching. Set `summarize:true` for a short AI summary.
+    - mail_show: the ONLY tool that changes the user's screen — it opens/switches the inbox UI. Pass `message_id`/`thread_id` to open a thread, or `mailbox`/`query` to open a filtered list. Use it to OPEN mail or switch to a different view. Do NOT call it when CURRENT SURFACE is already MAIL — the inbox is open; read or act on what's there instead of re-opening it.
     - mail_draft: writes a reply (or new email) in the user's voice and stages it as a reviewable draft card. For a reply pass `message_id` or `thread_id` (+ optional `instructions`, optional `style`). For a new email pass `to` (+ `subject`, `instructions`). Pass `body` to use exact text verbatim. This NEVER sends — it only stages a draft.
     - mail_compose: writes or revises the email the user is composing in their NATIVE composer (in place, not a card). Use this whenever the user wants to write or change the email they're currently typing. Pass `instruction` to draft from scratch or edit the current body ("make it more formal", "shorten this", "add a line about the timeline", "finish it", "reword the opening"), or `body` to replace it verbatim; optional `to` / `subject`. If no composer is open and an email is open, it starts a reply to that email first.
     - mail_send: routes a staged draft through the user's send policy. Pass `draft_id` from a mail_draft result, or `to`+`body` (+`subject`,`thread_id`). It may send immediately or stage for the user to confirm depending on the user's send mode — READ the result and do NOT claim it was sent unless the result text says "Sent".
@@ -714,6 +718,7 @@ enum NativeBrowserToolPrompt {
     {"tool":"mail_search","query":"from:alex newer_than:30d","mailbox":"inbox","max_results":10}
     {"tool":"mail_search","query":"invoices from finance last week","natural_language":true}
     {"tool":"mail_read_thread","thread_id":"thread-id-from-search","summarize":true}
+    {"tool":"mail_read_current"}
     {"tool":"mail_show","mailbox":"inbox"}
     {"tool":"mail_draft","message_id":"message-id-from-search","instructions":"Politely decline and propose next week."}
     {"tool":"mail_compose","instruction":"Make it warmer and confirm Tuesday at 2pm works."}

@@ -24,6 +24,7 @@ struct MailToolService {
         switch call.name {
         case .mailSearch:     return await search(call)
         case .mailReadThread: return await readThread(call)
+        case .mailReadCurrent: return await readCurrent(call)
         case .mailShow:       return await show(call)
         case .mailDraft:      return await makeDraft(call)
         case .mailCompose:    return await compose(call)
@@ -96,6 +97,29 @@ struct MailToolService {
             return result(call, true, output)
         } catch {
             return result(call, false, "Couldn't read that thread: \(message(error))")
+        }
+    }
+
+    // MARK: - Read the currently-open email
+
+    private func readCurrent(_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult {
+        let args = MailArgs(call.rawArguments)
+        let wantsSummary = args.bool("summarize", "summary") ?? false
+        // Whatever the user is looking at: the open email, or the message
+        // they're replying to in the composer.
+        guard let target = gmail.openMessage ?? gmail.currentDraft?.inReplyTo else {
+            return result(call, false, "No email is open. Use mail_search or mail_show to find one first.")
+        }
+        do {
+            let thread = try await gmail.toolFetchThread(identifier: MailToolMessageIdentifier(kind: .message, value: target.id))
+            guard !thread.isEmpty else { return result(call, false, "Couldn't load the open email.") }
+            var output = MailFormat.thread(thread, identifier: MailToolMessageIdentifier(kind: .thread, value: target.threadId))
+            if wantsSummary, let summary = await mail.agent.summarizeThread(MailFormat.threadPlainText(thread)) {
+                output = "Summary: \(summary)\n\n" + output
+            }
+            return result(call, true, output)
+        } catch {
+            return result(call, false, "Couldn't read the open email: \(message(error))")
         }
     }
 
