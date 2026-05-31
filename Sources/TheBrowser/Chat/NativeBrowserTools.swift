@@ -9,10 +9,30 @@ enum NativeBrowserToolName: String, Equatable, Sendable {
     case readSmartRead = "read_smart_read"
     case mailSearch = "mail_search"
     case mailReadThread = "mail_read_thread"
-    case mailDraftReply = "mail_draft_reply"
+    case mailReadCurrent = "mail_read_current"
+    case mailShow = "mail_show"
+    case mailDraft = "mail_draft"
+    case mailCompose = "mail_compose"
+    case mailSend = "mail_send"
+    case mailModify = "mail_modify"
+    case mailTriage = "mail_triage"
+    case mailMemory = "mail_memory"
+    case mailRemind = "mail_remind"
     case createArtifact = "create_artifact"
     case webControl = "web_control"
     case recall
+
+    /// True for the intelligent-inbox tools, which share a single executor
+    /// closure and carry their rich parameters in `rawArguments`.
+    var isMail: Bool {
+        switch self {
+        case .mailSearch, .mailReadThread, .mailReadCurrent, .mailShow, .mailDraft, .mailCompose, .mailSend,
+             .mailModify, .mailTriage, .mailMemory, .mailRemind:
+            return true
+        default:
+            return false
+        }
+    }
 }
 
 struct MailToolMessageIdentifier: Equatable, Sendable {
@@ -45,6 +65,10 @@ struct NativeBrowserToolCall: Equatable, Sendable {
     var threadID: String? = nil
     var body: String? = nil
     var maxResults: Int? = nil
+    /// The raw JSON object string of the tool call, preserved for mail tools so
+    /// `MailToolService` can read their richer parameter set without bloating
+    /// this shared struct. Nil for non-mail tools.
+    var rawArguments: String? = nil
     var sinceDays: Int? = nil
 
     static func parse(from text: String) -> NativeBrowserToolCall? {
@@ -80,16 +104,22 @@ struct NativeBrowserToolCall: Equatable, Sendable {
                 return mailbox
             }
             return "\(mailbox): \(trimmedQuery)"
-        case .mailReadThread:
-            return mailIdentifier?.displayValue ?? ""
-        case .mailDraftReply:
-            let preview = body?
-                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let capped = preview.count > 40 ? String(preview.prefix(40)) + "…" : preview
-            return [mailIdentifier?.displayValue ?? "", capped]
-                .filter { !$0.isEmpty }
-                .joined(separator: " | ")
+        case .mailReadThread, .mailShow, .mailRemind:
+            return mailIdentifier?.displayValue ?? (query?.trimmingCharacters(in: .whitespacesAndNewlines) ?? mailbox ?? "")
+        case .mailDraft:
+            return mailIdentifier?.displayValue ?? "new message"
+        case .mailCompose:
+            return "composer"
+        case .mailReadCurrent:
+            return "current email"
+        case .mailSend:
+            return mailIdentifier?.displayValue ?? "draft"
+        case .mailModify:
+            return messageID ?? "messages"
+        case .mailTriage:
+            return "inbox"
+        case .mailMemory:
+            return "memory"
         case .createArtifact:
             return title?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "artifact"
         case .recall:
@@ -146,7 +176,7 @@ struct NativeBrowserToolCall: Equatable, Sendable {
         let messageID = stringValue(named: "message_id", in: dictionary, arguments: arguments)
             ?? stringValue(named: "messageId", in: dictionary, arguments: arguments)
             ?? stringValue(named: "message", in: dictionary, arguments: arguments)
-            ?? (name == .mailReadThread || name == .mailDraftReply ? stringValue(named: "id", in: dictionary, arguments: arguments) : nil)
+            ?? (name.isMail ? stringValue(named: "id", in: dictionary, arguments: arguments) : nil)
         let threadID = stringValue(named: "thread_id", in: dictionary, arguments: arguments)
             ?? stringValue(named: "threadId", in: dictionary, arguments: arguments)
             ?? stringValue(named: "thread", in: dictionary, arguments: arguments)
@@ -175,6 +205,7 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             threadID: threadID,
             body: body,
             maxResults: maxResults,
+            rawArguments: name.isMail ? json : nil,
             sinceDays: sinceDays
         )
 
@@ -183,12 +214,11 @@ struct NativeBrowserToolCall: Equatable, Sendable {
             return call.rawInput.isEmpty ? nil : call
         case .readTabs, .readHighlights, .readSmartRead:
             return call
-        case .mailSearch:
-            return call.rawInput.isEmpty ? nil : call
-        case .mailReadThread:
-            return call.mailIdentifier == nil ? nil : call
-        case .mailDraftReply:
-            return call.mailIdentifier == nil || (body?.isEmpty ?? true) ? nil : call
+        case .mailSearch, .mailReadThread, .mailReadCurrent, .mailShow, .mailDraft, .mailCompose, .mailSend,
+             .mailModify, .mailTriage, .mailMemory, .mailRemind:
+            // Mail tools validate their own arguments in MailToolService and
+            // return a helpful error rather than failing the parse silently.
+            return call
         case .createArtifact:
             return (html?.isEmpty == false) ? call : nil
         case .recall:
@@ -606,10 +636,10 @@ struct NativeBrowserToolExecutor {
     /// metadata) when one is loaded, or a status message when the panel is
     /// idle, loading, or in a failed state.
     var smartReadContent: @MainActor () async -> String
-    var openMailIntegration: @MainActor () -> Void
-    var searchMail: @MainActor (_ query: String, _ mailbox: GmailMailbox?, _ maxResults: Int) async throws -> [GmailMessageSummary]
-    var readMailThread: @MainActor (_ identifier: MailToolMessageIdentifier) async throws -> [GmailMessage]
-    var draftMailReply: @MainActor (_ identifier: MailToolMessageIdentifier, _ body: String) async throws -> GmailMessage
+    /// Single entry point for every `mail_*` tool. The chat layer wires this to
+    /// `MailToolService.handle`, which owns Gmail access + the intelligent
+    /// inbox. Replaces the old per-capability mail closures.
+    var runMailTool: @MainActor (_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult
     var saveAndOpenArtifact: @MainActor (_ title: String, _ html: String) async throws -> URL
     var runWebControl: @MainActor (_ task: String) async -> WebControlAgentOutcome
     /// Searches the local Recall index (the readable content of pages the user
@@ -623,15 +653,8 @@ struct NativeBrowserToolExecutor {
         readTabsContent: @escaping @MainActor ([Int]?) async -> String,
         readHighlightsContent: @escaping @MainActor ([Int]?) async -> String,
         smartReadContent: @escaping @MainActor () async -> String,
-        openMailIntegration: @escaping @MainActor () -> Void = {},
-        searchMail: @escaping @MainActor (_ query: String, _ mailbox: GmailMailbox?, _ maxResults: Int) async throws -> [GmailMessageSummary] = { _, _, _ in
-            throw NativeMailToolError.unavailable
-        },
-        readMailThread: @escaping @MainActor (_ identifier: MailToolMessageIdentifier) async throws -> [GmailMessage] = { _ in
-            throw NativeMailToolError.unavailable
-        },
-        draftMailReply: @escaping @MainActor (_ identifier: MailToolMessageIdentifier, _ body: String) async throws -> GmailMessage = { _, _ in
-            throw NativeMailToolError.unavailable
+        runMailTool: @escaping @MainActor (_ call: NativeBrowserToolCall) async -> NativeBrowserToolResult = { call in
+            NativeBrowserToolResult(call: call, succeeded: false, content: NativeMailToolError.unavailable.errorDescription ?? "Mail tools are unavailable.")
         },
         saveAndOpenArtifact: @escaping @MainActor (_ title: String, _ html: String) async throws -> URL,
         runWebControl: @escaping @MainActor (_ task: String) async -> WebControlAgentOutcome = { _ in
@@ -647,10 +670,7 @@ struct NativeBrowserToolExecutor {
         self.readTabsContent = readTabsContent
         self.readHighlightsContent = readHighlightsContent
         self.smartReadContent = smartReadContent
-        self.openMailIntegration = openMailIntegration
-        self.searchMail = searchMail
-        self.readMailThread = readMailThread
-        self.draftMailReply = draftMailReply
+        self.runMailTool = runMailTool
         self.saveAndOpenArtifact = saveAndOpenArtifact
         self.runWebControl = runWebControl
         self.searchHistory = searchHistory
@@ -670,12 +690,9 @@ struct NativeBrowserToolExecutor {
             return await readHighlights(call)
         case .readSmartRead:
             return await readSmartRead(call)
-        case .mailSearch:
-            return await mailSearch(call)
-        case .mailReadThread:
-            return await mailReadThread(call)
-        case .mailDraftReply:
-            return await mailDraftReply(call)
+        case .mailSearch, .mailReadThread, .mailReadCurrent, .mailShow, .mailDraft, .mailCompose, .mailSend,
+             .mailModify, .mailTriage, .mailMemory, .mailRemind:
+            return await runMailTool(call)
         case .createArtifact:
             return await createArtifact(call)
         case .webControl:
@@ -695,9 +712,17 @@ enum NativeBrowserToolPrompt {
     - read_tabs: returns the visible text of the user's currently open tabs. Use this when the user asks about, summarizes across, or wants to act on the tabs they already have open. Pass `indices` (1-based) to read specific tabs, or omit it to read all of them.
     - read_highlights: returns the full text of highlights (page passages the user clipped via the Ask widget) attached earlier in the conversation. The prompt lists prior highlights by their 1-based global index with source + preview only; use this tool to fetch the full text of one or more of them when the user references "the highlight", "what I sent earlier", a specific quoted phrase, etc. Pass `indices` (1-based) to read specific highlights, or omit it to read all of them. The CURRENT turn's highlights are already inlined in the prompt — only call this tool for highlights from PRIOR turns.
     - read_smart_read: returns the Smart Read summary currently displayed in the chat sidebar (TL;DR sentence, numbered key points, read time, word count, page title, page URL). Use this whenever the user references "the smart read", "the summary", "what did smart read say", or asks for any details from the summary panel. The prompt notes when a Smart Read is active — only call this tool while one is shown. Takes no arguments.
-    - mail_search: searches or lists the connected Gmail account and opens the Gmail overlay to the results. Use when the user asks you to find, triage, summarize, list, show, or act on mail. For broad requests like "what mail do I have?", "show my inbox", "what's in my inbox", or "in my inbox", call mail_search with `mailbox:"inbox"` and omit `query`. Pass `query` only when the user gives search constraints, using Gmail search syntax. Optional `mailbox` is one of inbox, starred, sent, drafts, all. Optional `max_results` is 1-20.
-    - mail_read_thread: reads a Gmail thread and opens the Gmail overlay to the message. Pass either `message_id` from mail_search results or `thread_id`.
-    - mail_draft_reply: opens the Gmail overlay composer with a reply draft. Pass either `message_id` or `thread_id`, plus `body` containing the exact reply draft text. This does not send mail; the user reviews and sends.
+    - mail_search: searches/lists the connected Gmail account for OTHER mail and returns STRUCTURED JSON results. SILENT — it does not change the screen. Use it to find mail the user is NOT already looking at. Pass `query` (Gmail search syntax); `natural_language:true` translates plain English; optional `mailbox` (inbox|starred|sent|drafts|all), `max_results` (default 12), `page_token`. DO NOT use mail_search to answer "what am I looking at" or to find the open email — if CURRENT SURFACE shows an open email, answer from it or call mail_read_current.
+    - mail_read_thread: reads a full Gmail thread, all messages (silent). Pass `message_id` or `thread_id`. Set `summarize:true` to prepend a short AI summary.
+    - mail_read_current: reads the FULL email/thread the user currently has open (the one in CURRENT SURFACE) — no arguments. Use this for "what does this say", "read this", "summarize this" when an email is open, instead of searching. Set `summarize:true` for a short AI summary.
+    - mail_show: the ONLY tool that changes the user's screen — it opens/switches the inbox UI. Pass `message_id`/`thread_id` to open a thread, or `mailbox`/`query` to open a filtered list. Use it to OPEN mail or switch to a different view. Do NOT call it when CURRENT SURFACE is already MAIL — the inbox is open; read or act on what's there instead of re-opening it.
+    - mail_draft: writes a reply (or new email) in the user's voice and stages it as a reviewable draft card. For a reply pass `message_id` or `thread_id` (+ optional `instructions`, optional `style`). For a new email pass `to` (+ `subject`, `instructions`). Pass `body` to use exact text verbatim. This NEVER sends — it only stages a draft.
+    - mail_compose: writes or revises the email the user is composing in their NATIVE composer (in place, not a card). Use this whenever the user wants to write or change the email they're currently typing. Pass `instruction` to draft from scratch or edit the current body ("make it more formal", "shorten this", "add a line about the timeline", "finish it", "reword the opening"), or `body` to replace it verbatim; optional `to` / `subject`. If no composer is open and an email is open, it starts a reply to that email first.
+    - mail_send: routes a staged draft through the user's send policy. Pass `draft_id` from a mail_draft result, or `to`+`body` (+`subject`,`thread_id`). It may send immediately or stage for the user to confirm depending on the user's send mode — READ the result and do NOT claim it was sent unless the result text says "Sent".
+    - mail_modify: organizes mail in bulk (silent). Pass `message_ids` (array) plus any of `archive:true`, `read:true|false`, `star:true|false`, `add_labels`/`remove_labels` (Gmail label ids).
+    - mail_triage: classifies inbox messages into AI labels and applies them. Optional `scope` ("inbox" default, "all" to re-classify everything).
+    - mail_memory: manages durable memories. `action` = add (with `text`, optional `anchor` such as "email:a@b.com"/"domain:b.com"/"always"/"activity:scheduling", optional `kind`), list, search (`query`), or delete (`id`).
+    - mail_remind: sets a follow-up reminder on a thread. Pass `message_id`/`thread_id` and `when` (natural language: "in 3 days", "next monday"), optional `note`.
     - create_artifact: saves a fully self-contained HTML document under ~/.thebrowser/web_artifacts/ and opens it in a new tab. Use this when the user asks for an "artifact", "document", "report", "dashboard", "summary", or anything similar that should be rendered as a standalone page.
     - web_control: delegates a bounded task to a separate web-control agent and live-page harness that can click, type, press keys, scroll, wait, navigate, and inspect the current WKWebView without adding its step-by-step context to this chat. Use it when the user asks you to interact with a live site or web app on their behalf: click links/buttons, fill fields/forms, operate menus, submit searches, complete a workflow, or play a browser game such as Wordle. Pass a concise `task` string describing the user's goal and any constraints. The harness will show an "Agent is Working" overlay while it controls the page.
     - recall: searches the user's OWN browsing history — the readable content of pages they have actually visited and read, indexed locally on this Mac. Use whenever the user refers to something they saw, read, or visited before: "that transformers article I read last week", "the pricing page I looked at", "what was that site about X", "find the post where they mentioned Y". Pass `query` with the keywords and any time words the user used (e.g. "transformers attention last week" — keep "last week" in the query; it is parsed into a date filter). Optional `since_days` limits to the last N days; optional `max_results` (default ~8). Returns matching passages with the page title, URL, and when it was last read — cite these in your answer and offer to reopen the page. If recall returns no strong match, tell the user it is not in their history rather than guessing. This searches local history only, never the live web (use search/fetch for that).
@@ -711,9 +736,17 @@ enum NativeBrowserToolPrompt {
     {"tool":"read_highlights","indices":[2]}
     {"tool":"read_smart_read"}
     {"tool":"mail_search","query":"from:alex newer_than:30d","mailbox":"inbox","max_results":10}
-    {"tool":"mail_search","mailbox":"inbox","max_results":10}
-    {"tool":"mail_read_thread","message_id":"message-id-from-search"}
-    {"tool":"mail_draft_reply","message_id":"message-id-from-search","body":"Thanks — I can do Thursday at 2 PM."}
+    {"tool":"mail_search","query":"invoices from finance last week","natural_language":true}
+    {"tool":"mail_read_thread","thread_id":"thread-id-from-search","summarize":true}
+    {"tool":"mail_read_current"}
+    {"tool":"mail_show","mailbox":"inbox"}
+    {"tool":"mail_draft","message_id":"message-id-from-search","instructions":"Politely decline and propose next week."}
+    {"tool":"mail_compose","instruction":"Make it warmer and confirm Tuesday at 2pm works."}
+    {"tool":"mail_send","draft_id":"the-draft-id-from-mail_draft"}
+    {"tool":"mail_modify","message_ids":["id1","id2"],"archive":true}
+    {"tool":"mail_triage","scope":"inbox"}
+    {"tool":"mail_memory","action":"add","text":"Prefers afternoon meetings","anchor":"email:sam@acme.com"}
+    {"tool":"mail_remind","thread_id":"thread-id","when":"in 3 days","note":"chase the contract"}
     {"tool":"create_artifact","title":"Market Overview","html":"<!doctype html><html>…</html>"}
     {"tool":"web_control","task":"On the current page, play one game of Wordle and report the outcome."}
     {"tool":"recall","query":"transformers attention article last week","max_results":8}
@@ -782,7 +815,7 @@ enum DirectNativeToolCommand {
     Mail commands:
     /mail_search [inbox|starred|sent|drafts|all] [Gmail search query]
     /mail_read_thread [message:<id>|thread:<id>|<message-id>]
-    /mail_draft_reply [message:<id>|thread:<id>|<message-id>] | <reply body>
+    /mail_draft [message:<id>|thread:<id>|<message-id>] | <reply body>
     """
 
     static func parse(_ text: String) -> NativeBrowserToolCall? {
@@ -797,8 +830,8 @@ enum DirectNativeToolCommand {
             return parseMailSearch(remainder)
         case "/mail_read_thread":
             return parseMailReadThread(remainder)
-        case "/mail_draft_reply":
-            return parseMailDraftReply(remainder)
+        case "/mail_draft":
+            return parseMailDraft(remainder)
         default:
             return nil
         }
@@ -834,14 +867,14 @@ enum DirectNativeToolCommand {
         )
     }
 
-    private static func parseMailDraftReply(_ text: String) -> NativeBrowserToolCall? {
+    private static func parseMailDraft(_ text: String) -> NativeBrowserToolCall? {
         let pieces = text.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
         guard pieces.count == 2 else { return nil }
         guard let identifier = parseIdentifier(String(pieces[0])) else { return nil }
         let body = String(pieces[1]).trimmingCharacters(in: .whitespacesAndNewlines)
         guard !body.isEmpty else { return nil }
         return NativeBrowserToolCall(
-            name: .mailDraftReply,
+            name: .mailDraft,
             messageID: identifier.kind == .message ? identifier.value : nil,
             threadID: identifier.kind == .thread ? identifier.value : nil,
             body: body

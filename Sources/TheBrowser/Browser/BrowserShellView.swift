@@ -11,6 +11,7 @@ struct BrowserShellView: View {
     @StateObject private var integrations = IntegrationsModel()
     @StateObject private var gmailAccount = GmailAccountStore.shared
     @StateObject private var gmailStore = GmailStore(account: GmailAccountStore.shared)
+    @StateObject private var mailModel = MailModel.shared
     @StateObject private var artifactGallery = ArtifactGalleryModel()
     @StateObject private var recallModel = RecallPanelModel()
 
@@ -45,6 +46,15 @@ struct BrowserShellView: View {
         model.isTabRailVisible || isPeekingRail
     }
 
+    /// Which surface the AI chat is sitting next to right now. Drives the
+    /// "CURRENT SURFACE" frame in the agent prompt so it acts on what the user
+    /// is actually looking at instead of reflexively re-opening or searching.
+    private var chatFocus: ChatFocus {
+        if integrations.isPresented && integrations.activeIntegration == .gmail { return .mail }
+        if isShowingArtifactGallery { return .artifacts }
+        return .browser
+    }
+
     var body: some View {
         ZStack(alignment: .topLeading) {
             // Layer 0: window plate
@@ -66,6 +76,9 @@ struct BrowserShellView: View {
                     AIChatPanel(
                         viewModel: chatModel,
                         smartReadModel: smartReadModel,
+                        mailModel: mailModel,
+                        gmailStore: gmailStore,
+                        chatFocus: chatFocus,
                         context: model.selectedContext,
                         tabs: model.tabsManifest(),
                         nativeTools: NativeBrowserToolExecutor(
@@ -82,23 +95,16 @@ struct BrowserShellView: View {
                             smartReadContent: {
                                 smartReadModel.summaryText()
                             },
-                            openMailIntegration: {
-                                withAnimation(Motion.springSnap) {
-                                    integrations.open(.gmail)
-                                }
-                            },
-                            searchMail: { query, mailbox, maxResults in
-                                try await gmailStore.searchForTool(
-                                    query: query,
-                                    mailbox: mailbox,
-                                    maxResults: maxResults
-                                )
-                            },
-                            readMailThread: { identifier in
-                                try await gmailStore.readThreadForTool(identifier: identifier)
-                            },
-                            draftMailReply: { identifier, body in
-                                try await gmailStore.draftReplyForTool(identifier: identifier, body: body)
+                            runMailTool: { call in
+                                await MailToolService(
+                                    gmail: gmailStore,
+                                    mail: mailModel,
+                                    openInbox: {
+                                        withAnimation(Motion.springSnap) {
+                                            integrations.open(.gmail)
+                                        }
+                                    }
+                                ).handle(call)
                             },
                             saveAndOpenArtifact: { title, html in
                                 let url = try ArtifactStore.shared.save(title: title, html: html)
@@ -210,7 +216,9 @@ struct BrowserShellView: View {
                 IntegrationsOverlay(
                     model: integrations,
                     gmailAccount: gmailAccount,
-                    gmailStore: gmailStore
+                    gmailStore: gmailStore,
+                    mailModel: mailModel,
+                    rightInset: model.isChatVisible ? Metrics.chatWidth : 0
                 )
                     .ignoresSafeArea()
                     .transition(.opacity)

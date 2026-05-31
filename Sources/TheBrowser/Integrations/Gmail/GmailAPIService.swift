@@ -74,14 +74,26 @@ struct GmailAPIService {
             return ListResult(summaries: [], nextPageToken: list.nextPageToken)
         }
 
+        // Fetch summaries with bounded concurrency. Firing all 30 metadata
+        // gets at once can trip Gmail's per-user rate limit (429); a small
+        // window keeps the inbox fast without the burst.
+        let maxConcurrent = 6
         let summaries = try await withThrowingTaskGroup(of: GmailMessageSummary?.self) { group in
-            for ref in refs {
-                group.addTask { try await self.fetchSummary(id: ref.id) }
-            }
             var collected: [GmailMessageSummary] = []
             collected.reserveCapacity(refs.count)
-            for try await maybe in group {
+            var next = 0
+            while next < min(maxConcurrent, refs.count) {
+                let id = refs[next].id
+                group.addTask { try await self.fetchSummary(id: id) }
+                next += 1
+            }
+            while let maybe = try await group.next() {
                 if let summary = maybe { collected.append(summary) }
+                if next < refs.count {
+                    let id = refs[next].id
+                    group.addTask { try await self.fetchSummary(id: id) }
+                    next += 1
+                }
             }
             // Stable order: newest first (matches `messages.list` ordering).
             let ordering = Dictionary(uniqueKeysWithValues: refs.enumerated().map { ($1.id, $0) })
@@ -117,24 +129,33 @@ struct GmailAPIService {
 
     // MARK: - Send
 
-    /// Sends `draft` as a brand-new message. If `draft.inReplyTo` is set we
-    /// thread the reply correctly by including `In-Reply-To` / `References`
-    /// headers and pinning `threadId`.
+    /// Sends a message from explicit fields. When `inReplyToMessageID` /
+    /// `threadId` are set the reply is threaded correctly via
+    /// `In-Reply-To`/`References` headers and a pinned `threadId`. This is the
+    /// primitive the AI draft/send path uses — it needs no live
+    /// ``GmailMessage`` reference, just the ids.
     @discardableResult
-    func send(draft: GmailPaneMode.Draft, from: String) async throws -> String {
-        let mime = buildMIME(draft: draft, from: from)
+    func send(
+        to: String,
+        subject: String,
+        body: String,
+        threadId: String? = nil,
+        inReplyToMessageID: String? = nil,
+        from: String
+    ) async throws -> String {
+        let mime = buildMIME(to: to, subject: subject, body: body, inReplyToMessageID: inReplyToMessageID, from: from)
         let raw = Data(mime.utf8).base64URLEncodedString()
 
-        var body: [String: Any] = ["raw": raw]
-        if let reply = draft.inReplyTo {
-            body["threadId"] = reply.threadId
+        var requestBody: [String: Any] = ["raw": raw]
+        if let threadId, !threadId.isEmpty {
+            requestBody["threadId"] = threadId
         }
 
         var request = URLRequest(url: URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send")!)
         request.httpMethod = "POST"
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        request.httpBody = try JSONSerialization.data(withJSONObject: requestBody, options: [])
 
         let (data, response) = try await urlSession.data(for: request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
@@ -144,6 +165,20 @@ struct GmailAPIService {
         struct SendResponse: Decodable { let id: String }
         let decoded = try JSONDecoder().decode(SendResponse.self, from: data)
         return decoded.id
+    }
+
+    /// Sends `draft` as a brand-new message. Delegates to the explicit-field
+    /// `send` above so the threading + MIME logic lives in one place.
+    @discardableResult
+    func send(draft: GmailPaneMode.Draft, from: String) async throws -> String {
+        try await send(
+            to: draft.to,
+            subject: draft.subject,
+            body: draft.body,
+            threadId: draft.inReplyTo?.threadId,
+            inReplyToMessageID: draft.inReplyTo?.id,
+            from: from
+        )
     }
 
     // MARK: - Label toggles
@@ -167,6 +202,61 @@ struct GmailAPIService {
         return true
     }
 
+    /// Applies the same label change to many messages in one request via
+    /// `messages.batchModify`. Used for bulk archive / read / star / label
+    /// from the AI tools. Returns silently on success (the endpoint has no
+    /// response body).
+    func batchModify(messageIDs: [String], add: [String] = [], remove: [String] = []) async throws {
+        guard !messageIDs.isEmpty, !(add.isEmpty && remove.isEmpty) else { return }
+        var request = URLRequest(url: URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/messages/batchModify")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "ids": messageIDs,
+            "addLabelIds": add,
+            "removeLabelIds": remove
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw GmailAPIError.http((response as? HTTPURLResponse)?.statusCode ?? -1, body)
+        }
+    }
+
+    // MARK: - Labels
+
+    /// Lists the account's user labels (and system labels). Used to map AI
+    /// label names to Gmail label IDs when mirroring is enabled.
+    func listLabels() async throws -> [GmailLabelRef] {
+        let url = URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/labels")!
+        struct LabelsResponse: Decodable { let labels: [GmailLabelRef]? }
+        let response: LabelsResponse = try await get(url)
+        return response.labels ?? []
+    }
+
+    /// Creates a user label and returns it. Visible in Gmail everywhere.
+    @discardableResult
+    func createLabel(name: String) async throws -> GmailLabelRef {
+        var request = URLRequest(url: URL(string: "https://gmail.googleapis.com/gmail/v1/users/me/labels")!)
+        request.httpMethod = "POST"
+        request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        let body: [String: Any] = [
+            "name": name,
+            "labelListVisibility": "labelShow",
+            "messageListVisibility": "show"
+        ]
+        request.httpBody = try JSONSerialization.data(withJSONObject: body, options: [])
+        let (data, response) = try await urlSession.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let body = String(data: data, encoding: .utf8) ?? ""
+            throw GmailAPIError.http((response as? HTTPURLResponse)?.statusCode ?? -1, body)
+        }
+        return try JSONDecoder().decode(GmailLabelRef.self, from: data)
+    }
+
     // MARK: - Building blocks
 
     private func get<T: Decodable>(_ url: URL) async throws -> T {
@@ -184,23 +274,30 @@ struct GmailAPIService {
         }
     }
 
-    private func buildMIME(draft: GmailPaneMode.Draft, from: String) -> String {
+    private func buildMIME(to: String, subject: String, body: String, inReplyToMessageID: String?, from: String) -> String {
         var headers: [(String, String)] = [
             ("From", from),
-            ("To", draft.to),
-            ("Subject", draft.subject),
+            ("To", to),
+            ("Subject", subject),
             ("MIME-Version", "1.0"),
             ("Content-Type", "text/plain; charset=UTF-8")
         ]
-        if let reply = draft.inReplyTo {
-            headers.append(("In-Reply-To", "<\(reply.id)@mail.gmail.com>"))
-            headers.append(("References", "<\(reply.id)@mail.gmail.com>"))
+        if let id = inReplyToMessageID, !id.isEmpty {
+            headers.append(("In-Reply-To", "<\(id)@mail.gmail.com>"))
+            headers.append(("References", "<\(id)@mail.gmail.com>"))
         }
         let headerBlock = headers
             .map { "\($0.0): \($0.1)" }
             .joined(separator: "\r\n")
-        return headerBlock + "\r\n\r\n" + draft.body
+        return headerBlock + "\r\n\r\n" + body
     }
+}
+
+/// A Gmail label reference (`users.labels`). `type` is "system" or "user".
+struct GmailLabelRef: Decodable, Sendable, Hashable {
+    let id: String
+    let name: String
+    let type: String?
 }
 
 // MARK: - Wire types

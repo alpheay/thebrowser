@@ -190,13 +190,15 @@ struct NativeBrowserToolsTests {
         #expect(call.rawInput == "message:msg-123")
     }
 
-    @Test("mail_draft_reply parses thread id and body")
-    func mailDraftReplyParsesBody() throws {
-        let call = try #require(NativeBrowserToolCall.parse(from: #"{"tool":"mail_draft_reply","thread_id":"thr-123","body":"Thanks, that works."}"#))
+    @Test("mail_draft parses thread id and body and preserves raw arguments")
+    func mailDraftParsesBody() throws {
+        let call = try #require(NativeBrowserToolCall.parse(from: #"{"tool":"mail_draft","thread_id":"thr-123","body":"Thanks, that works.","instructions":"keep it short"}"#))
 
-        #expect(call.name == .mailDraftReply)
+        #expect(call.name == .mailDraft)
         #expect(call.mailIdentifier == MailToolMessageIdentifier(kind: .thread, value: "thr-123"))
         #expect(call.body == "Thanks, that works.")
+        // Mail tools keep their raw JSON so MailToolService can read richer params.
+        #expect(call.rawArguments?.contains("instructions") == true)
     }
 
     @Test("Direct mail slash commands parse")
@@ -204,7 +206,7 @@ struct NativeBrowserToolsTests {
         let search = try #require(DirectNativeToolCommand.parse("/mail_search inbox from:alex"))
         let inbox = try #require(DirectNativeToolCommand.parse("/mail_search inbox"))
         let read = try #require(DirectNativeToolCommand.parse("/mail_read_thread thread:thr-123"))
-        let draft = try #require(DirectNativeToolCommand.parse("/mail_draft_reply msg-123 | Sounds good."))
+        let draft = try #require(DirectNativeToolCommand.parse("/mail_draft msg-123 | Sounds good."))
 
         #expect(search.name == .mailSearch)
         #expect(search.mailbox == "inbox")
@@ -274,36 +276,17 @@ struct NativeBrowserToolsTests {
     }
 
     @MainActor
-    @Test("mail_search opens Gmail overlay and formats results")
-    func mailSearchInvokesMailBridge() async {
-        var openedMail = false
-        var receivedQuery = ""
-        var receivedMailbox: GmailMailbox?
+    @Test("mail tools route through the single runMailTool closure")
+    func mailToolsRouteThroughClosure() async {
+        var received: NativeBrowserToolName?
         let executor = NativeBrowserToolExecutor(
             openURL: { _ in },
             readTabsContent: { _ in "" },
             readHighlightsContent: { _ in "" },
             smartReadContent: { "" },
-            openMailIntegration: {
-                openedMail = true
-            },
-            searchMail: { query, mailbox, _ in
-                receivedQuery = query
-                receivedMailbox = mailbox
-                return [
-                    GmailMessageSummary(
-                        id: "msg-123",
-                        threadId: "thr-123",
-                        snippet: "See you Thursday",
-                        subject: "Planning",
-                        fromName: "Alex",
-                        fromAddress: "alex@example.com",
-                        date: Date(timeIntervalSince1970: 0),
-                        unread: true,
-                        starred: false,
-                        labelIDs: ["INBOX", "UNREAD"]
-                    )
-                ]
+            runMailTool: { call in
+                received = call.name
+                return NativeBrowserToolResult(call: call, succeeded: true, content: "handled \(call.name.rawValue)")
             },
             saveAndOpenArtifact: { _, _ in URL(fileURLWithPath: "/tmp/unused.html") }
         )
@@ -312,11 +295,9 @@ struct NativeBrowserToolsTests {
             NativeBrowserToolCall(name: .mailSearch, query: "", mailbox: "inbox")
         )
 
-        #expect(openedMail)
-        #expect(receivedQuery == "")
-        #expect(receivedMailbox == .inbox)
+        #expect(received == .mailSearch)
         #expect(result.succeeded)
-        #expect(result.content.contains("Message ID: msg-123"))
+        #expect(result.content == "handled mail_search")
         #expect(result.invocation.tool == "mail_search")
     }
 

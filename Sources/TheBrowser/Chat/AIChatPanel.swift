@@ -291,7 +291,8 @@ final class ChatViewModel: ObservableObject {
         context: BrowserPageContext,
         tabs: [TabManifestEntry],
         nativeTools: NativeBrowserToolExecutor,
-        smartReadActive: Bool = false
+        smartReadActive: Bool = false,
+        surfaceContext: String? = nil
     ) {
         let trimmed = draft.trimmingCharacters(in: .whitespacesAndNewlines)
         let activePreset = draftPreset
@@ -380,6 +381,7 @@ final class ChatViewModel: ObservableObject {
             tabs: tabs,
             attachments: attachmentsForTurn,
             smartReadActive: smartReadActive,
+            surfaceContext: surfaceContext,
             nativeTools: nativeTools
         )
     }
@@ -451,6 +453,7 @@ final class ChatViewModel: ObservableObject {
         tabs: [TabManifestEntry],
         attachments: [ChatAttachment],
         smartReadActive: Bool,
+        surfaceContext: String?,
         nativeTools: NativeBrowserToolExecutor
     ) {
         let directory = sessionDirectory
@@ -462,7 +465,8 @@ final class ChatViewModel: ObservableObject {
             configuration: configuration,
             tabs: tabs,
             attachments: attachments,
-            smartReadActive: smartReadActive
+            smartReadActive: smartReadActive,
+            surfaceContext: surfaceContext
         )
 
         let handle = AgentRunHandle()
@@ -837,6 +841,11 @@ final class ChatViewModel: ObservableObject {
 struct AIChatPanel: View {
     @ObservedObject var viewModel: ChatViewModel
     @ObservedObject var smartReadModel: SmartReadModel
+    @ObservedObject var mailModel: MailModel
+    var gmailStore: GmailStore
+    /// Which surface the user is currently on — frames every agent prompt so it
+    /// knows whether it's looking at mail, the web, artifacts, or Discord.
+    var chatFocus: ChatFocus = .browser
     var context: BrowserPageContext
     var tabs: [TabManifestEntry]
     var nativeTools: NativeBrowserToolExecutor
@@ -942,7 +951,9 @@ struct AIChatPanel: View {
         if smartReadModel.isPresented
             || !viewModel.messages.isEmpty
             || viewModel.liveMessage != nil
-            || viewModel.isSending {
+            || viewModel.isSending
+            || !mailModel.pendingDrafts.isEmpty
+            || !mailModel.memorySuggestions.isEmpty {
             messageList
         } else {
             EmptyChatState(
@@ -976,6 +987,22 @@ struct AIChatPanel: View {
                             insertion: .opacity.combined(with: .offset(y: -6)),
                             removal: .opacity.combined(with: .scale(scale: 0.98, anchor: .top))
                         ))
+                    }
+
+                    ForEach(mailModel.pendingDrafts) { draft in
+                        MailDraftCard(draft: draft, mail: mailModel, gmail: gmailStore)
+                            .id("mail-draft-\(draft.id)")
+                            .transition(.opacity.combined(with: .offset(y: -6)))
+                    }
+
+                    ForEach(mailModel.memorySuggestions) { suggestion in
+                        MemorySuggestionToast(
+                            memory: suggestion,
+                            onKeep: { mailModel.acceptMemorySuggestion(id: suggestion.id) },
+                            onDismiss: { mailModel.dismissMemorySuggestion(id: suggestion.id) }
+                        )
+                        .id("mail-memory-\(suggestion.id)")
+                        .transition(.opacity)
                     }
 
                     ForEach(viewModel.messages) { message in
@@ -1191,11 +1218,15 @@ struct AIChatPanel: View {
     /// prompt builder knows whether to hint the model about the available
     /// summary and the `read_smart_read` tool.
     private func sendCurrent() {
+        // Tell the agent which surface the user is on (and, for mail, the open
+        // email / compose draft) so it acts on what's in front of them.
+        let surfaceContext = chatFocus.promptBlock(gmail: gmailStore, mail: mailModel)
         viewModel.send(
             context: context,
             tabs: tabs,
             nativeTools: nativeTools,
-            smartReadActive: smartReadModel.isPresented
+            smartReadActive: smartReadModel.isPresented,
+            surfaceContext: surfaceContext
         )
     }
 

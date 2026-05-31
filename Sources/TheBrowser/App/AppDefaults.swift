@@ -72,6 +72,31 @@ enum PreferenceKey {
     /// defaults, so this key needs no `register(defaults:)` entry.
     static let contentBlocking = "contentBlocking.preferences"
 
+    // MARK: Mail — intelligent inbox
+    /// Provider the Mail sub-agent runs on. Empty string = follow the main
+    /// `aiProvider`. Lets a user keep chat on one provider and mail on another.
+    static let mailSubagentProvider = "mail.subagentProvider"
+    /// Model id for the Mail sub-agent. Empty = the provider's fast model.
+    static let mailSubagentModel = "mail.subagentModel"
+    /// `MailSendMode` raw value — how autonomous sending is.
+    static let mailSendMode = "mail.sendMode"
+    /// Whether incoming mail is auto-classified into AI labels.
+    static let mailTriageEnabled = "mail.triageEnabled"
+    /// Minimum classifier confidence (0–1) before a label is applied.
+    static let mailTriageConfidence = "mail.triageConfidence"
+    /// Mirror AI labels into real Gmail labels (under the "AI" namespace).
+    static let mailMirrorLabelsToGmail = "mail.mirrorLabelsToGmail"
+    /// Auto-generate a draft when reading an actionable message.
+    static let mailAutoDraftEnabled = "mail.autoDraftEnabled"
+    /// Inline ghost-text autocomplete in the composer.
+    static let mailAutocompleteEnabled = "mail.autocompleteEnabled"
+    /// Minimum seconds between autocomplete requests while typing.
+    static let mailAutocompleteThrottleSeconds = "mail.autocompleteThrottleSeconds"
+    /// Read Mode — the agent may search/read/draft but not send or organize.
+    static let mailReadMode = "mail.readMode"
+    /// Attempt to auto-extract memories from read threads (consent still required).
+    static let mailMemoryAutoExtract = "mail.memoryAutoExtract"
+
     // MARK: Recall — private "answer from my history" index
 
     /// Master switch for capturing page content into the local Recall index.
@@ -203,6 +228,17 @@ enum AppDefaults {
             PreferenceKey.toolbarShowTabRailToggle: true,
             PreferenceKey.toolbarShowChatToggle: true,
             PreferenceKey.tabHibernationMinutes: 30,
+            PreferenceKey.mailSubagentProvider: "",
+            PreferenceKey.mailSubagentModel: "",
+            PreferenceKey.mailSendMode: MailSendMode.draftOnly.rawValue,
+            PreferenceKey.mailTriageEnabled: true,
+            PreferenceKey.mailTriageConfidence: 0.6,
+            PreferenceKey.mailMirrorLabelsToGmail: false,
+            PreferenceKey.mailAutoDraftEnabled: false,
+            PreferenceKey.mailAutocompleteEnabled: true,
+            PreferenceKey.mailAutocompleteThrottleSeconds: 5,
+            PreferenceKey.mailReadMode: false,
+            PreferenceKey.mailMemoryAutoExtract: false,
             PreferenceKey.recallEnabled: true,
             PreferenceKey.recallSemanticEnabled: true,
             PreferenceKey.recallLocalAnswerMode: false,
